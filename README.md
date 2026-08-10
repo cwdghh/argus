@@ -66,8 +66,10 @@ layout: header, scrollable transcript, a bottom **editor**, and a **footer**.
 - **Markdown rendering** for assistant replies: headings, bold/italic, inline +
   fenced code, lists, quotes.
 - **Thinking / reasoning** is shown (muted, italic) when the model emits it.
-- **Scrollable history**: Up/Down (lines), PgUp/PgDn (pages), Home/End (top/bottom).
-- **Editor stays at the bottom**; the caret follows the cursor.
+- **Auto light/dark theme** (detected via OSC 11; falls back to light).
+- **Scrollable history**: mouse wheel to scroll; PgUp/PgDn (pages), Home/End (top/bottom).
+- **Up/Down** navigate past inputs (input history) in the editor.
+- **Editor stays at the bottom**; the caret follows Left/Right/backspace/delete.
 - **Footer** always shows model, current path, git status (branch + dirty count),
   and mode (`idle` / `working` / `thinking`).
 - Ctrl-C / Ctrl-D quits.

@@ -1,3 +1,28 @@
+#### 2026-08-10 — theme detection, markdown refinement, mouse scroll, input history
+
+**Status: ✅ done**
+
+Goals:
+- Auto light/dark theme.
+- Refine markdown rendering (study pi's `packages/tui` markdown component).
+- Scroll with the cursor (mouse wheel); Up/Down for past inputs.
+
+What was done:
+- ✅ `theme.mjs`: light + dark palettes with `setTheme()`; mutable `theme`
+  read at render time. Defaults to light.
+- ✅ Auto-detect terminal background via OSC 11; `setTheme()` accordingly,
+  falling back to light if the terminal doesn't respond.
+- ✅ Markdown refined (informed by pi): nested inline tokens (e.g. **bold with
+  `code`**), ~~strikethrough~~, [links](url) with a dim (url) fallback, and
+  code-fence border lines with the language label. Parsing is streaming-tolerant
+  (unclosed markers render literally, so no flicker).
+- ✅ Controls reworked: **Up/Down navigate input history**; **mouse wheel**
+  scrolls the transcript (SGR mouse tracking); PgUp/PgDn and Home/End still
+  scroll. Replaced `readline.emitKeypressEvents` with a raw input parser
+  (handles keys + mouse + OSC), fixing an unknown-CSI byte-leak bug.
+- ✅ Verified: light/dark switching, nested markdown, history nav, wheel
+  scroll, raw parser (arrows/mouse/text/backspace/unknown-CSI), and a live PTY
+  boot (theme query + mouse enable + clean exit).
 #### 2026-08-10 — light-theme color fix
 
 **Status: ✅ done**
