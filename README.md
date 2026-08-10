@@ -75,6 +75,25 @@ layout: header, scrollable transcript, a bottom **editor**, and a **footer**.
 - **Ctrl-C during a turn aborts it** (second Ctrl-C force-quits); Ctrl-C when
   idle quits. Esc also aborts a running turn.
 
+## Sessions & persistence
+
+argus auto-saves each turn to `~/.argus/sessions/<name>.jsonl` (override
+the root with the `ARGUS_HOME` env var). JSONL is append-only and keeps
+everything needed to reconstruct the exact requests a session made: the config
+(model, base URL, system prompt), the full `messages` (verbatim tool calls +
+results), the tool schemas, and the on-screen blocks (incl. thinking).
+Your API key is never written to disk.
+
+By default `npm start` resumes the most recent session:
+
+```bash
+npm start                 # resume latest session (or start fresh)
+npm start -- --new        # start a brand-new session
+npm start -- --session X  # resume/create a session named X
+```
+
+The active session name is shown in the header.
+
 ## What it teaches
 
 The whole agent lives in a few small files:
@@ -150,6 +169,7 @@ argus/
   .gitignore         # ignores .env, node_modules, references/pi/, etc.
   src/
     main.mjs
+    session.mjs
     tui.mjs
     agent.mjs
     llm.mjs

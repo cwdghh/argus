@@ -381,10 +381,12 @@ function blockLines(block, width) {
 const MODE_COLOR = () => ({ idle: theme.dim, working: theme.accent, thinking: theme.think, aborting: theme.bad });
 
 export class MinimalTui {
-  constructor(config) {
+  constructor(config, opts = {}) {
     this.config = config;
-    this.blocks = [];
-    this.history = [];
+    this.blocks = opts.initialBlocks ?? [];
+    this.history = opts.initialHistory ?? [];
+    this.sessionName = opts.sessionName ?? null;
+    this.session = opts.session ?? null;
     this.inputBuffer = "";
     this.inputCursor = 0;
     this.inputHistory = [];
@@ -462,6 +464,7 @@ export class MinimalTui {
 
     if (this.inputHistory[this.inputHistory.length - 1] !== text) this.inputHistory.push(text);
     this.historyIndex = -1;
+    const turnStart = this.blocks.length;
     this.pushBlock({ kind: "user", text });
 
     try {
@@ -484,6 +487,17 @@ export class MinimalTui {
         this.dirtyRendered = true;
       }, { signal: ac.signal });
       this.history.push(...messages);
+      if (this.session) {
+        await this.session.appendTurn({
+          config: {
+            baseUrl: this.config.baseUrl,
+            model: this.config.model,
+            systemPrompt: this.config.systemPrompt,
+          },
+          messages,
+          blocks: this.blocks.slice(turnStart),
+        });
+      }
       if (aborted || ac.signal.aborted) {
         this.pushBlock({ kind: "result", ok: false, summary: "⏹ interrupted" });
       }
@@ -527,7 +541,7 @@ export class MinimalTui {
 
     frame[0] =
       styleText("argus", { fg: theme.accent, bold: true }) +
-      styleText("  ·  minimal coding agent", { fg: theme.dim });
+      styleText(`  ·  ${this.sessionName ?? "session"}`, { fg: theme.dim });
 
     const lines = this.transcriptLines();
     const transcriptHeight = Math.max(1, this.height - 3);

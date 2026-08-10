@@ -1,3 +1,30 @@
+#### 2026-08-10 — session persistence (auto-save + resume)
+
+**Status: ✅ done**
+
+Goal (blocker #2): close the terminal -> everything gone. A coding agent works
+across many turns/sessions.
+
+Design (agreed with user):
+- Store at `~/.argus/sessions/<name>.jsonl` (overridable via `ARGUS_HOME`).
+- JSONL append-only. Every request is reconstructable: per-turn `config`
+  (model / baseUrl / systemPrompt) + verbatim `messages` (tool_calls + results)
+  + meta `tools` schemas determine each request; `blocks` preserve the on-screen
+  transcript (incl. thinking). API key never written.
+- Controls: `npm start` auto-resumes the latest session; `--new` starts fresh;
+  `--session X` resumes/creates a named session. Session name shown in header.
+
+What was done:
+- ✅ `src/session.mjs`: `Session` (meta-once + appendTurn), load/list/latest,
+  sanitize + new-session naming, `ARGUS_HOME` override.
+- ✅ `src/main.mjs`: CLI parsing (`--new`, `--session`), auto-resume latest,
+  populate initial blocks/history.
+- ✅ `src/tui.mjs`: accepts initial session state, saves each turn (messages +
+  blocks + config) after completion (incl. aborted turns), header shows the
+  session name.
+- ✅ Verified: JSONL round-trip (exact messages/blocks/config, no secrets),
+  resume into a fresh TUI, latest-session listing, live boot showing the
+  session name, and session dir creation with a temp `ARGUS_HOME`.
 #### 2026-08-10 — abortable turns (interrupt a running turn)
 
 **Status: ✅ done**
