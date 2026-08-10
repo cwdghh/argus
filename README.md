@@ -199,3 +199,16 @@ npm start -- "<prompt>"            # run one prompt
 npm start -- "<prompt>" --session X  # ...and append to a named session
 npm start -- --help                # usage
 ```
+
+## Testing
+
+A dependency-free test suite using Node's built-in test runner plus a scripted
+**mock LLM server** (`test/helpers/mock-llm.mjs`), so argus can verify its own
+edits safely without a real API:
+
+```bash
+npm test
+```
+
+Covers the agent loop (tools, abort, persistent cwd), headless mode, session
+round-trip, and TUI rendering/navigation.

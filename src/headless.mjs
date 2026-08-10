@@ -9,7 +9,8 @@
  *   - tool calls + results  -> stderr
  *
  * If a --session name is given, the turn is appended to that session (resuming
- * its history first) and the working directory is persisted there.
+ * its history first) and the working directory is persisted there — even when
+ * the turn errors, so the error block is preserved.
  */
 import { runTurn } from "./agent.mjs";
 import { loadSession } from "./session.mjs";
@@ -24,9 +25,10 @@ function summarize(result) {
   return JSON.stringify(result).slice(0, 80);
 }
 
-export async function runHeadless(config, prompt, { session, cwd } = {}) {
-  const writeOut = (s) => process.stdout.write(s);
-  const writeErr = (s) => process.stderr.write(s);
+export async function runHeadless(config, prompt, { session, cwd, stdout, stderr } = {}) {
+  // Streams are injectable so tests can capture output without monkeypatching.
+  const writeOut = stdout || ((s) => process.stdout.write(s));
+  const writeErr = stderr || ((s) => process.stderr.write(s));
 
   // Resume session history if one is given.
   let history = [];
@@ -46,7 +48,8 @@ export async function runHeadless(config, prompt, { session, cwd } = {}) {
   const push = (b) => blocks.push(b);
 
   let sawText = false;
-  let result;
+  let result = null;
+  let error = null;
   try {
     result = await runTurn(
       config,
@@ -74,26 +77,31 @@ export async function runHeadless(config, prompt, { session, cwd } = {}) {
       { cwd: cwd ?? process.cwd() }
     );
   } catch (err) {
+    error = err;
     push({ kind: "error", text: err.message });
     writeErr(`\nerror: ${err.message}\n`);
-    process.exitCode = 1;
-    return;
   }
 
-  if (sawText || result.aborted) writeOut("\n");
-
+  // Persist the turn (including error blocks) regardless of outcome.
   if (session) {
-    try {
-      await session.setCwd(result.cwd);
-    } catch {
-      /* non-fatal */
+    if (result?.cwd) {
+      try {
+        await session.setCwd(result.cwd);
+      } catch {
+        /* non-fatal */
+      }
     }
     await session.appendTurn({
       config: { baseUrl: config.baseUrl, model: config.model, systemPrompt: config.systemPrompt },
-      messages: result.messages,
+      messages: result?.messages ?? [],
       blocks,
     });
   }
 
+  if (error) {
+    process.exitCode = 1;
+    return;
+  }
+  if (sawText || result.aborted) writeOut("\n");
   process.exitCode = result.aborted ? 130 : 0;
 }

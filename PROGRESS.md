@@ -1,3 +1,20 @@
+#### 2026-08-11 — test harness (mock LLM + integration tests)
+
+**Status: ✅ done**
+
+Goal: let argus verify its own edits safely (enabler for self-updating).
+
+What was done:
+- ✅ `test/helpers/mock-llm.mjs`: a scripted SSE server that fakes the API
+  (deltas, tool_calls, delays for abort tests, 500s for error tests).
+- ✅ `npm test` (`node --test test/*.test.mjs`): 15 tests across agent loop
+  (tools, abort, persistent cwd), headless mode (stream separation, session +
+  cwd save, error path), session round-trip/secret-safety, and TUI rendering +
+  navigation.
+- ✅ Made `runHeadless` accept injectable stdout/stderr (no monkeypatching),
+  and headless now saves turns (incl. error blocks) on failure too.
+- ✅ Fixed a test-harness gotcha: unclosed mock servers keep Node alive and hang
+  the runner — tests now use `t.after(() => srv.close())`.
 #### 2026-08-10 — headless one-shot mode
 
 **Status: ✅ done**
