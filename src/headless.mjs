@@ -72,6 +72,8 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
         } else if (ev.type === "tool_result") {
           push({ kind: "result", ok: ev.ok, summary: summarize(ev.result) });
           writeErr(`   ${ev.ok ? "✓" : "✗"} ${summarize(ev.result)}\n`);
+        } else if (ev.type === "compacted") {
+          writeErr("… earlier context compacted\n");
         }
       },
       { cwd: cwd ?? process.cwd() }

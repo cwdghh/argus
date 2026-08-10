@@ -22,6 +22,7 @@
  */
 import { streamChat } from "./llm.mjs";
 import { findTool, tools } from "./tools.mjs";
+import { maybeCompact } from "./compact.mjs";
 
 /**
  * Run one user prompt through the tool-calling loop.
@@ -43,8 +44,16 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
   const turnMessages = [{ role: "user", content: userMessage }];
   onEvent({ type: "user", text: userMessage });
 
+  // Keep the model context within the window: drop the oldest turns and replace
+  // them with a compact summary when the history grows too large.
+  const { history: sendHistory, compacted } = maybeCompact(history, {
+    compactAtChars: opts.compactAtChars,
+    keepTurns: opts.keepTurns,
+  });
+  if (compacted) onEvent({ type: "compacted" });
+
   while (true) {
-    const reply = await streamAssistant(config, [...history, ...turnMessages], toolList, onEvent, signal);
+    const reply = await streamAssistant(config, [...sendHistory, ...turnMessages], toolList, onEvent, signal);
 
     // If the turn was aborted mid-stream, the assistant reply may be incomplete
     // (or contain partial tool_calls), so don't push it into the conversation.

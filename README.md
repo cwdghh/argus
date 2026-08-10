@@ -145,6 +145,15 @@ Destructive shell commands (recursive `rm`, `dd`, `mkfs`, `shutdown`, …) are
 not run silently. In the TUI they show a `⚠ <command> (y/n)` prompt — `y`
 approves, `n`/Esc denies. Headless mode blocks them by default.
 
+## Context
+
+Long sessions eventually overflow the model’s context window. argus compacts
+automatically: when history passes a budget (default 300k chars, ~= 75k tokens)
+the oldest turns are replaced by a short summary and the most recent
+`ARGUS_COMPACT_KEEP` (default 8) turns are kept. Full messages stay in the
+session file, so the original requests remain reconstructable. Tune with
+`ARGUS_COMPACT_AT` (chars) and `ARGUS_COMPACT_KEEP`.
+
 ## Self-updating
 
 Argus can modify its own source — that's the point of the docs. Start with

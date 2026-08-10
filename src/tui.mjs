@@ -492,6 +492,9 @@ export class MinimalTui {
         } else if (ev.type === "cwd_change") {
           this.cwd = ev.cwd;
           if (this.session) this.session.setCwd(ev.cwd).catch(() => {});
+        } else if (ev.type === "compacted") {
+          this.pushBlock({ kind: "result", ok: true, summary: "… earlier context compacted" });
+          if (this.mode !== "aborting") this.mode = "working";
         }
         this.dirtyRendered = true;
       }, { signal: ac.signal, cwd: this.cwd, confirm: (cmd) => this.confirm(cmd) });

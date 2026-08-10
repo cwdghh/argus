@@ -1,3 +1,22 @@
+#### 2026-08-11 — context compaction
+
+**Status: ✅ done**
+
+Goal: long sessions grow the message history unbounded and eventually overflow
+the context window.
+
+What was done:
+- ✅ `src/compact.mjs`: estimates the serialized history size; when it exceeds a
+  budget (default 300k chars ~= 75k tokens) it drops the oldest turns, keeps
+  the `ARGUS_COMPACT_KEEP` (default 8) most recent, and prepends a summary of
+  the old turns (their final assistant text, truncated).
+- ✅ `agent.mjs`: compacts history before each request, emits a `compacted`
+  event; threshold/keep overridable via opts.
+- ✅ Full messages stay in the session JSONL, so original requests remain
+  reconstructable despite the in-memory compaction.
+- ✅ TUI + headless show a "… earlier context compacted" note.
+- ✅ Verified: 24 tests pass (below/above threshold, split/summarize, agent
+  emits summary, end-to-end real call).
 #### 2026-08-11 — tool safety gate (confirm destructive commands)
 
 **Status: ✅ done**
