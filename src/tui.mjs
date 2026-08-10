@@ -49,6 +49,10 @@ function styleText(text, { fg, bold, dim, italic, underline, strike } = {}) {
   return `${ESC}[${codes.join(";")}m${text}${RESET}`;
 }
 
+function stripAnsi(text) {
+  return text.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
 function wrap(text, width) {
   if (width <= 1) return [text];
   const out = [];
@@ -516,14 +520,14 @@ export class MinimalTui {
   // ---- frame building -----------------------------------------------------
 
   footer() {
+    const modeStr = styleText(this.mode, { fg: MODE_COLOR()[this.mode] ?? theme.dim, bold: this.mode !== "idle" });
     const MODEL = `model ${this.config.model}`;
     const git =
       this.git.branch != null
         ? `git ${this.git.branch}${this.git.dirty ? ` ~${this.git.dirtyCount}` : " ✓"}`
         : "git -";
-    const mode = `mode ${this.mode}`;
     const sep = styleText("  ·  ", { fg: theme.dim });
-    const cwdLen = Math.max(8, this.width - MODEL.length - git.length - mode.length - sep.length * 3 - 4);
+    const cwdLen = Math.max(8, this.width - MODEL.length - git.length - stripAnsi(modeStr).length - sep.length * 3 - 6);
     const path = truncateMiddle(process.cwd(), cwdLen);
 
     const meta = [
@@ -531,8 +535,10 @@ export class MinimalTui {
       styleText(path, { fg: theme.dim }),
       styleText(git, { fg: this.git.dirty ? theme.bad : theme.good }),
     ].join(sep);
-    const modeStyled = styleText(mode, { fg: MODE_COLOR()[this.mode] ?? theme.dim, bold: this.mode !== "idle" });
-    return `${meta}${sep}${modeStyled}`;
+
+    // mode on the left (just the word), everything else right-aligned
+    const pad = Math.max(1, this.width - stripAnsi(modeStr).length - stripAnsi(meta).length - 2);
+    return `${modeStr}${" ".repeat(pad)}${meta}`;
   }
 
   buildFrame() {

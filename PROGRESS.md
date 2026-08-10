@@ -1,3 +1,11 @@
+#### 2026-08-10 — footer: mode on the left, without the "mode " prefix
+
+**Status: ✅ done**
+
+- Removed the `mode ` label; the footer now shows just `idle` / `thinking` /
+  `working` / `aborting`.
+- Layout changed: mode on the left, model · path · git right-aligned on the
+  same row.
 #### 2026-08-10 — clear the terminal on startup
 
 **Status: ✅ done**
