@@ -7,6 +7,9 @@
  *                     generator that yields `text_delta` events and finally a
  *                     `done` event with the assembled assistant message.
  *
+ * Both accept an optional `signal` (AbortSignal) so a long-running turn can be
+ * cancelled (e.g. when the user interrupts from the TUI).
+ *
  * This is intentionally minimal, but it is the only place that talks to the
  * network, so both paths live here.
  */
@@ -29,7 +32,7 @@ function buildBody({ model, systemPrompt, messages, tools, stream }) {
   };
 }
 
-async function request({ baseUrl, apiKey, body }) {
+async function request({ baseUrl, apiKey, body, signal }) {
   const res = await fetch(`${baseUrl}${CHAT_PATH}`, {
     method: "POST",
     headers: {
@@ -37,6 +40,7 @@ async function request({ baseUrl, apiKey, body }) {
       ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
     },
     body: JSON.stringify(body),
+    ...(signal ? { signal } : {}),
   });
   if (!res.ok) {
     const text = await res.text();
@@ -48,9 +52,9 @@ async function request({ baseUrl, apiKey, body }) {
 /**
  * One-shot chat. Returns the assistant message object.
  */
-export async function chat({ baseUrl, apiKey, model, systemPrompt, messages, tools }) {
+export async function chat({ baseUrl, apiKey, model, systemPrompt, messages, tools, signal }) {
   const body = buildBody({ model, systemPrompt, messages, tools, stream: false });
-  const res = await request({ baseUrl, apiKey, body });
+  const res = await request({ baseUrl, apiKey, body, signal });
   const data = await res.json();
   const choice = data.choices?.[0];
   if (!choice) throw new Error("LLM response had no choices");
@@ -64,76 +68,87 @@ export async function chat({ baseUrl, apiKey, model, systemPrompt, messages, too
  *
  * Tool calls are streamed in pieces (id + name + chunks of arguments); we
  * aggregate them and emit them only in the `done` event, fully assembled.
+ *
+ * If `signal` aborts at any point (even during the initial request), we stop
+ * and yield a final `{ type: "done", aborted: true, message }`.
  */
-export async function* streamChat({ baseUrl, apiKey, model, systemPrompt, messages, tools }) {
+export async function* streamChat({ baseUrl, apiKey, model, systemPrompt, messages, tools, signal }) {
   const body = buildBody({ model, systemPrompt, messages, tools, stream: true });
-  const res = await request({ baseUrl, apiKey, body });
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
   let content = "";
   let finishReason = null;
   const toolCalls = new Map(); // index -> { id, name, arguments }
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+  try {
+    const res = await request({ baseUrl, apiKey, body, signal });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
 
-    const lines = buffer.split("\n");
-    buffer = lines.pop(); // keep the possibly-incomplete last line
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith("data:")) continue;
-      const data = trimmed.slice(5).trim();
-      if (data === "[DONE]") {
-        yield {
-          type: "done",
-          finishReason,
-          message: assembleMessage(content, toolCalls),
-        };
-        return;
-      }
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
 
-      let json;
-      try {
-        json = JSON.parse(data);
-      } catch {
-        continue; // ignore partial/heartbeat lines
-      }
-      const choice = json.choices?.[0];
-      if (!choice) continue;
-      if (choice.finish_reason) finishReason = choice.finish_reason;
+      const lines = buffer.split("\n");
+      buffer = lines.pop(); // keep the possibly-incomplete last line
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue;
+        const data = trimmed.slice(5).trim();
+        if (data === "[DONE]") {
+          yield {
+            type: "done",
+            finishReason,
+            message: assembleMessage(content, toolCalls),
+          };
+          return;
+        }
 
-      const delta = choice.delta ?? {};
-      if (delta.content) {
-        content += delta.content;
-        yield { type: "text_delta", delta: delta.content };
-      }
-      if (delta.reasoning_content || delta.reasoning) {
-        const t = delta.reasoning_content ?? delta.reasoning;
-        if (t) yield { type: "thinking_delta", delta: t };
-      }
-      if (delta.tool_calls) {
-        for (const tc of delta.tool_calls) {
-          const idx = tc.index ?? 0;
-          const cur = toolCalls.get(idx) ?? { id: "", name: "", arguments: "" };
-          if (tc.id) cur.id = tc.id;
-          if (tc.function?.name) cur.name = tc.function.name;
-          if (tc.function?.arguments) cur.arguments += tc.function.arguments;
-          toolCalls.set(idx, cur);
+        let json;
+        try {
+          json = JSON.parse(data);
+        } catch {
+          continue; // ignore partial/heartbeat lines
+        }
+        const choice = json.choices?.[0];
+        if (!choice) continue;
+        if (choice.finish_reason) finishReason = choice.finish_reason;
+
+        const delta = choice.delta ?? {};
+        if (delta.content) {
+          content += delta.content;
+          yield { type: "text_delta", delta: delta.content };
+        }
+        if (delta.reasoning_content || delta.reasoning) {
+          const t = delta.reasoning_content ?? delta.reasoning;
+          if (t) yield { type: "thinking_delta", delta: t };
+        }
+        if (delta.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            const idx = tc.index ?? 0;
+            const cur = toolCalls.get(idx) ?? { id: "", name: "", arguments: "" };
+            if (tc.id) cur.id = tc.id;
+            if (tc.function?.name) cur.name = tc.function.name;
+            if (tc.function?.arguments) cur.arguments += tc.function.arguments;
+            toolCalls.set(idx, cur);
+          }
         }
       }
     }
-  }
 
-  // Stream ended without [DONE] sentinel; still emit what we assembled.
-  yield {
-    type: "done",
-    finishReason,
-    message: assembleMessage(content, toolCalls),
-  };
+    // Stream ended without [DONE] sentinel; still emit what we assembled.
+    yield {
+      type: "done",
+      finishReason,
+      message: assembleMessage(content, toolCalls),
+    };
+  } catch (err) {
+    if (signal?.aborted || err?.name === "AbortError") {
+      yield { type: "done", aborted: true, finishReason, message: assembleMessage(content, toolCalls) };
+      return;
+    }
+    throw err;
+  }
 }
 
 function assembleMessage(content, toolCalls) {

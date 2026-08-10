@@ -90,15 +90,19 @@ export const tools = [
       },
       required: ["command"],
     },
-    async execute({ command }) {
+    async execute({ command }, ctx = {}) {
       try {
         const { stdout, stderr } = await execAsync(command, {
           timeout: 60_000,
           maxBuffer: 1024 * 1024,
+          ...(ctx.signal ? { signal: ctx.signal } : {}),
         });
         return { stdout, stderr };
       } catch (err) {
-        // execAsync throws on non-zero exit; surface the output rather than crashing.
+        // execAsync throws on non-zero exit OR on abort; surface either cleanly.
+        if (err.name === "AbortError") {
+          return { error: true, aborted: true, message: "command aborted" };
+        }
         return {
           error: true,
           stdout: err.stdout ?? "",

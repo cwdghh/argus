@@ -71,8 +71,9 @@ layout: header, scrollable transcript, a bottom **editor**, and a **footer**.
 - **Up/Down** navigate past inputs (input history) in the editor.
 - **Editor stays at the bottom**; the caret follows Left/Right/backspace/delete.
 - **Footer** always shows model, current path, git status (branch + dirty count),
-  and mode (`idle` / `working` / `thinking`).
-- Ctrl-C / Ctrl-D quits.
+  and mode (`idle` / `working` / `thinking` / `aborting`).
+- **Ctrl-C during a turn aborts it** (second Ctrl-C force-quits); Ctrl-C when
+  idle quits. Esc also aborts a running turn.
 
 ## What it teaches
 

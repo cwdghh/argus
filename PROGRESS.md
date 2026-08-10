@@ -1,3 +1,26 @@
+#### 2026-08-10 — abortable turns (interrupt a running turn)
+
+**Status: ✅ done**
+
+Goal (blocker #1 for usability): a running turn couldn't be cancelled — the
+TUI was locked during a turn and Ctrl-C quit the whole app, so a looping or
+hanging tool left you stuck.
+
+What was done:
+- ✅ `llm.mjs`: `streamChat`/`chat` accept an `AbortSignal`; abort is caught at
+  the request stage AND mid-stream, yielding `{ type: "done", aborted: true }`
+  with whatever was assembled (no uncaught AbortError).
+- ✅ `agent.mjs`: `runTurn(..., { signal })` threads the signal through; on
+  abort it returns early with `{ aborted: true }` and does not push an
+  incomplete assistant reply (or partial tool_calls) into history.
+- ✅ `tools.mjs`: `bash` accepts `{ signal }` and kills the in-flight command on
+  abort (returns `{ aborted: true }` quickly).
+- ✅ `tui.mjs`: first **Ctrl-C** (or **Esc**) aborts the running turn and shows
+  `mode aborting` + a `⏹ interrupted` line; a second Ctrl-C force-quits;
+  Ctrl-C when idle still quits.
+- ✅ Verified: abort mid-stream (mock + real DashScope), abort during in-flight
+  `bash sleep` (killed in ~0.2s), normal streaming unchanged, TUI abort logic,
+  and live boot/idle-quit.
 #### 2026-08-10 — fix: preserve model newlines as hard line breaks
 
 **Status: ✅ done**

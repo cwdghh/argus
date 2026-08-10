@@ -14,7 +14,11 @@
  * name and arguments. Your code decides what actually runs.
  *
  * The loop is UI-agnostic: it emits events (text_delta, tool_call, tool_result,
- * ...) so any front-end can render it live. See src/tui.mjs for the Ink UI.
+ * ...) so any front-end can render it live. See src/tui.mjs for the TUI.
+ *
+ * An optional `opts.signal` (AbortSignal) lets a turn be cancelled: the streamed
+ * reply stops, in-flight tools get the signal, and the loop returns early with
+ * `{ aborted: true }`.
  */
 import { streamChat } from "./llm.mjs";
 import { findTool, tools } from "./tools.mjs";
@@ -22,13 +26,15 @@ import { findTool, tools } from "./tools.mjs";
 /**
  * Run one user prompt through the tool-calling loop.
  *
- * @param {object} config  resolved config from config.mjs
- * @param {Array}  history full conversation so far (outside this turn)
- * @param {string} userMessage the new user prompt
+ * @param {object}  config     resolved config from config.mjs
+ * @param {Array}   history    full conversation so far (outside this turn)
+ * @param {string}  userMessage the new user prompt
  * @param {(event: object) => void} [onEvent] called with {type, ...} as things happen
- * @returns {Promise<{ messages: Array, finalText: string }>}
+ * @param {{ signal?: AbortSignal }} [opts]
+ * @returns {Promise<{ messages: Array, finalText: string, aborted: boolean }>}
  */
-export async function runTurn(config, history, userMessage, onEvent = () => {}) {
+export async function runTurn(config, history, userMessage, onEvent = () => {}, opts = {}) {
+  const { signal } = opts;
   const toolList = tools;
 
   // Everything created during this turn (assistant replies + tool results).
@@ -36,7 +42,13 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}) 
   onEvent({ type: "user", text: userMessage });
 
   while (true) {
-    const reply = await streamAssistant(config, [...history, ...turnMessages], toolList, onEvent);
+    const reply = await streamAssistant(config, [...history, ...turnMessages], toolList, onEvent, signal);
+
+    // If the turn was aborted mid-stream, the assistant reply may be incomplete
+    // (or contain partial tool_calls), so don't push it into the conversation.
+    if (signal?.aborted) {
+      return { messages: turnMessages, finalText: "", aborted: true };
+    }
 
     // The assistant message becomes part of the conversation.
     turnMessages.push(reply);
@@ -45,7 +57,7 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}) 
     if (toolCalls.length === 0) {
       // No tools requested -> the model gave its final answer.
       onEvent({ type: "assistant_end", text: reply.content ?? "" });
-      return { messages: turnMessages, finalText: reply.content ?? "" };
+      return { messages: turnMessages, finalText: reply.content ?? "", aborted: false };
     }
 
     // Execute each requested tool call and feed the result back as a
@@ -65,7 +77,7 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}) 
         result = { error: true, message: `unknown tool: ${call.function.name}` };
       } else {
         try {
-          result = await tool.execute(args);
+          result = await tool.execute(args, { signal });
         } catch (err) {
           result = { error: true, message: `tool threw: ${err.message}` };
         }
@@ -78,6 +90,11 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}) 
         tool_call_id: call.id,
         content: JSON.stringify(result),
       });
+
+      // Stop early if aborted (e.g. while a tool was running).
+      if (signal?.aborted) {
+        return { messages: turnMessages, finalText: "", aborted: true };
+      }
     }
     // Loop again: the model now sees the tool results and can continue.
   }
@@ -87,9 +104,9 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}) 
  * Stream one assistant reply from the model, emitting text deltas as they
  * arrive and returning the fully-assembled assistant message.
  */
-async function streamAssistant(config, messages, toolList, onEvent) {
+async function streamAssistant(config, messages, toolList, onEvent, signal) {
   onEvent({ type: "assistant_start" });
-  const stream = streamChat({ ...config, messages, tools: toolList });
+  const stream = streamChat({ ...config, messages, tools: toolList, signal });
   let message = null;
   for await (const ev of stream) {
     if (ev.type === "text_delta") {

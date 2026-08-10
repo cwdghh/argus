@@ -378,7 +378,7 @@ function blockLines(block, width) {
 // The TUI
 // ---------------------------------------------------------------------------
 
-const MODE_COLOR = () => ({ idle: theme.dim, working: theme.accent, thinking: theme.think });
+const MODE_COLOR = () => ({ idle: theme.dim, working: theme.accent, thinking: theme.think, aborting: theme.bad });
 
 export class MinimalTui {
   constructor(config) {
@@ -401,6 +401,9 @@ export class MinimalTui {
     this.stopped = false;
     this.rawBuf = "";
     this.decoder = new TextDecoder();
+    this.abortController = null;
+    this.aborting = false;
+    this.escTimer = null;
   }
 
   transcriptLines() {
@@ -462,26 +465,34 @@ export class MinimalTui {
     this.pushBlock({ kind: "user", text });
 
     try {
-      const { messages } = await runTurn(this.config, this.history, text, (ev) => {
+      const ac = new AbortController();
+      this.abortController = ac;
+      const { messages, aborted } = await runTurn(this.config, this.history, text, (ev) => {
         if (ev.type === "thinking_delta") {
           this.append("thinking", ev.delta);
           this.mode = "thinking";
         } else if (ev.type === "text_delta") {
           this.append("assistant", ev.delta);
-          this.mode = "working";
+          if (this.mode !== "aborting") this.mode = "working";
         } else if (ev.type === "tool_call") {
           this.pushBlock({ kind: "tool", name: ev.name, args: ev.args });
-          this.mode = "working";
+          if (this.mode !== "aborting") this.mode = "working";
         } else if (ev.type === "tool_result") {
           this.pushBlock({ kind: "result", ok: ev.ok, summary: summarize(ev.result) });
-          this.mode = "working";
+          if (this.mode !== "aborting") this.mode = "working";
         }
         this.dirtyRendered = true;
-      });
+      }, { signal: ac.signal });
       this.history.push(...messages);
+      if (aborted || ac.signal.aborted) {
+        this.pushBlock({ kind: "result", ok: false, summary: "⏹ interrupted" });
+      }
     } catch (err) {
-      this.pushBlock({ kind: "error", text: err.message });
+      if (ac.signal.aborted) this.pushBlock({ kind: "result", ok: false, summary: "⏹ interrupted" });
+      else this.pushBlock({ kind: "error", text: err.message });
     } finally {
+      this.abortController = null;
+      this.aborting = false;
       this.mode = "idle";
       this.scrollOffset = 0;
       this.dirtyRendered = true;
@@ -548,13 +559,38 @@ export class MinimalTui {
         this.insertText(this.rawBuf);
         this.rawBuf = "";
       }
+      this.clearEscTimeout();
       return;
     }
     if (esc > 0) {
       this.insertText(this.rawBuf.slice(0, esc));
       this.rawBuf = this.rawBuf.slice(esc);
     }
-    if (this.tryEscape()) this.consumeInput();
+    if (this.tryEscape()) {
+      this.clearEscTimeout();
+      this.consumeInput();
+    } else if (this.rawBuf === "\x1b") {
+      this.scheduleEscTimeout();
+    }
+  }
+
+  scheduleEscTimeout() {
+    if (this.escTimer) return;
+    this.escTimer = setTimeout(() => {
+      this.escTimer = null;
+      if (this.stopped) return;
+      if (this.rawBuf === "\x1b") {
+        this.rawBuf = "";
+        this.runAction({ type: "escape" });
+      }
+    }, 60);
+  }
+
+  clearEscTimeout() {
+    if (this.escTimer) {
+      clearTimeout(this.escTimer);
+      this.escTimer = null;
+    }
   }
 
   tryEscape() {
@@ -624,7 +660,7 @@ export class MinimalTui {
     for (const ch of text) {
       const cp = ch.codePointAt(0);
       if (cp === 3 || cp === 4) {
-        if (cp === 3) this.stop();
+        if (cp === 3) this.handleCtrlC();
         continue;
       }
       if (cp === 13 || cp === 10) {
@@ -684,6 +720,9 @@ export class MinimalTui {
       case "end":
         this.scrollOffset = 0;
         break;
+      case "escape":
+        if (this.mode !== "idle") this.abortTurn();
+        break;
       case "wheel":
         this.scrollOffset = Math.min(Math.max(0, this.scrollOffset + action.dir * 3), this.maxScroll());
         break;
@@ -712,6 +751,19 @@ export class MinimalTui {
       this.inputBuffer = this.inputHistory[this.historyIndex];
     }
     this.inputCursor = this.inputBuffer.length;
+    this.dirtyRendered = true;
+  }
+
+  handleCtrlC() {
+    if (this.mode === "idle") return this.stop();
+    if (this.aborting) return this.stop(); // second press: force quit
+    this.abortTurn();
+  }
+
+  abortTurn() {
+    this.aborting = true;
+    if (this.abortController) this.abortController.abort();
+    this.mode = "aborting";
     this.dirtyRendered = true;
   }
 
@@ -818,6 +870,7 @@ export class MinimalTui {
     this.stopped = true;
     clearInterval(this.timer);
     clearInterval(this.gitTimer);
+    this.clearEscTimeout();
     process.stdout.write("\x1b[?1000l\x1b[?1006l"); // disable mouse
     process.stdin.setRawMode(false);
     process.stdin.pause();
