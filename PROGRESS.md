@@ -1,3 +1,12 @@
+#### 2026-08-10 — clear the terminal on startup
+
+**Status: ✅ done**
+
+- The TUI previously cleared only the viewport rows it drew; there was no
+  explicit full-screen clear. Added `\x1b[2J\x1b[H` at startup so argus starts
+  from a clean slate regardless of prior terminal content.
+- (Note: argus draws in the main buffer, not an alternate screen, so the
+  transcript stays in shell scrollback after exit — intentional.)
 #### 2026-08-10 — session persistence (auto-save + resume)
 
 **Status: ✅ done**

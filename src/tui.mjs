@@ -832,6 +832,9 @@ export class MinimalTui {
   start() {
     process.stdin.setRawMode(true);
     process.stdin.resume();
+    // Clear the whole screen up front so we start from a clean slate rather
+    // than relying on per-row clearing of whatever was on screen before.
+    process.stdout.write(`${ESC}[2J${ESC}[H`);
     process.stdout.on("resize", () => {
       this.width = process.stdout.columns || 80;
       this.height = process.stdout.rows || 24;
