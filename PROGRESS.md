@@ -1,3 +1,16 @@
+#### 2026-08-10 — fix: preserve model newlines as hard line breaks
+
+**Status: ✅ done**
+
+- Verified against the real model (deepseek-v4-flash-0731): it uses single
+  newlines as meaningful line breaks (e.g. "A\nB\nC" meant as three lines) and
+  blank lines for paragraph breaks.
+- Our renderer previously collapsed single newlines to spaces (Markdown soft
+  breaks), which mangled such output. Now `markdownLines` renders each source
+  line as its own display line (hard breaks) and renders blank lines as empty
+  lines, matching the model's convention and how chat UIs display output.
+- Note: pi (via `marked`) uses soft breaks by default, but that does not match
+  the model output convention, so we deliberately diverge here.
 #### 2026-08-10 — theme detection, markdown refinement, mouse scroll, input history
 
 **Status: ✅ done**

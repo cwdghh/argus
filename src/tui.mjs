@@ -297,6 +297,7 @@ function markdownLines(text, width) {
       continue;
     }
     if (trimmed === "") {
+      lines.push("");
       i++;
       continue;
     }
@@ -330,22 +331,9 @@ function markdownLines(text, width) {
       continue;
     }
 
-    const parts = [raw.trim()];
-    while (i + 1 < src.length) {
-      const nt = src[i + 1].trim();
-      if (
-        nt === "" ||
-        /^```/.test(nt) ||
-        /^#{1,6}\s/.test(nt) ||
-        /^\d+\.\s/.test(nt) ||
-        /^[-*+]\s/.test(nt) ||
-        /^>/.test(nt)
-      )
-        break;
-      i++;
-      parts.push(nt);
-    }
-    lines.push(...renderSimple(parts.join(" "), { fg: theme.text }, width));
+        // Preserve the model's newlines as hard line breaks (chat rendering),
+    // so single newlines in output stay as separate lines.
+    lines.push(...renderSimple(raw.trim(), { fg: theme.text }, width));
     i++;
   }
   return lines.length ? lines : [""];
