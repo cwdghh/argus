@@ -1,3 +1,22 @@
+#### 2026-08-10 — persistent bash working directory
+
+**Status: ✅ done**
+
+Goal: every bash call ran in a fresh shell at the launch dir, so `cd src` never
+stuck — the model had to re-cd every call and couldn't rely on state.
+
+What was done:
+- ✅ `tools.mjs` bash runs in a session cwd (`ctx.cwd`); a leading `cd <dir>`
+  (or bare `cd` -> home) is resolved (~, relative, `..`) and returned as
+  `{ cwd }` so it persists. `cd -` (previous dir) not yet supported.
+- ✅ `agent.mjs` threads `opts.cwd`, passes it to tools, emits `cwd_change`,
+  and returns the new `cwd`.
+- ✅ `session.mjs`: cwd persisted (a deduped `{type:"cwd"}` JSONL line) and
+  restored on resume.
+- ✅ `tui.mjs`: holds `this.cwd`, updates on `cwd_change`, footer shows the
+  session cwd (not just process.cwd()); `main.mjs` passes the initial cwd.
+- ✅ Verified: cd -> pwd persists, agent emits cwd_change, session round-trip,
+  dedupe, footer uses session cwd.
 #### 2026-08-10 — footer: mode on the left, without the "mode " prefix
 
 **Status: ✅ done**

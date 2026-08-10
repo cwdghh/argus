@@ -40,6 +40,7 @@ async function main() {
 
   const loaded = await loadSession(sessionName);
   const turns = loaded?.turns ?? [];
+  const initialCwd = loaded?.meta?.cwd ?? process.cwd();
 
   const initialBlocks = [];
   const initialHistory = [];
@@ -49,7 +50,7 @@ async function main() {
   }
 
   const session = new Session(sessionName, config);
-  const tui = new MinimalTui(config, { sessionName, session, initialBlocks, initialHistory });
+  const tui = new MinimalTui(config, { sessionName, session, initialBlocks, initialHistory, initialCwd });
   tui.start();
 }
 

@@ -135,6 +135,10 @@ The loop is **UI-agnostic**: it emits events (`thinking_delta`, `text_delta`,
 one such front-end; you could swap it for a logger or a web UI without touching
 the loop.
 
+`bash` has a **persistent working directory**: a `cd` inside a command is
+remembered and used by later calls — persisted across sessions (`~/.argus`) and
+shown in the footer.
+
 ## Self-updating
 
 Argus can modify its own source — that's the point of the docs. Start with

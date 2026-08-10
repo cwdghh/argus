@@ -391,6 +391,7 @@ export class MinimalTui {
     this.history = opts.initialHistory ?? [];
     this.sessionName = opts.sessionName ?? null;
     this.session = opts.session ?? null;
+    this.cwd = opts.initialCwd ?? process.cwd();
     this.inputBuffer = "";
     this.inputCursor = 0;
     this.inputHistory = [];
@@ -474,7 +475,7 @@ export class MinimalTui {
     try {
       const ac = new AbortController();
       this.abortController = ac;
-      const { messages, aborted } = await runTurn(this.config, this.history, text, (ev) => {
+      const { messages, aborted, cwd } = await runTurn(this.config, this.history, text, (ev) => {
         if (ev.type === "thinking_delta") {
           this.append("thinking", ev.delta);
           this.mode = "thinking";
@@ -487,10 +488,14 @@ export class MinimalTui {
         } else if (ev.type === "tool_result") {
           this.pushBlock({ kind: "result", ok: ev.ok, summary: summarize(ev.result) });
           if (this.mode !== "aborting") this.mode = "working";
+        } else if (ev.type === "cwd_change") {
+          this.cwd = ev.cwd;
+          if (this.session) this.session.setCwd(ev.cwd).catch(() => {});
         }
         this.dirtyRendered = true;
-      }, { signal: ac.signal });
+      }, { signal: ac.signal, cwd: this.cwd });
       this.history.push(...messages);
+      if (typeof cwd === "string") this.cwd = cwd;
       if (this.session) {
         await this.session.appendTurn({
           config: {
@@ -528,7 +533,7 @@ export class MinimalTui {
         : "git -";
     const sep = styleText("  ·  ", { fg: theme.dim });
     const cwdLen = Math.max(8, this.width - MODEL.length - git.length - stripAnsi(modeStr).length - sep.length * 3 - 6);
-    const path = truncateMiddle(process.cwd(), cwdLen);
+    const path = truncateMiddle(this.cwd, cwdLen);
 
     const meta = [
       styleText(MODEL, { fg: theme.text }),

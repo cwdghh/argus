@@ -31,10 +31,11 @@ import { findTool, tools } from "./tools.mjs";
  * @param {string}  userMessage the new user prompt
  * @param {(event: object) => void} [onEvent] called with {type, ...} as things happen
  * @param {{ signal?: AbortSignal }} [opts]
- * @returns {Promise<{ messages: Array, finalText: string, aborted: boolean }>}
+ * @returns {Promise<{ messages: Array, finalText: string, aborted: boolean, cwd: string }>}
  */
 export async function runTurn(config, history, userMessage, onEvent = () => {}, opts = {}) {
   const { signal } = opts;
+  let cwd = opts.cwd || process.cwd();
   const toolList = tools;
 
   // Everything created during this turn (assistant replies + tool results).
@@ -47,7 +48,7 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
     // If the turn was aborted mid-stream, the assistant reply may be incomplete
     // (or contain partial tool_calls), so don't push it into the conversation.
     if (signal?.aborted) {
-      return { messages: turnMessages, finalText: "", aborted: true };
+      return { messages: turnMessages, finalText: "", aborted: true, cwd };
     }
 
     // The assistant message becomes part of the conversation.
@@ -57,7 +58,7 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
     if (toolCalls.length === 0) {
       // No tools requested -> the model gave its final answer.
       onEvent({ type: "assistant_end", text: reply.content ?? "" });
-      return { messages: turnMessages, finalText: reply.content ?? "", aborted: false };
+      return { messages: turnMessages, finalText: reply.content ?? "", aborted: false, cwd };
     }
 
     // Execute each requested tool call and feed the result back as a
@@ -77,13 +78,18 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
         result = { error: true, message: `unknown tool: ${call.function.name}` };
       } else {
         try {
-          result = await tool.execute(args, { signal });
+          result = await tool.execute(args, { signal, cwd });
         } catch (err) {
           result = { error: true, message: `tool threw: ${err.message}` };
         }
       }
 
       onEvent({ type: "tool_result", name: call.function.name, ok: !result?.error, result });
+
+      if (result && typeof result.cwd === "string") {
+        cwd = result.cwd;
+        onEvent({ type: "cwd_change", cwd });
+      }
 
       turnMessages.push({
         role: "tool",
@@ -93,7 +99,7 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
 
       // Stop early if aborted (e.g. while a tool was running).
       if (signal?.aborted) {
-        return { messages: turnMessages, finalText: "", aborted: true };
+        return { messages: turnMessages, finalText: "", aborted: true, cwd };
       }
     }
     // Loop again: the model now sees the tool results and can continue.

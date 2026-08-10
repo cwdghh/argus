@@ -90,6 +90,7 @@ export async function loadSession(name) {
     }
     if (obj.type === "meta") Object.assign(meta, obj);
     else if (obj.type === "turn") turns.push(obj);
+    else if (obj.type === "cwd") meta.cwd = obj.cwd;
   }
   return { meta, turns };
 }
@@ -104,6 +105,15 @@ export class Session {
     this.config = config;
     this.file = sessionFilePath(name);
     this.metaWritten = false;
+    this.lastCwd = null;
+  }
+
+  /** Persist the session working directory (call whenever it changes). */
+  async setCwd(cwd) {
+    if (cwd === this.lastCwd) return;
+    await this.ensureMeta();
+    this.lastCwd = cwd;
+    await appendFile(this.file, JSON.stringify({ type: "cwd", cwd }) + "\n", "utf8");
   }
 
   async ensureMeta() {

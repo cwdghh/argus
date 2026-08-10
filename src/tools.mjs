@@ -13,11 +13,28 @@
  *
  * See docs/tools.md for the full contract and how to add tools.
  */
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, stat } from "node:fs/promises";
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
+import { homedir } from "node:os";
+import { resolve, join } from "node:path";
 
 const execAsync = promisify(exec);
+
+/** Resolve a cd target to an absolute directory (handles ~, relative, ..). */
+async function resolveCd(cwd, target) {
+  let dir;
+  if (target === "~") dir = homedir();
+  else if (target.startsWith("~/")) dir = join(homedir(), target.slice(2));
+  else if (target === "-") return null; // cd - (previous dir) unsupported for now
+  else dir = resolve(cwd, target);
+  try {
+    const st = await stat(dir);
+    return st.isDirectory() ? dir : null;
+  } catch {
+    return null;
+  }
+}
 
 export const tools = [
   {
@@ -82,7 +99,8 @@ export const tools = [
     name: "bash",
     description:
       "Run a shell command and return its stdout and stderr. Use this to inspect the " +
-      "environment, list files, run builds, or any command-line task.",
+      "environment, list files, run builds, or any command-line task. The working " +
+      "directory persists across calls: use cd to move around and it is remembered.",
     parameters: {
       type: "object",
       properties: {
@@ -91,13 +109,20 @@ export const tools = [
       required: ["command"],
     },
     async execute({ command }, ctx = {}) {
+      const cwd = ctx.cwd || process.cwd();
+      const cmd = String(command).trim();
+      let newCwd = null;
+      const cdMatch = cmd.match(/^cd\s+(\S+)/);
+      if (cmd === "cd") newCwd = await resolveCd(cwd, "~");
+      else if (cdMatch) newCwd = await resolveCd(cwd, cdMatch[1]);
       try {
         const { stdout, stderr } = await execAsync(command, {
+          cwd,
           timeout: 60_000,
           maxBuffer: 1024 * 1024,
           ...(ctx.signal ? { signal: ctx.signal } : {}),
         });
-        return { stdout, stderr };
+        return { stdout, stderr, ...(newCwd ? { cwd: newCwd } : {}) };
       } catch (err) {
         // execAsync throws on non-zero exit OR on abort; surface either cleanly.
         if (err.name === "AbortError") {
@@ -108,6 +133,7 @@ export const tools = [
           stdout: err.stdout ?? "",
           stderr: err.stderr ?? "",
           message: err.message,
+          ...(newCwd ? { cwd: newCwd } : {}),
         };
       }
     },
