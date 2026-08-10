@@ -1,3 +1,19 @@
+#### 2026-08-10 — headless one-shot mode
+
+**Status: ✅ done**
+
+Goal: run argus without the TUI (needed for scripting / the test harness).
+
+What was done:
+- ✅ `src/headless.mjs`: runs a single prompt to stdout. Assistant text ->
+  stdout (clean for piping); reasoning, tool calls, errors -> stderr. If a
+  `--session` name is given, it resumes that session's history, saves the turn,
+  and persists the working directory. Exit codes: 0 ok, 1 error, 130 aborted.
+- ✅ `main.mjs`: a positional prompt switches to headless mode; `--help` prints
+  usage.
+- ✅ Verified: mock (stdout only text, tool on stderr, session+cwd saved), and
+  real end-to-end via `npm start -- "<prompt>"` (clean stdout + reasoning on
+  stderr).
 #### 2026-08-10 — persistent bash working directory
 
 **Status: ✅ done**

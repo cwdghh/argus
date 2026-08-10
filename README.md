@@ -188,3 +188,14 @@ argus/
     pi/              # the pi reference clone (gitignored)
     *.md             # API reference docs
 ```
+
+## Headless one-shot
+
+Run a single prompt without the TUI. Assistant text goes to **stdout** (clean
+for piping); reasoning, tool calls and errors go to **stderr**:
+
+```bash
+npm start -- "<prompt>"            # run one prompt
+npm start -- "<prompt>" --session X  # ...and append to a named session
+npm start -- --help                # usage
+```
