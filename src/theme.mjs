@@ -1,18 +1,19 @@
 /**
  * Styling tokens for the TUI, centralised in one place.
  *
- * A soft, low-contrast "Tokyo Night" inspired palette chosen for readability on
- * dark terminals. Colors are hex strings we convert to ANSI truecolor.
+ * Tuned for a LIGHT terminal theme: dark, high-contrast foregrounds that read
+ * well on white/light backgrounds. Colors are hex strings we convert to ANSI
+ * truecolor.
  */
 export const theme = {
-  accent: "#7dcfff", // brand / borders / active
-  heading: "#7dcfff", // markdown headings
-  user: "#7aa2f7", // user prompts
-  think: "#565f89", // reasoning / thinking (muted)
-  tool: "#bb9af7", // tool call requests (soft purple)
-  good: "#9ece6a", // success / ✓
-  bad: "#f7768e", // errors / ✗
-  dim: "#3b4261", // muted text
-  code: "#e0af68", // inline / fenced code (warm amber)
-  text: "#c0caf5", // normal assistant text
+  accent: "#0969da", // brand / borders / caret / prompt marker (blue)
+  heading: "#0550ae", // markdown headings (dark blue)
+  user: "#8250df", // user prompts (purple)
+  think: "#6e7781", // reasoning / thinking (gray)
+  tool: "#0e7490", // tool call requests (teal)
+  good: "#1a7f37", // success / ✓ (green)
+  bad: "#cf222e", // errors / ✗ (red)
+  dim: "#59636e", // muted text (gray)
+  code: "#953800", // inline / fenced code (amber-brown)
+  text: "#1f2328", // normal assistant text (near-black)
 };

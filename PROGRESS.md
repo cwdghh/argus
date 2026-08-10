@@ -1,3 +1,10 @@
+#### 2026-08-10 — light-theme color fix
+
+**Status: ✅ done**
+
+- ✅ Replaced the dark "Tokyo Night" palette with a high-contrast light-theme
+  palette (dark foregrounds: blue accent, purple user, teal tool, green/red
+  ok/error, near-black text) so colors are readable on a light terminal.
 #### 2026-08-10 — TUI overhaul: markdown, thinking, scroll, footer, real editor
 
 **Status: ✅ done**
