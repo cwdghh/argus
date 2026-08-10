@@ -1,0 +1,13 @@
+{
+  "name": "argus-minimal-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A minimal terminal coding agent built to understand how agents work. Dependency-free.",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/main.mjs"
+  },
+  "engines": {
+    "node": ">=22.9.0"
+  }
+}

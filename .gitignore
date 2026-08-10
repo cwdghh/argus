@@ -1,0 +1,17 @@
+# Secrets & local configuration
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# OS cruft
+.DS_Store
+
+# Logs
+*.log
+
+# Third-party reference material (downloaded, not authored here).
+# Re-clone / re-download if you need them; keeps the repo light.
+references/
