@@ -382,7 +382,7 @@ function blockLines(block, width) {
 // The TUI
 // ---------------------------------------------------------------------------
 
-const MODE_COLOR = () => ({ idle: theme.dim, working: theme.accent, thinking: theme.think, aborting: theme.bad });
+const MODE_COLOR = () => ({ idle: theme.dim, working: theme.accent, thinking: theme.think, aborting: theme.bad, confirm: theme.bad });
 
 export class MinimalTui {
   constructor(config, opts = {}) {
@@ -411,6 +411,7 @@ export class MinimalTui {
     this.abortController = null;
     this.aborting = false;
     this.escTimer = null;
+    this.pendingConfirm = null;
   }
 
   transcriptLines() {
@@ -493,7 +494,7 @@ export class MinimalTui {
           if (this.session) this.session.setCwd(ev.cwd).catch(() => {});
         }
         this.dirtyRendered = true;
-      }, { signal: ac.signal, cwd: this.cwd });
+      }, { signal: ac.signal, cwd: this.cwd, confirm: (cmd) => this.confirm(cmd) });
       this.history.push(...messages);
       if (typeof cwd === "string") this.cwd = cwd;
       if (this.session) {
@@ -563,7 +564,9 @@ export class MinimalTui {
     }
 
     const { text, col } = this.inputView();
-    frame[this.height - 2] = `${styleText("❯", { fg: theme.accent, bold: true })} ${text}`;
+    frame[this.height - 2] = this.pendingConfirm
+      ? styleText(`⚠ ${truncateMiddle(this.pendingConfirm.command, Math.max(12, this.width - 12))}  (y/n)`, { fg: theme.bad })
+      : `${styleText("❯", { fg: theme.accent, bold: true })} ${text}`;
     this.inputCol = col;
 
     frame[this.height - 1] = this.footer();
@@ -682,6 +685,12 @@ export class MinimalTui {
   }
 
   insertText(text) {
+    if (this.pendingConfirm) {
+      const ch = String(text).trim().toLowerCase()[0];
+      if (ch === "y") this.resolveConfirm(true);
+      else if (ch === "n") this.resolveConfirm(false);
+      return;
+    }
     for (const ch of text) {
       const cp = ch.codePointAt(0);
       if (cp === 3 || cp === 4) {
@@ -746,7 +755,8 @@ export class MinimalTui {
         this.scrollOffset = 0;
         break;
       case "escape":
-        if (this.mode !== "idle") this.abortTurn();
+        if (this.pendingConfirm) this.resolveConfirm(false);
+        else if (this.mode !== "idle") this.abortTurn();
         break;
       case "wheel":
         this.scrollOffset = Math.min(Math.max(0, this.scrollOffset + action.dir * 3), this.maxScroll());
@@ -786,10 +796,28 @@ export class MinimalTui {
   }
 
   abortTurn() {
+    this.resolveConfirm(false);
     this.aborting = true;
     if (this.abortController) this.abortController.abort();
     this.mode = "aborting";
     this.dirtyRendered = true;
+  }
+
+  confirm(command) {
+    return new Promise((resolve) => {
+      this.pendingConfirm = { command, resolve };
+      this.mode = "confirm";
+      this.dirtyRendered = true;
+    });
+  }
+
+  resolveConfirm(ok) {
+    if (!this.pendingConfirm) return;
+    const { resolve } = this.pendingConfirm;
+    this.pendingConfirm = null;
+    this.mode = "working";
+    this.dirtyRendered = true;
+    resolve(ok);
   }
 
   // ---- startup / lifecycle ------------------------------------------------

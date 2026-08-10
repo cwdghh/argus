@@ -1,3 +1,23 @@
+#### 2026-08-11 — tool safety gate (confirm destructive commands)
+
+**Status: ✅ done**
+
+Goal: let argus do real work without silently running destructive commands.
+Chose option 1: auto-approve read/write/edit + safe bash; ask before dangerous
+commands.
+
+What was done:
+- ✅ `tools.mjs`: danger detector (recursive `rm`, `dd`, `mkfs`, `fdisk`,
+  `parted`, `shutdown`/`reboot`/`halt`/`poweroff`, fork bomb). `bash` now
+  requires approval for these: uses `ctx.confirm` if provided; otherwise blocks
+  with a clear error.
+- ✅ `agent.mjs`: threads `opts.confirm` into tool execution.
+- ✅ `tui.mjs`: a pending confirm shows a `⚠ <cmd> (y/n)` prompt in the editor
+  row (mode `confirm`); `y` approves, `n`/Esc deny, and aborting a turn also
+  denies the pending command.
+- ✅ headless mode: no confirm -> destructive commands are blocked by default.
+- ✅ Verified: 20 tests pass (blocked/denied/approved, safe command, TUI
+  confirm flow) + live boot.
 #### 2026-08-11 — test harness (mock LLM + integration tests)
 
 **Status: ✅ done**

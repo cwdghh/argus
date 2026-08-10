@@ -139,6 +139,12 @@ the loop.
 remembered and used by later calls — persisted across sessions (`~/.argus`) and
 shown in the footer.
 
+## Safety
+
+Destructive shell commands (recursive `rm`, `dd`, `mkfs`, `shutdown`, …) are
+not run silently. In the TUI they show a `⚠ <command> (y/n)` prompt — `y`
+approves, `n`/Esc denies. Headless mode blocks them by default.
+
 ## Self-updating
 
 Argus can modify its own source — that's the point of the docs. Start with

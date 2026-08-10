@@ -36,6 +36,25 @@ async function resolveCd(cwd, target) {
   }
 }
 
+// Patterns that are dangerous enough to require confirmation before running.
+const DESTRUCTIVE_PATTERNS = [
+  /rm\s+(-{1,2}[a-z]*r[a-z]*|--recursive)/i, // recursive delete (rm -r / rm -rf)
+  /\bdd\b/, // raw block-device copy
+  /\bmkfs(\.\w+)?\b/,
+  /\bmke2fs\b/,
+  /\bfdisk\b/,
+  /\bparted\b/,
+  /\bshutdown\b/,
+  /\breboot\b/,
+  /\bhalt\b/,
+  /\bpoweroff\b/,
+  /:\(\)\s*\{\s*:\|\s*:\s*&\s*\}\s*:/, // fork bomb
+];
+
+function isDestructive(command) {
+  return DESTRUCTIVE_PATTERNS.some((re) => re.test(command));
+}
+
 export const tools = [
   {
     name: "read",
@@ -100,7 +119,8 @@ export const tools = [
     description:
       "Run a shell command and return its stdout and stderr. Use this to inspect the " +
       "environment, list files, run builds, or any command-line task. The working " +
-      "directory persists across calls: use cd to move around and it is remembered.",
+      "directory persists across calls: use cd to move around and it is remembered. " +
+      "Destructive commands (recursive rm, dd, mkfs, shutdown, ...) require approval.",
     parameters: {
       type: "object",
       properties: {
@@ -115,6 +135,16 @@ export const tools = [
       const cdMatch = cmd.match(/^cd\s+(\S+)/);
       if (cmd === "cd") newCwd = await resolveCd(cwd, "~");
       else if (cdMatch) newCwd = await resolveCd(cwd, cdMatch[1]);
+
+      if (isDestructive(cmd)) {
+        if (ctx.confirm) {
+          const ok = await ctx.confirm(command);
+          if (!ok) return { error: true, message: `denied: destructive command not approved: ${cmd.slice(0, 80)}` };
+        } else {
+          return { error: true, message: `blocked: destructive command requires approval: ${cmd.slice(0, 80)}` };
+        }
+      }
+
       try {
         const { stdout, stderr } = await execAsync(command, {
           cwd,

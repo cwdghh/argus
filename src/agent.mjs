@@ -36,6 +36,7 @@ import { findTool, tools } from "./tools.mjs";
 export async function runTurn(config, history, userMessage, onEvent = () => {}, opts = {}) {
   const { signal } = opts;
   let cwd = opts.cwd || process.cwd();
+  const confirm = opts.confirm || null;
   const toolList = tools;
 
   // Everything created during this turn (assistant replies + tool results).
@@ -78,7 +79,7 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
         result = { error: true, message: `unknown tool: ${call.function.name}` };
       } else {
         try {
-          result = await tool.execute(args, { signal, cwd });
+          result = await tool.execute(args, { signal, cwd, confirm });
         } catch (err) {
           result = { error: true, message: `tool threw: ${err.message}` };
         }
