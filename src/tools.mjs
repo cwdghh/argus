@@ -13,32 +13,17 @@
  *
  * See docs/tools.md for the full contract and how to add tools.
  */
-import { readFile, writeFile, stat } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
-import { homedir } from "node:os";
-import { resolve, join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
 
 const execAsync = promisify(exec);
 
-/** Resolve a cd target to an absolute directory (handles ~, relative, ..). */
-async function resolveCd(cwd, target) {
-  let dir;
-  if (target === "~") dir = homedir();
-  else if (target.startsWith("~/")) dir = join(homedir(), target.slice(2));
-  else if (target === "-") return null; // cd - (previous dir) unsupported for now
-  else dir = resolve(cwd, target);
-  try {
-    const st = await stat(dir);
-    return st.isDirectory() ? dir : null;
-  } catch {
-    return null;
-  }
-}
-
 // Patterns that are dangerous enough to require confirmation before running.
 const DESTRUCTIVE_PATTERNS = [
-  /rm\s+(-{1,2}[a-z]*r[a-z]*|--recursive)/i, // recursive delete (rm -r / rm -rf)
+  /\brm\b[^\n;&|]*(?:^|\s)(?:-[a-z]*r[a-z]*|--recursive)(?:\s|$)/i, // recursive rm, incl. split flags
   /\bdd\b/, // raw block-device copy
   /\bmkfs(\.\w+)?\b/,
   /\bmke2fs\b/,
@@ -76,46 +61,59 @@ export const tools = [
   {
     name: "write",
     description:
-      "Write text content to a file, overwriting it entirely (creating it if needed). " +
+      "Write text content to a new file. Existing files are protected unless `overwrite` is true. " +
       "Use this for full-file changes or new files. For small precise changes, prefer edit.",
     parameters: {
       type: "object",
       properties: {
         path: { type: "string", description: "Path of the file to write" },
         content: { type: "string", description: "Full text content to write" },
+        overwrite: { type: "boolean", description: "Allow replacing an existing file (default: false)" },
       },
       required: ["path", "content"],
     },
-    async execute({ path, content }, ctx = {}) {
+    async execute({ path, content, overwrite = false }, ctx = {}) {
       const file = resolve(ctx.cwd || process.cwd(), path);
-      await writeFile(file, content, "utf8");
+      try {
+        await writeFile(file, content, { encoding: "utf8", flag: overwrite ? "w" : "wx" });
+      } catch (err) {
+        if (err.code === "EEXIST") {
+          return { error: true, message: `file already exists: ${file}; use edit or set overwrite=true` };
+        }
+        throw err;
+      }
       return { ok: true, path: file, bytes: Buffer.byteLength(content) };
     },
   },
   {
     name: "edit",
     description:
-      "Replace every occurrence of the exact string `old` with `new` in a file. " +
-      "Errors if `old` is not found. Use for small, precise changes; use write for whole files.",
+      "Replace one exact occurrence of `old` with `new` in a file. Errors if `old` is " +
+      "missing or occurs more than once. Set `all` to true only when every occurrence should change.",
     parameters: {
       type: "object",
       properties: {
         path: { type: "string", description: "Path of the file to edit" },
-        old: { type: "string", description: "Exact text to find (must exist in the file)" },
+        old: { type: "string", minLength: 1, description: "Exact non-empty text to find (must exist in the file)" },
         new: { type: "string", description: "Replacement text" },
+        all: { type: "boolean", description: "Replace every occurrence (default: false)" },
       },
       required: ["path", "old", "new"],
     },
-    async execute({ path, old: oldText, new: newText }, ctx = {}) {
+    async execute({ path, old: oldText, new: newText, all = false }, ctx = {}) {
       const file = resolve(ctx.cwd || process.cwd(), path);
+      if (oldText === "") return { error: true, message: `old string must not be empty in ${file}` };
       const original = await readFile(file, "utf8");
-      if (!original.includes(oldText)) {
+      const count = original.split(oldText).length - 1;
+      if (count === 0) {
         return { error: true, message: `old string not found in ${file}` };
       }
-      const content = original.split(oldText).join(newText);
-      const count = original.split(oldText).length - 1;
+      if (count > 1 && !all) {
+        return { error: true, message: `old string occurs ${count} times in ${file}; use all=true to replace every occurrence` };
+      }
+      const content = all ? original.split(oldText).join(newText) : original.replace(oldText, newText);
       await writeFile(file, content, "utf8");
-      return { ok: true, path: file, replacements: count };
+      return { ok: true, path: file, replacements: all ? count : 1 };
     },
   },
   {
@@ -135,10 +133,6 @@ export const tools = [
     async execute({ command }, ctx = {}) {
       const cwd = ctx.cwd || process.cwd();
       const cmd = String(command).trim();
-      let newCwd = null;
-      const cdMatch = cmd.match(/^cd\s+(\S+)/);
-      if (cmd === "cd") newCwd = await resolveCd(cwd, "~");
-      else if (cdMatch) newCwd = await resolveCd(cwd, cdMatch[1]);
 
       if (isDestructive(cmd)) {
         if (ctx.confirm) {
@@ -149,25 +143,33 @@ export const tools = [
         }
       }
 
+      // Ask the shell for its final cwd, rather than trying to parse `cd`
+      // syntax. This handles quotes and compound commands without polluting
+      // the command's stdout.
+      const marker = `__ARGUS_CWD_${randomUUID()}__`;
+      const wrapped = `{\n${command}\n}; __argus_status=$?; printf '\\n${marker}%s\\n' "$PWD" >&2; exit $__argus_status`;
       try {
-        const { stdout, stderr } = await execAsync(command, {
+        const { stdout, stderr } = await execAsync(wrapped, {
           cwd,
           timeout: 60_000,
           maxBuffer: 1024 * 1024,
+          shell: process.env.SHELL || "/bin/sh",
           ...(ctx.signal ? { signal: ctx.signal } : {}),
         });
-        return { stdout, stderr, ...(newCwd ? { cwd: newCwd } : {}) };
+        const parsed = extractCwd(stderr, marker);
+        return { stdout, stderr: parsed.stderr, ...(parsed.cwd ? { cwd: parsed.cwd } : {}) };
       } catch (err) {
         // execAsync throws on non-zero exit OR on abort; surface either cleanly.
         if (err.name === "AbortError") {
           return { error: true, aborted: true, message: "command aborted" };
         }
+        const parsed = extractCwd(err.stderr ?? "", marker);
         return {
           error: true,
           stdout: err.stdout ?? "",
-          stderr: err.stderr ?? "",
+          stderr: parsed.stderr,
           message: err.message,
-          ...(newCwd ? { cwd: newCwd } : {}),
+          ...(parsed.cwd ? { cwd: parsed.cwd } : {}),
         };
       }
     },
@@ -181,4 +183,44 @@ export const tools = [
  */
 export function findTool(name) {
   return tools.find((t) => t.name === name);
+}
+
+function extractCwd(stderr, marker) {
+  const text = String(stderr);
+  const index = text.lastIndexOf(marker);
+  if (index === -1) return { stderr: text, cwd: null };
+  const end = text.indexOf("\n", index);
+  const cwd = text.slice(index + marker.length, end === -1 ? undefined : end).trim();
+  const before = text.slice(0, index).replace(/\n$/, "");
+  const after = end === -1 ? "" : text.slice(end + 1);
+  return { stderr: before + after, cwd: cwd || null };
+}
+
+/** Minimal runtime validation for the simple JSON Schemas used by tools. */
+export function validateToolArgs(tool, args) {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return `${tool.name} arguments must be a JSON object`;
+  }
+  const schema = tool.parameters ?? {};
+  for (const name of schema.required ?? []) {
+    if (!(name in args)) return `${tool.name} is missing required argument: ${name}`;
+  }
+  for (const [name, value] of Object.entries(args)) {
+    const expected = schema.properties?.[name]?.type;
+    if (!expected) continue;
+    const valid =
+      expected === "array"
+        ? Array.isArray(value)
+        : expected === "object"
+          ? value !== null && typeof value === "object" && !Array.isArray(value)
+          : expected === "integer"
+            ? Number.isInteger(value)
+            : typeof value === expected;
+    if (!valid) return `${tool.name} argument ${name} must be ${expected}`;
+    const minLength = schema.properties?.[name]?.minLength;
+    if (typeof value === "string" && minLength != null && value.length < minLength) {
+      return `${tool.name} argument ${name} must not be empty`;
+    }
+  }
+  return null;
 }

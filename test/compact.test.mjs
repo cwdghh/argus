@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { maybeCompact, splitTurns, summarizeTurn } from "../src/compact.mjs";
+import { COMPACT_DEFAULTS, maybeCompact, splitTurns, summarizeTurn } from "../src/compact.mjs";
 import { createMockServer } from "./helpers/mock-llm.mjs";
 import { runTurn } from "../src/agent.mjs";
 
@@ -26,6 +26,7 @@ test("above threshold: drops oldest turns, keeps recent + summary", () => {
   assert.equal(r.history[0].role, "system");
   assert.match(r.history[0].content, /Summary of earlier/);
   assert.match(r.history[0].content, /answer 0/);
+  assert.match(r.history[0].content, /user 0/, "summary should preserve the user's intent");
   const users = r.history.filter((m) => m.role === "user").map((m) => m.content);
   assert.deepEqual(users, ["user 7", "user 8", "user 9"]);
 });
@@ -37,7 +38,7 @@ test("splitTurns + summarizeTurn", () => {
     { role: "user", content: "c" },
   ]);
   assert.equal(turns.length, 2);
-  assert.equal(null, summarizeTurn([{ role: "user", content: "a" }]));
+  assert.equal(summarizeTurn([{ role: "user", content: "a" }]), "User: a");
   assert.match(summarizeTurn([{ role: "user", content: "a" }, { role: "assistant", content: "hello" }]), /hello/);
 });
 
@@ -61,4 +62,15 @@ test("agent emits compacted event and sends summary", async (t) => {
   assert.ok(lastBody.messages.some((m) => m.role === "system" && /Summary/.test(m.content)), "summary not sent");
   const users = lastBody.messages.filter((m) => m.role === "user").map((m) => m.content);
   assert.deepEqual(users, ["user 7", "user 8", "user 9", "new"]);
+});
+
+test("compaction defaults resolve environment values lazily", () => {
+  const original = process.env.ARGUS_COMPACT_AT;
+  process.env.ARGUS_COMPACT_AT = "12345";
+  try {
+    assert.equal(COMPACT_DEFAULTS.compactAtChars, 12345);
+  } finally {
+    if (original === undefined) delete process.env.ARGUS_COMPACT_AT;
+    else process.env.ARGUS_COMPACT_AT = original;
+  }
 });

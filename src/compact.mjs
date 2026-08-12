@@ -15,9 +15,15 @@
  *   ARGUS_COMPACT_AT   chars threshold before compacting (default 300000)
  *   ARGUS_COMPACT_KEEP how many recent turns to keep (default 8)
  */
+// Getters are intentional: the standalone `argus` executable loads `.env`
+// after module imports have begun, so environment-backed defaults must be lazy.
 export const COMPACT_DEFAULTS = {
-  compactAtChars: Number(process.env.ARGUS_COMPACT_AT) || 300_000,
-  keepTurns: Number(process.env.ARGUS_COMPACT_KEEP) || 8,
+  get compactAtChars() {
+    return Number(process.env.ARGUS_COMPACT_AT) || 300_000;
+  },
+  get keepTurns() {
+    return Number(process.env.ARGUS_COMPACT_KEEP) || 8;
+  },
 };
 
 export function estimateChars(messages) {
@@ -39,15 +45,22 @@ export function splitTurns(messages) {
   return turns;
 }
 
-/** A terse one-line digest of a turn (last assistant content, truncated). */
+/** A terse digest of a turn: preserve both the user's intent and the outcome. */
 export function summarizeTurn(turn) {
+  const users = turn.filter((m) => m.role === "user" && m.content);
   const assistants = turn.filter((m) => m.role === "assistant" && m.content);
+  const user = users[0];
   const last = assistants[assistants.length - 1];
-  if (!last) return null;
+  if (!user && !last) return null;
   const usedTools = turn.some((m) => m.role === "tool");
-  const content = String(last.content).trim();
-  const truncated = content.length > 200 ? content.slice(0, 200) + "…" : content;
-  return usedTools ? `(used tools) ${truncated}` : truncated;
+  const brief = (value, max) => {
+    const text = String(value ?? "").replace(/\s+/g, " ").trim();
+    return text.length > max ? text.slice(0, max) + "…" : text;
+  };
+  const parts = [];
+  if (user) parts.push(`User: ${brief(user.content, 160)}`);
+  if (last) parts.push(`Assistant${usedTools ? " (used tools)" : ""}: ${brief(last.content, 200)}`);
+  return parts.join(" | ");
 }
 
 /**

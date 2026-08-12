@@ -24,6 +24,14 @@ test("destructive command denied by confirm returning false", async () => {
   assert.ok(existsSync(dir), "dir should still exist");
 });
 
+test("recursive rm with split flags still requires approval", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "argus-safe-"));
+  const r = await bash.execute({ command: `rm -f -r "${dir}"` }, { cwd: process.cwd() });
+  assert.equal(r.error, true);
+  assert.match(r.message, /blocked|approval/);
+  assert.ok(existsSync(dir), "dir should still exist");
+});
+
 test("destructive command runs when approved", async () => {
   const dir = mkdtempSync(join(tmpdir(), "argus-safe-"));
   const r = await bash.execute({ command: `rm -rf "${dir}"` }, { cwd: process.cwd(), confirm: async () => true });

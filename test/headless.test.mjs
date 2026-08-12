@@ -54,5 +54,43 @@ test("headless: error -> exitCode 1 and error block saved", async (t) => {
   assert.equal(process.exitCode, 1);
   const loaded = await loadSession("hs-err");
   assert.ok(loaded.turns[0].blocks.some((b) => b.kind === "error"), "error block saved");
+  assert.equal(loaded.turns[0].messages[0].content, "hi", "failed request still records its user message");
+  process.exitCode = 0;
+});
+
+test("headless: resumed session uses its persisted cwd", async (t) => {
+  const config = { apiKey: "", model: "mock", systemPrompt: "s" };
+  const session = new Session("hs-resume-cwd", config);
+  const expected = join(process.cwd(), "src");
+  await session.setCwd(expected);
+  let observedCwd = null;
+  const srv = await createMockServer((i, body) => {
+    if (i === 0) {
+      return [{ tool_calls: [{ index: 0, id: "c1", function: { name: "bash", arguments: '{"command":"pwd"}' } }] }];
+    }
+    const tool = JSON.parse(body.messages.at(-1).content);
+    observedCwd = tool.stdout.trim();
+    return [{ content: "ok" }];
+  });
+  t.after(() => srv.close());
+  config.baseUrl = srv.url;
+  await runHeadless(config, "where", { session, stdout: () => {}, stderr: () => {} });
+  assert.equal(observedCwd, expected);
+});
+
+test("headless: later request failure preserves completed tools and cwd", async (t) => {
+  const srv = await createMockServer((i) => {
+    if (i === 0) {
+      return [{ tool_calls: [{ index: 0, id: "c1", function: { name: "bash", arguments: '{"command":"cd src"}' } }] }];
+    }
+    throw new Error("after tool");
+  });
+  t.after(() => srv.close());
+  const config = { baseUrl: srv.url, apiKey: "", model: "mock", systemPrompt: "s", maxRetries: 0 };
+  const session = new Session("hs-partial", config);
+  await runHeadless(config, "change directory", { session, stdout: () => {}, stderr: () => {} });
+  const loaded = await loadSession("hs-partial");
+  assert.ok(loaded.turns[0].messages.some((message) => message.role === "tool"));
+  assert.equal(loaded.meta.cwd, join(process.cwd(), "src"));
   process.exitCode = 0;
 });

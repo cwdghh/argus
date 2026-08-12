@@ -32,9 +32,12 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
 
   // Resume session history if one is given.
   let history = [];
+  let activeCwd = cwd ?? process.cwd();
   if (session) {
     const loaded = await loadSession(session.name);
     for (const turn of loaded?.turns ?? []) history.push(...(turn.messages ?? []));
+    activeCwd = cwd ?? loaded?.meta?.cwd ?? process.cwd();
+    if (loaded?.meta?.cwd) session.lastCwd = loaded.meta.cwd;
   }
 
   // Build display blocks alongside events (mirrors the TUI) so a turn saved to
@@ -76,7 +79,7 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
           writeErr("… earlier context compacted\n");
         }
       },
-      { cwd: cwd ?? process.cwd() }
+      { cwd: activeCwd }
     );
   } catch (err) {
     error = err;
@@ -86,16 +89,25 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
 
   // Persist the turn (including error blocks) regardless of outcome.
   if (session) {
-    if (result?.cwd) {
+    const finalCwd = result?.cwd ?? error?.cwd;
+    if (finalCwd) {
       try {
-        await session.setCwd(result.cwd);
+        await session.setCwd(finalCwd);
       } catch {
         /* non-fatal */
       }
     }
     await session.appendTurn({
-      config: { baseUrl: config.baseUrl, model: config.model, systemPrompt: config.systemPrompt },
-      messages: result?.messages ?? [],
+      config: {
+        baseUrl: config.baseUrl,
+        model: config.model,
+        systemPrompt: config.systemPrompt,
+        requestTimeoutMs: config.requestTimeoutMs,
+        maxRetries: config.maxRetries,
+        maxSteps: config.maxSteps,
+        maxToolResultChars: config.maxToolResultChars,
+      },
+      messages: result?.messages ?? error?.turnMessages ?? [{ role: "user", content: prompt }],
       blocks,
     });
   }

@@ -40,14 +40,19 @@ export async function createMockServer(script) {
           return;
         }
         res.writeHead(200, { "content-type": "text/event-stream" });
+        let finishReason = "stop";
         for (const d of deltas ?? []) {
           if (d && d.delay) {
             await sleep(d.delay);
             continue;
           }
+          if (d && d.finishReason) {
+            finishReason = d.finishReason;
+            continue;
+          }
           res.write(`data: ${JSON.stringify({ choices: [{ delta: d ?? {} }] })}\n\n`);
         }
-        res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`);
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: finishReason }] })}\n\n`);
         res.write("data: [DONE]\n\n");
         res.end();
       } catch {
