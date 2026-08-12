@@ -59,7 +59,8 @@ export const tools = [
   {
     name: "read",
     description:
-      "Read a file and return its full contents as text. Use this to inspect files.",
+      "Read a file and return its full contents as text. Use this to inspect files. " +
+      "Paths are relative to the current working directory.",
     parameters: {
       type: "object",
       properties: {
@@ -67,8 +68,9 @@ export const tools = [
       },
       required: ["path"],
     },
-    async execute({ path }) {
-      return { path, content: await readFile(path, "utf8") };
+    async execute({ path }, ctx = {}) {
+      const file = resolve(ctx.cwd || process.cwd(), path);
+      return { path: file, content: await readFile(file, "utf8") };
     },
   },
   {
@@ -84,9 +86,10 @@ export const tools = [
       },
       required: ["path", "content"],
     },
-    async execute({ path, content }) {
-      await writeFile(path, content, "utf8");
-      return { ok: true, path, bytes: Buffer.byteLength(content) };
+    async execute({ path, content }, ctx = {}) {
+      const file = resolve(ctx.cwd || process.cwd(), path);
+      await writeFile(file, content, "utf8");
+      return { ok: true, path: file, bytes: Buffer.byteLength(content) };
     },
   },
   {
@@ -103,15 +106,16 @@ export const tools = [
       },
       required: ["path", "old", "new"],
     },
-    async execute({ path, old: oldText, new: newText }) {
-      const original = await readFile(path, "utf8");
+    async execute({ path, old: oldText, new: newText }, ctx = {}) {
+      const file = resolve(ctx.cwd || process.cwd(), path);
+      const original = await readFile(file, "utf8");
       if (!original.includes(oldText)) {
-        return { error: true, message: `old string not found in ` };
+        return { error: true, message: `old string not found in ${file}` };
       }
       const content = original.split(oldText).join(newText);
       const count = original.split(oldText).length - 1;
-      await writeFile(path, content, "utf8");
-      return { ok: true, path, replacements: count };
+      await writeFile(file, content, "utf8");
+      return { ok: true, path: file, replacements: count };
     },
   },
   {

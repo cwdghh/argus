@@ -1,3 +1,28 @@
+#### 2026-08-13 — readiness & polish pass (pre-dogfood)
+
+**Status: ✅ done**
+
+Bugs fixed:
+- ✅ TUI `submit()` referenced `ac` (the AbortController) in the catch block
+  though it was declared inside `try` — any turn error (network/LLM) crashed the
+  TUI. Declared before `try`; covered by a regression test.
+- ✅ `edit` tool's "old string not found" error dropped the file path. Fixed.
+- ✅ `read`/`write`/`edit` resolved relative to `process.cwd()` while `bash`
+  used the session cwd — file tools now resolve against the session cwd too, so
+  all tools agree after `cd`. Covered by tests.
+- ✅ `refreshGitStatus` used `process.cwd()`; now follows the session cwd.
+
+Usability / visuals:
+- ✅ Empty transcript shows a centered welcome hint (task + shortcuts).
+- ✅ Resumed sessions show a "✓ resumed session <name>" note at the top.
+- ✅ A subtle divider separates each turn in the transcript.
+- ✅ Code-fence bodies are indented to align with the ` ``` ` markers.
+- ✅ Confirm prompt keeps the caret at the start of the warning.
+- ✅ CJK/emoji display width: line wrapping and the input caret now count East
+  Asian wide chars as 2 columns (was breaking Chinese text alignment).
+
+Verified: 30 tests pass, live boot (empty state, resume, CJK caret at the
+correct column), real headless call.
 #### 2026-08-11 — context compaction
 
 **Status: ✅ done**

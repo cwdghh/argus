@@ -21,8 +21,8 @@ Any agent (argus itself, or a human) should be able to follow this workflow.
    relevant doc and `AGENTS.md`'s file map.
 4. **Verify.**
    - `node --check src/*.mjs` — syntax.
-   - Run a mock-LLM test (`test/stream-loop.test.mjs` if present, or a local SSE
-     stub) to confirm the loop still terminates and tool results flow.
+   - `npm test` — the mock-LLM suite (`test/helpers/mock-llm.mjs`) confirms the
+     loop still terminates and tool results flow.
    - If you changed tools, exercise each one directly.
 5. **Record.** Append a dated entry to `PROGRESS.md`; update `GAPS.md` if you
    resolved an open question.

@@ -242,6 +242,37 @@ function segsFromInline(text, base) {
   return out;
 }
 
+/** Approximate terminal column width of one char (East Asian wide = 2). */
+function charWidth(ch) {
+  const cp = ch.codePointAt(0);
+  if (
+    cp >= 0x1100 &&
+    (cp <= 0x115f || // Hangul Jamo init. consonants
+      cp === 0x2329 || cp === 0x232a || // angle brackets
+      (0x2e80 <= cp && cp <= 0xa4cf && cp !== 0x303f) || // CJK ... Yi
+      (0xac00 <= cp && cp <= 0xd7a3) || // Hangul Syllables
+      (0xf900 <= cp && cp <= 0xfaff) || // CJK Compatibility Ideographs
+      (0xfe10 <= cp && cp <= 0xfe19) || // Vertical forms
+      (0xfe30 <= cp && cp <= 0xfe6f) || // CJK Compatibility Forms
+      (0xff00 <= cp && cp <= 0xff60) || // Fullwidth Forms
+      (0xffe0 <= cp && cp <= 0xffe6) || // Fullwidth Signs
+      (0x1f300 <= cp && cp <= 0x1f64f) || // Emoji
+      (0x1f900 <= cp && cp <= 0x1f9ff) || // Supplemental Emoji
+      (0x20000 <= cp && cp <= 0x2fffd) || // CJK Ext B
+      (0x30000 <= cp && cp <= 0x3fffd))
+  ) {
+    return 2;
+  }
+  return 1;
+}
+
+/** Approximate terminal display width of a string. */
+function dispWidth(text) {
+  let w = 0;
+  for (const ch of text) w += charWidth(ch);
+  return w;
+}
+
 /** Wrap styled segments into lines of `width` visible columns. */
 function wrapSegments(segs, width) {
   const max = Math.max(1, width);
@@ -249,17 +280,28 @@ function wrapSegments(segs, width) {
   let cur = [];
   let len = 0;
   for (const seg of segs) {
-    let i = 0;
-    while (i < seg.text.length) {
+    let rest = seg.text;
+    while (rest.length > 0) {
       if (len >= max) {
         lines.push(cur);
         cur = [];
         len = 0;
       }
-      const take = Math.min(max - len, seg.text.length - i);
-      cur.push({ text: seg.text.slice(i, i + take), style: seg.style });
-      len += take;
-      i += take;
+      let take = 0;
+      let tw = 0;
+      for (const ch of rest) {
+        const cw = charWidth(ch);
+        if (len + tw + cw > max) break;
+        tw += cw;
+        take += ch.length;
+      }
+      if (take === 0) {
+        take = rest[0].length;
+        tw = charWidth(rest.slice(0, take));
+      }
+      cur.push({ text: rest.slice(0, take), style: seg.style });
+      len += tw;
+      rest = rest.slice(take);
     }
   }
   if (cur.length || lines.length === 0) lines.push(cur);
@@ -296,7 +338,7 @@ function markdownLines(text, width) {
         i++;
         continue;
       }
-      for (const piece of wrap(raw, width)) lines.push(styleText(piece, { fg: theme.code }));
+      for (const piece of wrap(raw, Math.max(1, width - 2))) lines.push(styleText(`  ${piece}`, { fg: theme.code }));
       i++;
       continue;
     }
@@ -388,6 +430,9 @@ export class MinimalTui {
   constructor(config, opts = {}) {
     this.config = config;
     this.blocks = opts.initialBlocks ?? [];
+    if (this.blocks.length > 0) {
+      this.blocks.unshift({ kind: "result", ok: true, summary: `resumed session${opts.sessionName ? ` ${opts.sessionName}` : ""}` });
+    }
     this.history = opts.initialHistory ?? [];
     this.sessionName = opts.sessionName ?? null;
     this.session = opts.session ?? null;
@@ -416,7 +461,14 @@ export class MinimalTui {
 
   transcriptLines() {
     const out = [];
-    for (const block of this.blocks) out.push(...blockLines(block, this.width));
+    let seen = false;
+    for (const block of this.blocks) {
+      if (block.kind === "user" && seen) {
+        out.push(styleText(`  ${"─".repeat(Math.min(20, Math.max(4, this.width - 4)))}`, { fg: theme.dim }));
+      }
+      seen = true;
+      out.push(...blockLines(block, this.width));
+    }
     return out;
   }
 
@@ -430,11 +482,30 @@ export class MinimalTui {
     const inputWidth = Math.max(1, this.width - 3);
     let buff = this.inputBuffer;
     let cursor = this.inputCursor;
-    if (buff.length > inputWidth) {
-      let start = cursor - Math.floor(inputWidth / 2);
-      start = Math.max(0, Math.min(start, buff.length - inputWidth));
-      buff = buff.slice(start, start + inputWidth);
-      cursor -= start;
+    if (dispWidth(buff) > inputWidth) {
+      // Window centered-ish on the caret, measured in display columns.
+      const before = dispWidth(buff.slice(0, cursor));
+      const minBefore = Math.max(0, before - Math.floor(inputWidth / 2));
+      let start = 0;
+      let startW = 0;
+      for (const ch of buff) {
+        const cw = charWidth(ch);
+        if (startW + cw > minBefore) break;
+        startW += cw;
+        start += ch.length;
+      }
+      let end = start;
+      let endW = 0;
+      for (const ch of buff.slice(start)) {
+        const cw = charWidth(ch);
+        if (endW + cw > inputWidth) break;
+        endW += cw;
+        end += ch.length;
+      }
+      buff = buff.slice(start, end);
+      cursor = dispWidth(buff.slice(0, Math.max(0, cursor - start)));
+    } else {
+      cursor = dispWidth(buff.slice(0, cursor));
     }
     return { text: buff, col: 2 + cursor };
   }
@@ -473,9 +544,9 @@ export class MinimalTui {
     const turnStart = this.blocks.length;
     this.pushBlock({ kind: "user", text });
 
+    const ac = new AbortController();
+    this.abortController = ac;
     try {
-      const ac = new AbortController();
-      this.abortController = ac;
       const { messages, aborted, cwd } = await runTurn(this.config, this.history, text, (ev) => {
         if (ev.type === "thinking_delta") {
           this.append("thinking", ev.delta);
@@ -566,11 +637,25 @@ export class MinimalTui {
       frame[1 + r] = lines[start + r] ?? "";
     }
 
+    if (this.blocks.length === 0) {
+      const hint = [
+        "argus — a minimal coding agent",
+        "Type a task below and press Enter.",
+        "↑/↓ recall inputs · PgUp/PgDn or wheel scrolls · Esc aborts · Ctrl-C quits",
+      ];
+      const startRow = Math.max(0, Math.floor((transcriptHeight - hint.length) / 2));
+      hint.forEach((line, i) => {
+        const l = line.length > width ? line.slice(0, width) : line;
+        const centered = " ".repeat(Math.max(0, Math.floor((width - l.length) / 2))) + l;
+        frame[1 + startRow + i] = styleText(centered, { fg: theme.dim });
+      });
+    }
+
     const { text, col } = this.inputView();
     frame[this.height - 2] = this.pendingConfirm
       ? styleText(`⚠ ${truncateMiddle(this.pendingConfirm.command, Math.max(12, this.width - 12))}  (y/n)`, { fg: theme.bad })
       : `${styleText("❯", { fg: theme.accent, bold: true })} ${text}`;
-    this.inputCol = col;
+    this.inputCol = this.pendingConfirm ? 0 : col;
 
     frame[this.height - 1] = this.footer();
     return frame;
@@ -826,7 +911,7 @@ export class MinimalTui {
   // ---- startup / lifecycle ------------------------------------------------
 
   async refreshGitStatus() {
-    const cwd = process.cwd();
+    const cwd = this.cwd;
     try {
       const { stdout: branch } = await execAsync("git rev-parse --abbrev-ref HEAD", { cwd });
       const { stdout: porcelain } = await execAsync("git status --porcelain", { cwd });
