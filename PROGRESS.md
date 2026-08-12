@@ -373,7 +373,7 @@ What was done:
 
 ---
 
-## Next steps (candidate)
+## Next steps (candidate at initial build; superseded by `GAPS.md`)
 
 ⏳ Streaming output (token deltas) instead of one-shot replies.
 ⏳ Ask before executing a tool (permission gating).
@@ -381,3 +381,61 @@ What was done:
 ⏳ Message compaction / history truncation for long sessions.
 ⏳ Session persistence across runs.
 ⏳ Commit the initial state to git (currently all untracked).
+
+#### 2026-08-13 — reliability hardening before personal use
+
+**Status: ✅ done**
+
+- ✅ Fixed CLI parsing: `--session <name>` now consumes the name, multi-word
+  prompts work quoted or unquoted, and invalid/conflicting options fail clearly.
+- ✅ Added a dependency-free `argus` executable entry so `npm link` provides a
+  convenient command from any working directory.
+- ✅ Bounded model calls with configurable request timeout, transient retries,
+  and a per-turn step limit; truncated/empty responses fail safely.
+- ✅ Prevented cross-provider credential leakage: `OPENAI_API_KEY` is only a
+  fallback for `api.openai.com`; DashScope/custom hosts use `ARGUS_API_KEY`.
+- ✅ Fixed standalone `argus` env loading: `ARGUS_HOME` and compaction defaults
+  now resolve lazily, so `.env` works after `npm link` as well as `npm start`.
+- ✅ Tool calls now receive runtime argument validation. Malformed JSON and
+  missing/wrongly typed arguments are returned to the model and never executed.
+- ✅ `write` protects existing files unless `overwrite=true` is explicit, and
+  the built-in prompt now tells the agent to follow repository instructions.
+- ✅ Destructive-command detection now catches split recursive-rm flags such as
+  `rm -f -r`, closing a practical safety-gate bypass.
+- ✅ `edit` is exact-by-default: ambiguous matches fail unless `all=true`.
+- ✅ Bash captures the shell's real final cwd, including quoted/compound `cd`.
+- ✅ Fixed TUI blank-submit lockup, column-zero Backspace corruption, emoji
+  cursor splitting, lost startup keystrokes, terminal-control injection, and
+  persistence of failed/interrupted turns.
+- ✅ Serialized session writes; headless resume now restores the saved cwd and
+  records failed user requests.
+- ✅ Failed later model requests retain completed assistant/tool messages and
+  cwd, so sessions accurately record side effects that already happened.
+- ✅ TUI sessions now persist their launch cwd even without `cd`; resumed
+  handles initialize their cwd cache to avoid redundant JSONL records.
+- ✅ Compaction summaries retain user intent as well as assistant outcomes.
+- ✅ Centralized tool-result bounds prevent large reads or command output from
+  flooding the next model request; the model receives a marked preview.
+- ✅ Strengthened the built-in prompt around inspection, focused changes,
+  preserving user work, verification, and honest reporting.
+- ✅ Added local `/help`, `/status`, `/new`, and `/exit`/`/quit` commands; none
+  call the model or consume context.
+- ✅ Added lightweight `@path` file-reference semantics via the built-in prompt:
+  files are read visibly through the existing tool rather than auto-injected.
+- ✅ Added bracketed-paste handling so multiline clipboard text becomes one
+  prompt instead of triggering several concurrent submissions.
+- ✅ Added conventional terminal editing keys: Ctrl-A/E, Ctrl-U/K/W, Ctrl-L,
+  and context-sensitive Ctrl-D (delete at cursor; quit only on empty input).
+- ✅ Expanded `/help` into a complete command and keyboard reference, with a
+  focused `/keys` alias for quick shortcut lookup.
+- ✅ Added `/sessions` discovery (recency, turn count, last prompt) and
+  `/resume <name>` switching without restarting; all session-related TUI state
+  changes atomically.
+- ✅ Added conservative Tab completion for `@path` tokens only. Completion is
+  cwd-relative, ignores hidden names unless requested, and never reads/injects
+  file contents.
+- ✅ Enriched `/status` with estimated context usage and configured reliability
+  bounds; restored saved prompts into Up/Down history on session resume.
+- ✅ Added regression coverage for every issue above. Verified with syntax
+  checks, the full mock-LLM suite, CLI and PTY TUI smoke tests, plus a live
+  provider tool-call round trip.

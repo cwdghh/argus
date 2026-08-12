@@ -24,7 +24,7 @@ The model only ever sees `name`, `description`, and `parameters`. It never sees
 | Tool | Purpose |
 |------|---------|
 | `read`    | Read a file's contents as text |
-| `write`   | Overwrite/create a file with text |
+| `write`   | Create a file, with explicit opt-in for overwrite |
 | `edit`    | Replace an exact string in a file |
 | `bash`    | Run a shell command, return stdout/stderr |
 
@@ -37,19 +37,22 @@ The model only ever sees `name`, `description`, and `parameters`. It never sees
 ### write
 
 ```js
-{ name: "write", parameters: { path: string, content: string } }
+{ name: "write", parameters: { path: string, content: string, overwrite?: boolean } }
 ```
 
-Overwrites the whole file.
+Creates a new file. Existing files are protected unless `overwrite: true` is
+passed explicitly. Prefer `edit` for focused changes to an existing file.
 
 ### edit
 
 ```js
-{ name: "edit", parameters: { path: string, old: string, new: string } }
+{ name: "edit", parameters: { path: string, old: string, new: string, all?: boolean } }
 ```
 
-Replaces every occurrence of the exact string `old` with `new`. Errors if `old`
-is not found. Use this for precise, small changes; use `write` for full files.
+Replaces one occurrence of the exact string `old` with `new`. It errors if
+`old` is missing or occurs more than once, preventing an unexpectedly broad
+edit. Pass `{ all: true }` only when every occurrence should change. Use this
+for precise, small changes; use `write` for full files.
 
 ### bash
 
@@ -57,8 +60,10 @@ is not found. Use this for precise, small changes; use `write` for full files.
 { name: "bash", parameters: { command: string } }
 ```
 
-Runs `command` with a 60s timeout and returns `{ stdout, stderr }`. Non-zero exit
-is returned as `{ error: true, ... }`, never thrown.
+Runs `command` with a 60s timeout and returns `{ stdout, stderr, cwd }`. The
+shell's actual final directory is captured, so quoted and compound commands
+such as `cd "a b" && pwd` persist correctly. Non-zero exit is returned as
+`{ error: true, ... }`, never thrown.
 
 ## Guidelines for writing tools
 
@@ -69,6 +74,8 @@ is returned as `{ error: true, ... }`, never thrown.
 3. **Fail gracefully.** Return an error in the result object; don't throw
    (unless you want the loop to record it as an error result).
 4. **Keep side effects predictable.** A tool should do one thing well.
+5. **Use simple schemas.** Required arguments, primitive types, arrays, objects,
+   integers, and string `minLength` are validated before execution.
 
 ## Adding a tool
 

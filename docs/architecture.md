@@ -29,7 +29,14 @@ Key properties:
   arguments; `src/tools.mjs` decides what actually runs. This is where safety
   lives.
 - **Termination policy.** The agent stops when the model replies with no tool
-  calls. (Policy is intentionally simple; see `GAPS.md` for richer options.)
+  calls, or fails clearly after `ARGUS_MAX_STEPS` model calls. Truncated model
+  responses never execute partial tool calls.
+- **Runtime validation.** Tool arguments are parsed and checked against the
+  tool's required fields and primitive JSON Schema types before `execute` runs.
+- **Bounded requests.** Transient model errors are retried with short backoff;
+  each request has an overall timeout.
+- **Bounded tool results.** Every tool result passes through one centralized
+  size cap before it is added to model history.
 
 ## Data flow
 
@@ -44,6 +51,12 @@ src/main.mjs ──▶ src/tui.mjs ──▶ src/agent.mjs ──▶ src/llm.mjs
 UI can render live without knowing how the loop works. `src/tui.mjs` is one such UI; you could swap it
 for a logging UI or a web UI without touching the loop.
 
+The TUI handles its small control plane (`/help`, `/status`, `/sessions`,
+`/resume`, `/new`, `/exit`) before invoking the loop. Session switches replace
+the transcript, model history, input history, cwd, and writable session handle
+together. `@path` is deliberately not a parser-side expansion: Tab completes
+the path locally, then the model sees it as a reference and uses `read` visibly.
+
 ## Message types
 
 - `user` — your prompt
@@ -52,6 +65,6 @@ for a logging UI or a web UI without touching the loop.
 
 ## Why it's small
 
-The core loop is ~50 lines. Everything else is support. Keeping it small means a
-single person (or an agent) can hold the whole thing in their head — which is
-exactly what makes self-updating safe.
+The loop stays small enough to read in one sitting. Everything else is support.
+Keeping it compact means a single person (or an agent) can hold the whole thing
+in their head — which is exactly what makes self-updating safe.
