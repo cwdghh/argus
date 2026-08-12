@@ -21,6 +21,37 @@ test("TUI handles a turn error without crashing (ac scope fix)", async (t) => {
   assert.equal(tui.mode, "idle", "mode should return to idle");
 });
 
+test("TUI persists failed turns, including the visible error", async (t) => {
+  const srv = await createMockServer(() => {
+    throw new Error("boom");
+  });
+  t.after(() => srv.close());
+  let saved = null;
+  const session = { appendTurn: async (turn) => (saved = turn), setCwd: async () => {} };
+  const tui = new MinimalTui(
+    { baseUrl: srv.url, apiKey: "", model: "m", systemPrompt: "s" },
+    { session }
+  );
+  tui.inputBuffer = "remember me";
+  await tui.submit();
+  assert.equal(saved.messages[0].content, "remember me");
+  assert.ok(saved.blocks.some((b) => b.kind === "error" && /boom/.test(b.text)));
+});
+
+test("TUI persists its cwd even when no command changes directory", async (t) => {
+  const srv = await createMockServer(() => [{ content: "ok" }]);
+  t.after(() => srv.close());
+  let savedCwd = null;
+  const session = { appendTurn: async () => {}, setCwd: async (cwd) => (savedCwd = cwd) };
+  const tui = new MinimalTui(
+    { baseUrl: srv.url, apiKey: "", model: "m", systemPrompt: "s" },
+    { session, initialCwd: "/project" }
+  );
+  tui.inputBuffer = "hello";
+  await tui.submit();
+  assert.equal(savedCwd, "/project");
+});
+
 test("read/write/edit resolve relative to the session cwd", async () => {
   const dir = mkdtempSync(join(tmpdir(), "argus-tools-cwd-"));
   try {
@@ -29,6 +60,8 @@ test("read/write/edit resolve relative to the session cwd", async () => {
     const edit = findTool("edit");
     const w = await write.execute({ path: "a.txt", content: "hello" }, { cwd: dir });
     assert.equal(w.path, join(dir, "a.txt"));
+    const protectedWrite = await write.execute({ path: "a.txt", content: "lost" }, { cwd: dir });
+    assert.equal(protectedWrite.error, true, "write should protect existing files by default");
     assert.equal((await read.execute({ path: "a.txt" }, { cwd: dir })).content, "hello");
     const e = await edit.execute({ path: "a.txt", old: "hello", new: "bye" }, { cwd: dir });
     assert.equal(e.ok, true);
@@ -84,4 +117,27 @@ test("CJK text wraps within the terminal width", () => {
   for (const l of t.transcriptLines()) {
     assert.ok(width(strip(l)) <= 20, `line too wide: ${JSON.stringify(strip(l))}`);
   }
+});
+
+test("blank submit stays idle and Backspace at column zero is harmless", async () => {
+  const t = new MinimalTui({ model: "m" });
+  t.inputBuffer = "   ";
+  await t.submit();
+  assert.equal(t.mode, "idle");
+  t.inputBuffer = "abc";
+  t.inputCursor = 0;
+  t.runAction({ type: "backspace" });
+  assert.equal(t.inputBuffer, "abc");
+});
+
+test("editor movement and deletion preserve emoji surrogate pairs", () => {
+  const t = new MinimalTui({ model: "m" });
+  t.inputBuffer = "a😀b";
+  t.inputCursor = 3;
+  t.runAction({ type: "left" });
+  assert.equal(t.inputCursor, 1);
+  t.runAction({ type: "right" });
+  assert.equal(t.inputCursor, 3);
+  t.runAction({ type: "backspace" });
+  assert.equal(t.inputBuffer, "ab");
 });

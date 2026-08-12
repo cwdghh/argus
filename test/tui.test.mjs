@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { MinimalTui } from "../src/tui.mjs";
 
 const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
@@ -39,6 +42,8 @@ test("footer: mode on the left, no 'mode' prefix, meta right-aligned", () => {
   assert.ok(!f.includes("mode working"), "no 'mode ' prefix");
   assert.ok(f.includes("model mock-model"), "model present");
   assert.ok(f.includes("git main"), "git present");
+  assert.ok(f.includes("/workspace/argus"), "ANSI bytes must not crowd out the working directory");
+  assert.ok(f.length <= 100, "footer should fit the terminal width");
 });
 
 test("input history navigation", () => {
@@ -73,4 +78,104 @@ test("scrolling: wheel up/down + clamp", () => {
   t.runAction({ type: "wheel", dir: -1 });
   t.runAction({ type: "wheel", dir: -1 });
   assert.equal(t.scrollOffset, 0);
+});
+
+test("local slash commands do not enter model history", async () => {
+  const t = new MinimalTui(
+    { model: "m" },
+    {
+      sessionName: "old",
+      initialHistory: [{ role: "user", content: "earlier" }],
+      newSession: () => ({ sessionName: "fresh", session: {}, cwd: "/fresh" }),
+      listSessions: () => [{ name: "saved", mtime: 1, turns: 2, lastPrompt: "last task" }],
+      resumeSession: (name) => ({
+        sessionName: name,
+        session: { name },
+        cwd: "/saved",
+        history: [{ role: "user", content: "saved prompt" }],
+        blocks: [{ kind: "user", text: "saved prompt" }],
+      }),
+    }
+  );
+  await t.runCommand("/help");
+  assert.ok(t.blocks.some((b) => b.kind === "assistant" && b.text.includes("/status") && b.text.includes("Ctrl-W")));
+  assert.equal(t.history.length, 1);
+  await t.runCommand("/keys");
+  assert.ok(t.blocks.at(-1).text.includes("Keyboard shortcuts"));
+  assert.ok(!t.blocks.at(-1).text.includes("Local commands"));
+  await t.runCommand("/status");
+  assert.ok(t.blocks.at(-1).text.includes("Session: `old`"));
+  assert.ok(t.blocks.at(-1).text.includes("chars/tool result"));
+  await t.runCommand("/sessions");
+  assert.ok(t.blocks.at(-1).text.includes("`saved`") && t.blocks.at(-1).text.includes("last task"));
+  await t.runCommand("/resume saved");
+  assert.equal(t.sessionName, "saved");
+  assert.equal(t.cwd, "/saved");
+  assert.deepEqual(t.inputHistory, ["saved prompt"]);
+  await t.runCommand("/new");
+  assert.equal(t.sessionName, "fresh");
+  assert.equal(t.cwd, "/fresh");
+  assert.deepEqual(t.history, []);
+});
+
+test("Tab completes only @path tokens and preserves surrounding input", () => {
+  const dir = mkdtempSync(join(tmpdir(), "argus-complete-"));
+  mkdirSync(join(dir, "src"));
+  mkdirSync(join(dir, "space dir"));
+  writeFileSync(join(dir, "src", "agent.mjs"), "");
+  writeFileSync(join(dir, "src", "another.mjs"), "");
+  writeFileSync(join(dir, "space dir", "file name.txt"), "");
+  const t = new MinimalTui({ model: "m" }, { initialCwd: dir });
+
+  t.inputBuffer = "Review @src/ag";
+  t.inputCursor = t.inputBuffer.length;
+  t.completePath();
+  assert.equal(t.inputBuffer, "Review @src/agent.mjs ");
+
+  t.inputBuffer = "Review src/ag";
+  t.inputCursor = t.inputBuffer.length;
+  t.completePath();
+  assert.equal(t.inputBuffer, "Review src/ag", "plain paths are not implicitly completed");
+
+  t.inputBuffer = "Review @sr";
+  t.inputCursor = t.inputBuffer.length;
+  t.completePath();
+  assert.equal(t.inputBuffer, "Review @src/");
+
+  t.inputBuffer = "Review @sp";
+  t.inputCursor = t.inputBuffer.length;
+  t.completePath();
+  assert.equal(t.inputBuffer, 'Review @"space dir/');
+  t.inputBuffer += "fi";
+  t.inputCursor = t.inputBuffer.length;
+  t.completePath();
+  assert.equal(t.inputBuffer, 'Review @"space dir/file name.txt" ');
+});
+
+test("bracketed multiline paste becomes one editor input", () => {
+  const t = new MinimalTui({ model: "m" });
+  let submits = 0;
+  t.submit = () => submits++;
+  t.onData(Buffer.from("\x1b[200~first\nsecond\r\nthird\x1b[201~"));
+  assert.equal(t.inputBuffer, "first second third");
+  assert.equal(submits, 0);
+});
+
+test("terminal editing hotkeys manipulate input predictably", () => {
+  const t = new MinimalTui({ model: "m" });
+  t.inputBuffer = "one two";
+  t.inputCursor = t.inputBuffer.length;
+  t.insertText("\x17"); // Ctrl-W
+  assert.equal(t.inputBuffer, "one ");
+  t.insertText("two");
+  t.insertText("\x01"); // Ctrl-A
+  t.insertText("X");
+  assert.equal(t.inputBuffer, "Xone two");
+  t.insertText("\x05"); // Ctrl-E
+  t.insertText("\x15"); // Ctrl-U
+  assert.equal(t.inputBuffer, "");
+  t.inputBuffer = "abc";
+  t.inputCursor = 1;
+  t.insertText("\x04"); // Ctrl-D
+  assert.equal(t.inputBuffer, "ac");
 });

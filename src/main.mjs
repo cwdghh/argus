@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * Entry point.
  *
@@ -8,7 +9,8 @@
  *   argus "<prompt>" --session X   headless: append to a named session (resumes it)
  *   argus --help                   show usage
  */
-import { getConfig } from "./config.mjs";
+import { pathToFileURL } from "node:url";
+import { getConfig, validateConfig } from "./config.mjs";
 import { MinimalTui } from "./tui.mjs";
 import { runHeadless } from "./headless.mjs";
 import {
@@ -17,6 +19,7 @@ import {
   latestSessionName,
   newSessionName,
   sanitizeName,
+  sessionSummaries,
 } from "./session.mjs";
 
 const USAGE = `argus — minimal coding agent
@@ -33,14 +36,28 @@ Headless streams assistant text to stdout; reasoning, tool calls and errors go
 to stderr, so stdout stays clean for piping.
 `;
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const out = { forceNew: false, name: null, prompt: null, help: false };
+  const positional = [];
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--new") out.forceNew = true;
-    else if (argv[i] === "--session") out.name = sanitizeName(argv[i + 1]) ?? null;
+    else if (argv[i] === "--session") {
+      const value = argv[++i];
+      if (!value) throw new Error("--session requires a name");
+      out.name = sanitizeName(value);
+      if (!out.name) throw new Error(`invalid session name: ${value}`);
+    }
     else if (argv[i] === "--help" || argv[i] === "-h") out.help = true;
-    else if (out.prompt == null && !argv[i].startsWith("-")) out.prompt = argv[i];
+    else if (argv[i] === "--") {
+      positional.push(...argv.slice(i + 1));
+      break;
+    }
+    else if (argv[i].startsWith("-")) throw new Error(`unknown option: ${argv[i]}`);
+    else positional.push(argv[i]);
   }
+  if (out.forceNew && out.name) throw new Error("--new and --session cannot be used together");
+  if (out.forceNew && positional.length) throw new Error("--new is only valid in interactive mode");
+  if (positional.length) out.prompt = positional.join(" ");
   return out;
 }
 
@@ -50,7 +67,12 @@ async function main() {
     process.stdout.write(USAGE);
     return;
   }
-  const config = getConfig();
+  try {
+    process.loadEnvFile(".env");
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+  }
+  const config = validateConfig(getConfig());
 
   // Headless one-shot mode.
   if (prompt != null) {
@@ -60,25 +82,63 @@ async function main() {
   }
 
   // Interactive TUI mode.
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error('interactive mode requires a terminal; pass a prompt, for example: argus "explain this repo"');
+  }
   let sessionName;
   if (name) sessionName = name;
   else if (forceNew) sessionName = newSessionName();
   else sessionName = (await latestSessionName()) ?? newSessionName();
 
-  const loaded = await loadSession(sessionName);
-  const turns = loaded?.turns ?? [];
-  const initialCwd = loaded?.meta?.cwd ?? process.cwd();
+  const initial = await sessionState(sessionName, config);
 
-  const initialBlocks = [];
-  const initialHistory = [];
-  for (const turn of turns) {
-    if (Array.isArray(turn.blocks)) initialBlocks.push(...turn.blocks);
-    if (Array.isArray(turn.messages)) initialHistory.push(...turn.messages);
-  }
-
-  const session = new Session(sessionName, config);
-  const tui = new MinimalTui(config, { sessionName, session, initialBlocks, initialHistory, initialCwd });
+  const tui = new MinimalTui(config, {
+    sessionName,
+    session: initial.session,
+    initialBlocks: initial.blocks,
+    initialHistory: initial.history,
+    initialCwd: initial.cwd,
+    newSession: () => {
+      const nextName = newSessionName();
+      return {
+        sessionName: nextName,
+        session: new Session(nextName, config),
+        cwd: process.cwd(),
+      };
+    },
+    listSessions: () => sessionSummaries(20),
+    resumeSession: async (nextName) => {
+      const safe = sanitizeName(nextName);
+      if (!safe) throw new Error(`invalid session name: ${nextName}`);
+      const loaded = await loadSession(safe);
+      if (!loaded) throw new Error(`session not found: ${safe}`);
+      return sessionState(safe, config, loaded);
+    },
+  });
   tui.start();
 }
 
-main();
+async function sessionState(name, config, loaded = null) {
+  const data = loaded ?? (await loadSession(name));
+  const cwd = data?.meta?.cwd ?? process.cwd();
+  const blocks = [];
+  const history = [];
+  for (const turn of data?.turns ?? []) {
+    if (Array.isArray(turn.blocks)) blocks.push(...turn.blocks);
+    if (Array.isArray(turn.messages)) history.push(...turn.messages);
+  }
+  return {
+    sessionName: name,
+    session: new Session(name, config, { initialCwd: data?.meta?.cwd }),
+    blocks,
+    history,
+    cwd,
+  };
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    process.stderr.write(`error: ${err.message}\n`);
+    process.exitCode = 1;
+  });
+}

@@ -17,16 +17,60 @@
  *   Home/End         jump to top / bottom of the transcript
  *   mouse wheel      scroll the transcript (SGR mouse tracking)
  *   Left/Right       move the editor caret
- *   Ctrl-C / Ctrl-D  quit
+ *   Ctrl-A/E         move to start/end of input
+ *   Ctrl-U/K/W       delete to start/end/previous word
+ *   Ctrl-L           redraw the terminal
+ *   Ctrl-C           abort a turn / quit when idle
+ *   Ctrl-D           delete at cursor / quit on empty input
+ *   /help             show local commands
  */
 import { exec } from "node:child_process";
+import { readdirSync } from "node:fs";
+import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { runTurn } from "./agent.mjs";
+import { COMPACT_DEFAULTS, estimateChars } from "./compact.mjs";
 import { theme, setTheme } from "./theme.mjs";
 
 const execAsync = promisify(exec);
 const ESC = "\x1b";
 const RESET = `${ESC}[0m`;
+const COMMAND_HELP = `## Local commands
+
+- /help — show commands and keyboard shortcuts
+- /keys — show keyboard shortcuts
+- /status — show the active session, model, cwd, context, and limits
+- /sessions — list recent saved sessions
+- /resume <name> — switch to a saved session
+- /new — start a fresh session without restarting Argus
+- /exit or /quit — quit Argus`;
+
+const KEY_HELP = `## Keyboard shortcuts
+
+### Edit the prompt
+
+- Left / Right — move the cursor
+- Ctrl-A / Ctrl-E — move to the start / end
+- Backspace / Delete — delete before / under the cursor
+- Ctrl-U / Ctrl-K — delete to the start / end
+- Ctrl-W — delete the previous word
+- Up / Down — recall earlier prompts
+- Tab — complete an @path file reference
+- Enter — submit
+
+### Control Argus
+
+- Esc — abort the active turn
+- Ctrl-C — abort; press again to force quit (or quit immediately when idle)
+- Ctrl-D — delete under the cursor, or quit when the prompt is empty
+- Ctrl-L — clear and redraw the screen
+
+### Browse the transcript
+
+- PgUp / PgDn or mouse wheel — scroll
+- Home / End — jump to the top / bottom`;
+
+const HELP_TEXT = `${COMMAND_HELP}\n\n${KEY_HELP}`;
 
 // ---------------------------------------------------------------------------
 // ANSI + text helpers
@@ -38,6 +82,8 @@ function rgb(hex) {
 }
 
 function styleText(text, { fg, bold, dim, italic, underline, strike } = {}) {
+  // Never let model/tool/file content inject terminal control sequences.
+  text = String(text).replace(/[\x00-\x1f\x7f-\x9f]/g, "");
   const codes = [];
   if (fg) codes.push(`38;2;${rgb(fg).join(";")}`);
   if (bold) codes.push("1");
@@ -54,10 +100,41 @@ function stripAnsi(text) {
 }
 
 function wrap(text, width) {
-  if (width <= 1) return [text];
+  width = Math.max(1, width);
   const out = [];
-  for (let i = 0; i < text.length; i += width) out.push(text.slice(i, i + width));
+  let line = "";
+  let columns = 0;
+  for (const ch of text) {
+    const cw = charWidth(ch);
+    if (line && columns + cw > width) {
+      out.push(line);
+      line = "";
+      columns = 0;
+    }
+    line += ch;
+    columns += cw;
+  }
+  if (line) out.push(line);
   return out.length ? out : [""];
+}
+
+function previousCharIndex(text, index) {
+  if (index <= 0) return 0;
+  const cp = text.codePointAt(index - 1);
+  return index - (cp >= 0xdc00 && cp <= 0xdfff ? 2 : 1);
+}
+
+function nextCharIndex(text, index) {
+  if (index >= text.length) return text.length;
+  const cp = text.codePointAt(index);
+  return index + (cp > 0xffff ? 2 : 1);
+}
+
+function previousWordIndex(text, index) {
+  let i = index;
+  while (i > 0 && /\s/.test(text.slice(previousCharIndex(text, i), i))) i = previousCharIndex(text, i);
+  while (i > 0 && !/\s/.test(text.slice(previousCharIndex(text, i), i))) i = previousCharIndex(text, i);
+  return i;
 }
 
 function truncateMiddle(text, max) {
@@ -436,10 +513,15 @@ export class MinimalTui {
     this.history = opts.initialHistory ?? [];
     this.sessionName = opts.sessionName ?? null;
     this.session = opts.session ?? null;
+    this.newSession = opts.newSession ?? null;
+    this.listSessions = opts.listSessions ?? null;
+    this.resumeSession = opts.resumeSession ?? null;
     this.cwd = opts.initialCwd ?? process.cwd();
     this.inputBuffer = "";
     this.inputCursor = 0;
-    this.inputHistory = [];
+    this.inputHistory = this.history
+      .filter((message) => message.role === "user" && typeof message.content === "string")
+      .map((message) => message.content);
     this.historyIndex = -1;
     this.mode = "idle"; // idle | working | thinking
     this.scrollOffset = 0;
@@ -457,6 +539,7 @@ export class MinimalTui {
     this.aborting = false;
     this.escTimer = null;
     this.pendingConfirm = null;
+    this.pasting = false;
   }
 
   transcriptLines() {
@@ -525,19 +608,17 @@ export class MinimalTui {
   }
 
   async submit() {
-    if (this.mode !== "idle") {
-      this.inputBuffer = "";
-      this.inputCursor = 0;
-      this.historyIndex = -1;
-      this.dirtyRendered = true;
-      return;
-    }
+    if (this.mode !== "idle") return;
     const text = this.inputBuffer.trim();
+    if (!text) return;
     this.inputBuffer = "";
     this.inputCursor = 0;
+    if (text.startsWith("/")) {
+      await this.runCommand(text);
+      return;
+    }
     this.mode = "working";
     this.dirtyRendered = true;
-    if (!text) return;
 
     if (this.inputHistory[this.inputHistory.length - 1] !== text) this.inputHistory.push(text);
     this.historyIndex = -1;
@@ -546,6 +627,7 @@ export class MinimalTui {
 
     const ac = new AbortController();
     this.abortController = ac;
+    let savedMessages = [{ role: "user", content: text }];
     try {
       const { messages, aborted, cwd } = await runTurn(this.config, this.history, text, (ev) => {
         if (ev.type === "thinking_delta") {
@@ -569,32 +651,198 @@ export class MinimalTui {
         }
         this.dirtyRendered = true;
       }, { signal: ac.signal, cwd: this.cwd, confirm: (cmd) => this.confirm(cmd) });
+      savedMessages = messages;
       this.history.push(...messages);
       if (typeof cwd === "string") this.cwd = cwd;
-      if (this.session) {
-        await this.session.appendTurn({
-          config: {
-            baseUrl: this.config.baseUrl,
-            model: this.config.model,
-            systemPrompt: this.config.systemPrompt,
-          },
-          messages,
-          blocks: this.blocks.slice(turnStart),
-        });
-      }
       if (aborted || ac.signal.aborted) {
         this.pushBlock({ kind: "result", ok: false, summary: "⏹ interrupted" });
       }
     } catch (err) {
+      savedMessages = err.turnMessages ?? savedMessages;
+      this.history.push(...savedMessages);
       if (ac.signal.aborted) this.pushBlock({ kind: "result", ok: false, summary: "⏹ interrupted" });
       else this.pushBlock({ kind: "error", text: err.message });
     } finally {
+      if (this.session) {
+        try {
+          await this.session.setCwd(this.cwd);
+          await this.session.appendTurn({
+            config: {
+              baseUrl: this.config.baseUrl,
+              model: this.config.model,
+              systemPrompt: this.config.systemPrompt,
+              requestTimeoutMs: this.config.requestTimeoutMs,
+              maxRetries: this.config.maxRetries,
+              maxSteps: this.config.maxSteps,
+              maxToolResultChars: this.config.maxToolResultChars,
+            },
+            messages: savedMessages,
+            blocks: this.blocks.slice(turnStart),
+          });
+        } catch (err) {
+          this.pushBlock({ kind: "error", text: `could not save session: ${err.message}` });
+        }
+      }
       this.abortController = null;
       this.aborting = false;
       this.mode = "idle";
       this.scrollOffset = 0;
       this.dirtyRendered = true;
     }
+  }
+
+  async runCommand(text) {
+    const [command, ...args] = text.split(/\s+/);
+    this.historyIndex = -1;
+    if (command === "/help") {
+      this.pushBlock({ kind: "assistant", text: HELP_TEXT });
+    } else if (command === "/keys") {
+      this.pushBlock({ kind: "assistant", text: KEY_HELP });
+    } else if (command === "/status") {
+      const turns = this.history.filter((message) => message.role === "user").length;
+      const contextChars = estimateChars(this.history);
+      const compactAt = COMPACT_DEFAULTS.compactAtChars;
+      this.pushBlock({
+        kind: "assistant",
+        text:
+          `## Status\n\n- Session: \`${this.sessionName ?? "none"}\`\n` +
+          `- Model: \`${this.config.model}\`\n- Cwd: \`${this.cwd}\`\n` +
+          `- Context: ${turns} turns, ${contextChars.toLocaleString()} / ${compactAt.toLocaleString()} estimated chars\n` +
+          `- Limits: ${this.config.maxSteps ?? 25} model steps, ${this.config.maxRetries ?? 2} retries, ` +
+          `${this.config.requestTimeoutMs ?? 120_000}ms/request, ` +
+          `${(this.config.maxToolResultChars ?? 50_000).toLocaleString()} chars/tool result`,
+      });
+    } else if (command === "/sessions") {
+      if (args.length) {
+        this.pushBlock({ kind: "error", text: "/sessions does not take arguments" });
+      } else if (!this.listSessions) {
+        this.pushBlock({ kind: "error", text: "session listing is unavailable in this frontend" });
+      } else {
+        await this.withLocalTask(async () => {
+          const sessions = await this.listSessions();
+          const lines = sessions.map((item) => {
+            const active = item.name === this.sessionName ? "→" : "-";
+            const date = new Date(item.mtime).toLocaleString();
+            const prompt = item.lastPrompt
+              ? ` — ${item.lastPrompt.replace(/`/g, "'").slice(0, 80)}${item.lastPrompt.length > 80 ? "…" : ""}`
+              : "";
+            return `${active} \`${item.name}\` — ${item.turns} turn${item.turns === 1 ? "" : "s"}, ${date}${prompt}`;
+          });
+          this.pushBlock({
+            kind: "assistant",
+            text: `## Recent sessions\n\n${lines.length ? lines.join("\n") : "No saved sessions yet."}\n\nUse \`/resume <name>\` to switch.`,
+          });
+        });
+      }
+    } else if (command === "/resume") {
+      if (args.length !== 1) {
+        this.pushBlock({ kind: "error", text: "usage: /resume <name>" });
+      } else if (!this.resumeSession) {
+        this.pushBlock({ kind: "error", text: "session switching is unavailable in this frontend" });
+      } else if (args[0] === this.sessionName) {
+        this.pushBlock({ kind: "result", ok: true, summary: `already in session ${this.sessionName}` });
+      } else {
+        await this.withLocalTask(async () => {
+          const next = await this.resumeSession(args[0]);
+          this.applySession(next, `resumed session ${next.sessionName}`);
+        });
+      }
+    } else if (command === "/new") {
+      if (args.length) {
+        this.pushBlock({ kind: "error", text: "/new does not take arguments" });
+      } else if (!this.newSession) {
+        this.pushBlock({ kind: "error", text: "starting a new session is unavailable in this frontend" });
+      } else {
+        const next = await this.newSession();
+        this.applySession({ ...next, blocks: [], history: [] }, `started session ${next.sessionName}`);
+      }
+    } else if (command === "/exit" || command === "/quit") {
+      this.stop();
+      return;
+    } else {
+      this.pushBlock({ kind: "error", text: `unknown command: ${command} (try /help)` });
+    }
+    this.dirtyRendered = true;
+  }
+
+  async withLocalTask(task) {
+    this.mode = "working";
+    this.dirtyRendered = true;
+    try {
+      await task();
+    } catch (err) {
+      this.pushBlock({ kind: "error", text: err.message });
+    } finally {
+      this.mode = "idle";
+      this.dirtyRendered = true;
+    }
+  }
+
+  applySession(next, summary) {
+    this.sessionName = next.sessionName;
+    this.session = next.session;
+    this.cwd = next.cwd ?? process.cwd();
+    this.history = next.history ?? [];
+    this.blocks = [...(next.blocks ?? []), { kind: "result", ok: true, summary }];
+    this.inputHistory = this.history
+      .filter((message) => message.role === "user" && typeof message.content === "string")
+      .map((message) => message.content);
+    this.historyIndex = -1;
+    this.scrollOffset = 0;
+    this.refreshGitStatus();
+  }
+
+  completePath() {
+    if (this.mode !== "idle") return;
+    const before = this.inputBuffer.slice(0, this.inputCursor);
+    const token = /(?:^|\s)@(?:"([^"]*)|([^\s]*))$/.exec(before);
+    if (!token) return;
+
+    const quoted = token[1] !== undefined;
+    const typed = token[1] ?? token[2];
+    const slash = typed.lastIndexOf("/");
+    const dirPart = slash === -1 ? "" : typed.slice(0, slash + 1);
+    const prefix = slash === -1 ? typed : typed.slice(slash + 1);
+    let entries;
+    try {
+      entries = readdirSync(resolve(this.cwd, dirPart || "."), { withFileTypes: true })
+        .filter(
+          (entry) =>
+            !entry.name.includes('"') &&
+            (prefix.startsWith(".") || !entry.name.startsWith(".")) &&
+            entry.name.startsWith(prefix)
+        )
+        .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name));
+    } catch {
+      return;
+    }
+    if (!entries.length) return;
+
+    let completion = entries[0].name;
+    for (const entry of entries.slice(1)) {
+      let i = 0;
+      while (i < completion.length && completion[i] === entry.name[i]) i++;
+      completion = completion.slice(0, i);
+    }
+
+    if (entries.length === 1 || completion.length > prefix.length) {
+      const chosen = entries.length === 1 ? entries[0].name : completion;
+      const completeEntry = entries.length === 1 ? entries[0] : null;
+      const path = `${dirPart}${chosen}${completeEntry?.isDirectory() ? "/" : ""}`;
+      const needsQuotes = quoted || /\s/.test(path);
+      const replacement = needsQuotes
+        ? `@"${path}${completeEntry && !completeEntry.isDirectory() ? '" ' : ""}`
+        : `@${path}${completeEntry && !completeEntry.isDirectory() ? " " : ""}`;
+      const start = before.length - typed.length - (quoted ? 2 : 1);
+      this.inputBuffer = this.inputBuffer.slice(0, start) + replacement + this.inputBuffer.slice(this.inputCursor);
+      this.inputCursor = start + replacement.length;
+      this.dirtyRendered = true;
+      return;
+    }
+
+    const shown = entries.slice(0, 12).map((entry) => `${entry.name}${entry.isDirectory() ? "/" : ""}`);
+    const extra = entries.length > shown.length ? ` … +${entries.length - shown.length} more` : "";
+    this.pushBlock({ kind: "result", ok: true, summary: `@path matches: ${shown.join("  ")}${extra}` });
   }
 
   // ---- frame building -----------------------------------------------------
@@ -606,8 +854,12 @@ export class MinimalTui {
       this.git.branch != null
         ? `git ${this.git.branch}${this.git.dirty ? ` ~${this.git.dirtyCount}` : " ✓"}`
         : "git -";
-    const sep = styleText("  ·  ", { fg: theme.dim });
-    const cwdLen = Math.max(8, this.width - MODEL.length - git.length - stripAnsi(modeStr).length - sep.length * 3 - 6);
+    const sepText = "  ·  ";
+    const sep = styleText(sepText, { fg: theme.dim });
+    const cwdLen = Math.max(
+      8,
+      this.width - MODEL.length - git.length - stripAnsi(modeStr).length - sepText.length * 2 - 1
+    );
     const path = truncateMiddle(this.cwd, cwdLen);
 
     const meta = [
@@ -669,6 +921,16 @@ export class MinimalTui {
   }
 
   consumeInput() {
+    if (this.pasting) {
+      const end = this.rawBuf.indexOf("\x1b[201~");
+      if (end === -1) return;
+      const pasted = this.rawBuf.slice(0, end).replace(/\r?\n/g, " ").replace(/\r/g, " ");
+      this.rawBuf = this.rawBuf.slice(end + 6);
+      this.pasting = false;
+      this.insertText(pasted);
+      this.consumeInput();
+      return;
+    }
     const esc = this.rawBuf.indexOf("\x1b");
     if (esc === -1) {
       if (this.rawBuf) {
@@ -710,6 +972,14 @@ export class MinimalTui {
   }
 
   tryEscape() {
+    // Bracketed paste: collect the entire payload so embedded newlines cannot
+    // accidentally submit several prompts. The one-line editor folds them.
+    if (this.rawBuf.startsWith("\x1b[200~")) {
+      this.rawBuf = this.rawBuf.slice(6);
+      this.pasting = true;
+      return true;
+    }
+
     // OSC sequence -> ignore (theme response is handled earlier, before input).
     if (this.rawBuf.startsWith("\x1b]")) {
       const st = this.rawBuf.indexOf("\x1b\\", 2);
@@ -781,27 +1051,53 @@ export class MinimalTui {
     }
     for (const ch of text) {
       const cp = ch.codePointAt(0);
-      if (cp === 3 || cp === 4) {
-        if (cp === 3) this.handleCtrlC();
-        continue;
-      }
-      if (cp === 13 || cp === 10) {
-        this.submit();
-        continue;
-      }
-      if (cp === 127 || cp === 8) {
-        this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor - 1) + this.inputBuffer.slice(this.inputCursor);
-        this.inputCursor = Math.max(0, this.inputCursor - 1);
+      if (cp < 32 || cp === 127) {
+        if (cp === 1) this.inputCursor = 0; // Ctrl-A
+        else if (cp === 9) this.completePath(); // Tab
+        else if (cp === 3) this.handleCtrlC();
+        else if (cp === 4) {
+          if (!this.inputBuffer) this.stop();
+          else this.deleteAtCursor();
+        } else if (cp === 5) this.inputCursor = this.inputBuffer.length; // Ctrl-E
+        else if (cp === 11) this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor); // Ctrl-K
+        else if (cp === 12) this.redraw(); // Ctrl-L
+        else if (cp === 21) { // Ctrl-U
+          this.inputBuffer = this.inputBuffer.slice(this.inputCursor);
+          this.inputCursor = 0;
+        } else if (cp === 23) { // Ctrl-W
+          const previous = previousWordIndex(this.inputBuffer, this.inputCursor);
+          this.inputBuffer = this.inputBuffer.slice(0, previous) + this.inputBuffer.slice(this.inputCursor);
+          this.inputCursor = previous;
+        } else if (cp === 13 || cp === 10) {
+          this.submit();
+        } else if (cp === 127 || cp === 8) {
+          this.backspace();
+        }
         this.dirtyRendered = true;
         continue;
       }
-      if (cp >= 32) {
-        const s = String.fromCodePoint(cp);
-        this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor) + s + this.inputBuffer.slice(this.inputCursor);
-        this.inputCursor += s.length;
-        this.dirtyRendered = true;
-      }
+      const s = String.fromCodePoint(cp);
+      this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor) + s + this.inputBuffer.slice(this.inputCursor);
+      this.inputCursor += s.length;
+      this.dirtyRendered = true;
     }
+  }
+
+  backspace() {
+    const previous = previousCharIndex(this.inputBuffer, this.inputCursor);
+    this.inputBuffer = this.inputBuffer.slice(0, previous) + this.inputBuffer.slice(this.inputCursor);
+    this.inputCursor = previous;
+  }
+
+  deleteAtCursor() {
+    this.inputBuffer =
+      this.inputBuffer.slice(0, this.inputCursor) + this.inputBuffer.slice(nextCharIndex(this.inputBuffer, this.inputCursor));
+  }
+
+  redraw() {
+    this.lastFrame = [];
+    this.dirtyRendered = true;
+    process.stdout.write(`${ESC}[2J${ESC}[H`);
   }
 
   runAction(action) {
@@ -812,17 +1108,16 @@ export class MinimalTui {
       case "enter":
         return this.submit();
       case "backspace":
-        this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor - 1) + this.inputBuffer.slice(this.inputCursor);
-        this.inputCursor = Math.max(0, this.inputCursor - 1);
+        this.backspace();
         break;
       case "delete":
-        this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor) + this.inputBuffer.slice(this.inputCursor + 1);
+        this.deleteAtCursor();
         break;
       case "left":
-        this.inputCursor = Math.max(0, this.inputCursor - 1);
+        this.inputCursor = previousCharIndex(this.inputBuffer, this.inputCursor);
         break;
       case "right":
-        this.inputCursor = Math.min(this.inputBuffer.length, this.inputCursor + 1);
+        this.inputCursor = nextCharIndex(this.inputBuffer, this.inputCursor);
         break;
       case "up":
         this.historyUp();
@@ -974,18 +1269,18 @@ export class MinimalTui {
     this.dirtyRendered = true;
     this.render();
 
-    // Detect light/dark, then attach the input parser (so the OSC response is
-    // never interpreted as keystrokes).
+    // Attach input immediately so keystrokes typed during theme detection are
+    // not lost. The parser already ignores OSC responses.
+    this.attachInput();
     this.queryBackground().then((bg) => {
       if (bg.light != null) setTheme(bg.light ? "light" : "dark");
-      this.attachInput();
       this.dirtyRendered = true;
       this.render();
     });
   }
 
   attachInput() {
-    process.stdout.write("\x1b[?1000h\x1b[?1006h"); // enable mouse (SGR)
+    process.stdout.write("\x1b[?1000h\x1b[?1006h\x1b[?2004h"); // mouse + bracketed paste
     process.stdin.on("data", (chunk) => this.onData(chunk));
   }
 
@@ -1015,7 +1310,7 @@ export class MinimalTui {
     clearInterval(this.timer);
     clearInterval(this.gitTimer);
     this.clearEscTimeout();
-    process.stdout.write("\x1b[?1000l\x1b[?1006l"); // disable mouse
+    process.stdout.write("\x1b[?1000l\x1b[?1006l\x1b[?2004l"); // restore terminal modes
     process.stdin.setRawMode(false);
     process.stdin.pause();
     this.decoder.decode();

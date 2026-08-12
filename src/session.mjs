@@ -20,11 +20,9 @@ import { homedir } from "node:os";
 import { join, basename } from "node:path";
 import { tools } from "./tools.mjs";
 
-const ARGUS_HOME = process.env.ARGUS_HOME || join(homedir(), ".argus");
-const SESSIONS_DIR = join(ARGUS_HOME, "sessions");
-
 export function sessionsDir() {
-  return SESSIONS_DIR;
+  // Resolve lazily so `.env` loaded by the standalone executable is honored.
+  return join(process.env.ARGUS_HOME || join(homedir(), ".argus"), "sessions");
 }
 
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
@@ -35,28 +33,33 @@ export function sanitizeName(name) {
 }
 
 export function sessionFilePath(name) {
-  return join(SESSIONS_DIR, `${name}.jsonl`);
+  const safe = sanitizeName(name);
+  if (!safe) throw new Error(`invalid session name: ${name}`);
+  return join(sessionsDir(), `${safe}.jsonl`);
 }
 
 export function newSessionName(date = new Date()) {
   const pad = (x) => String(x).padStart(2, "0");
-  return `argus-${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+  const millis = String(date.getMilliseconds()).padStart(3, "0");
+  return `argus-${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}-${millis}`;
 }
 
 async function ensureDir() {
-  await mkdir(SESSIONS_DIR, { recursive: true });
+  await mkdir(sessionsDir(), { recursive: true });
 }
 
 /** List sessions (name, file, mtime), newest first. */
 export async function listSessions() {
   await ensureDir();
-  const entries = await readdir(SESSIONS_DIR, { withFileTypes: true });
+  const dir = sessionsDir();
+  const entries = await readdir(dir, { withFileTypes: true });
   const sessions = [];
   for (const e of entries) {
     if (!(e.isFile() && e.name.endsWith(".jsonl"))) continue;
     try {
-      const st = await stat(join(SESSIONS_DIR, e.name));
-      sessions.push({ name: basename(e.name, ".jsonl"), file: join(SESSIONS_DIR, e.name), mtime: st.mtimeMs });
+      const st = await stat(join(dir, e.name));
+      const name = sanitizeName(basename(e.name, ".jsonl"));
+      if (name) sessions.push({ name, file: join(dir, e.name), mtime: st.mtimeMs });
     } catch {
       // ignore unreadable entries
     }
@@ -68,6 +71,23 @@ export async function listSessions() {
 export async function latestSessionName() {
   const list = await listSessions();
   return list.length ? list[0].name : null;
+}
+
+/** List concise session metadata for the TUI. */
+export async function sessionSummaries(limit = 20) {
+  const listed = (await listSessions()).slice(0, Math.max(0, limit));
+  return Promise.all(
+    listed.map(async (item) => {
+      const loaded = await loadSession(item.name);
+      const turns = loaded?.turns ?? [];
+      let lastPrompt = "";
+      for (let i = turns.length - 1; i >= 0 && !lastPrompt; i--) {
+        const user = (turns[i].messages ?? []).find((message) => message.role === "user");
+        if (user?.content) lastPrompt = String(user.content).replace(/\s+/g, " ").trim();
+      }
+      return { name: item.name, mtime: item.mtime, turns: turns.length, lastPrompt };
+    })
+  );
 }
 
 /** Load a session: { meta, turns }. Returns null if it doesn't exist. */
@@ -100,20 +120,29 @@ export async function loadSession(name) {
  * appends one JSONL line per turn.
  */
 export class Session {
-  constructor(name, config) {
+  constructor(name, config, opts = {}) {
     this.name = name;
     this.config = config;
     this.file = sessionFilePath(name);
     this.metaWritten = false;
-    this.lastCwd = null;
+    this.lastCwd = opts.initialCwd ?? null;
+    this.writeQueue = Promise.resolve();
+  }
+
+  enqueue(write) {
+    const next = this.writeQueue.then(write, write);
+    this.writeQueue = next.catch(() => {});
+    return next;
   }
 
   /** Persist the session working directory (call whenever it changes). */
   async setCwd(cwd) {
-    if (cwd === this.lastCwd) return;
-    await this.ensureMeta();
+    if (cwd === this.lastCwd) return this.writeQueue;
     this.lastCwd = cwd;
-    await appendFile(this.file, JSON.stringify({ type: "cwd", cwd }) + "\n", "utf8");
+    return this.enqueue(async () => {
+      await this.ensureMeta();
+      await appendFile(this.file, JSON.stringify({ type: "cwd", cwd }) + "\n", "utf8");
+    });
   }
 
   async ensureMeta() {
@@ -134,7 +163,9 @@ export class Session {
 
   /** Append one turn: { config, messages, blocks }. */
   async appendTurn(turn) {
-    await this.ensureMeta();
-    await appendFile(this.file, JSON.stringify({ type: "turn", ...turn }) + "\n", "utf8");
+    return this.enqueue(async () => {
+      await this.ensureMeta();
+      await appendFile(this.file, JSON.stringify({ type: "turn", ...turn }) + "\n", "utf8");
+    });
   }
 }
