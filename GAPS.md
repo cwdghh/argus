@@ -117,17 +117,20 @@ questions are deliberately unresolved — we'll discuss them.
 
 ## 8. Terminal UX
 
-> **Status: resolved (2026-08-10)** — a minimal, dependency-free TUI
+> **Status: resolved and refined (2026-08-13)** — a minimal, dependency-free TUI
 > (`src/tui.mjs`, raw-mode + ANSI) with markdown, scrollable history, a bottom
-> editor with caret, thinking display, and a model/path/git/mode footer.
+> editor with caret, thinking display, live timings, and a responsive status
+> footer.
 
 - **What:** a raw-mode ANSI TUI provides streaming markdown, a fixed editor,
-  transcript scrolling, theme detection, and live status.
+  transcript scrolling, theme detection, phase/tool/turn timing, and live
+  responsive status.
 - **Why it matters:** the interface shapes how it feels to drive the agent.
 - **pi's approach (conceptual):** a full differential-rendering TUI.
 - **Open questions for argus:**
   - Is runtime model switching worth adding beyond the current local commands?
-  - Should narrow terminals use a deliberately reduced footer?
+  - Would optional desktop notification for unusually long turns earn its
+    complexity, or should Argus remain terminal-only?
 
 ## 9. Testing & evals
 

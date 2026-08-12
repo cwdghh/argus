@@ -56,6 +56,8 @@ The TUI handles its small control plane (`/help`, `/status`, `/sessions`,
 the transcript, model history, input history, cwd, and writable session handle
 together. `@path` is deliberately not a parser-side expansion: Tab completes
 the path locally, then the model sees it as a reference and uses `read` visibly.
+Elapsed phase/tool/turn timing is also TUI-owned; it needs no agent-protocol or
+tool changes, and completed turn timings persist as ordinary display blocks.
 
 ## Message types
 

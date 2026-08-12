@@ -9,7 +9,7 @@
  *   row 0            header (brand)
  *   rows 1..H-4      transcript (scrollable history)
  *   row H-2          editor (always at the bottom, caret follows the cursor)
- *   row H-1          footer (model · path · git · mode)
+ *   row H-1          footer (live phase/time · model · path · git)
  *
  * Controls:
  *   Up/Down          navigate past inputs (input history)
@@ -139,11 +139,56 @@ function previousWordIndex(text, index) {
 
 function truncateMiddle(text, max) {
   if (max <= 0) return "";
-  if (text.length <= max) return text;
-  if (max <= 5) return text.slice(0, max);
-  const lead = Math.ceil((max - 3) / 2);
-  const tail = Math.floor((max - 3) / 2);
-  return `${text.slice(0, lead)}…${text.slice(-tail)}`;
+  if (dispWidth(text) <= max) return text;
+  if (max === 1) return "…";
+
+  const chars = [...text];
+  const leftBudget = Math.ceil((max - 1) / 2);
+  const rightBudget = Math.floor((max - 1) / 2);
+  let left = "";
+  let leftWidth = 0;
+  for (const ch of chars) {
+    const width = charWidth(ch);
+    if (leftWidth + width > leftBudget) break;
+    left += ch;
+    leftWidth += width;
+  }
+  let right = "";
+  let rightWidth = 0;
+  for (let i = chars.length - 1; i >= 0; i--) {
+    const width = charWidth(chars[i]);
+    if (rightWidth + width > rightBudget) break;
+    right = chars[i] + right;
+    rightWidth += width;
+  }
+  return `${left}…${right}`;
+}
+
+function truncateEnd(text, max) {
+  if (max <= 0) return "";
+  if (dispWidth(text) <= max) return text;
+  if (max === 1) return "…";
+  let out = "";
+  let width = 0;
+  for (const ch of text) {
+    const charColumns = charWidth(ch);
+    if (width + charColumns > max - 1) break;
+    out += ch;
+    width += charColumns;
+  }
+  return `${out}…`;
+}
+
+function formatDuration(ms) {
+  const seconds = Math.max(0, Number(ms) || 0) / 1000;
+  if (seconds > 0 && seconds < 0.1) return "<0.1s";
+  if (seconds < 10) return `${seconds.toFixed(1)}s`;
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = Math.floor(seconds % 60);
+  if (minutes < 60) return `${minutes}m ${String(remainder).padStart(2, "0")}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
 }
 
 function summarize(result) {
@@ -488,8 +533,12 @@ function blockLines(block, width) {
       return markdownLines(block.text, width);
     case "tool":
       return renderSimple(`  ⚙ ${block.name}(${formatArgs(block.args)})`, { fg: theme.tool, dim: true }, width);
-    case "result":
-      return renderSimple(`  ${block.ok ? "✓" : "✗"} ${block.summary}`, { fg: block.ok ? theme.good : theme.bad, dim: true }, width);
+    case "result": {
+      const timing = block.durationMs == null ? "" : `${formatDuration(block.durationMs)} · `;
+      return renderSimple(`  ${block.ok ? "✓" : "✗"} ${timing}${block.summary}`, { fg: block.ok ? theme.good : theme.bad, dim: true }, width);
+    }
+    case "timing":
+      return renderSimple(`  ◷ ${block.summary}`, { fg: theme.dim, dim: true }, width);
     case "error":
       return renderSimple(`error: ${block.text}`, { fg: theme.bad }, width);
     default:
@@ -502,6 +551,7 @@ function blockLines(block, width) {
 // ---------------------------------------------------------------------------
 
 const MODE_COLOR = () => ({ idle: theme.dim, working: theme.accent, thinking: theme.think, aborting: theme.bad, confirm: theme.bad });
+const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 export class MinimalTui {
   constructor(config, opts = {}) {
@@ -540,6 +590,11 @@ export class MinimalTui {
     this.escTimer = null;
     this.pendingConfirm = null;
     this.pasting = false;
+    this.now = opts.now ?? Date.now;
+    this.activityStartedAt = null;
+    this.lastTurnDurationMs = [...this.blocks].reverse().find((block) => block.kind === "timing")?.durationMs ?? null;
+    this.lastClockTick = -1;
+    this.activeToolStartedAt = null;
   }
 
   transcriptLines() {
@@ -618,6 +673,8 @@ export class MinimalTui {
       return;
     }
     this.mode = "working";
+    this.activityStartedAt = this.now();
+    this.lastClockTick = -1;
     this.dirtyRendered = true;
 
     if (this.inputHistory[this.inputHistory.length - 1] !== text) this.inputHistory.push(text);
@@ -628,6 +685,7 @@ export class MinimalTui {
     const ac = new AbortController();
     this.abortController = ac;
     let savedMessages = [{ role: "user", content: text }];
+    let outcome = "completed";
     try {
       const { messages, aborted, cwd } = await runTurn(this.config, this.history, text, (ev) => {
         if (ev.type === "thinking_delta") {
@@ -637,10 +695,13 @@ export class MinimalTui {
           this.append("assistant", ev.delta);
           if (this.mode !== "aborting") this.mode = "working";
         } else if (ev.type === "tool_call") {
+          this.activeToolStartedAt = this.now();
           this.pushBlock({ kind: "tool", name: ev.name, args: ev.args });
           if (this.mode !== "aborting") this.mode = "working";
         } else if (ev.type === "tool_result") {
-          this.pushBlock({ kind: "result", ok: ev.ok, summary: summarize(ev.result) });
+          const durationMs = this.activeToolStartedAt == null ? null : this.now() - this.activeToolStartedAt;
+          this.activeToolStartedAt = null;
+          this.pushBlock({ kind: "result", ok: ev.ok, summary: summarize(ev.result), durationMs });
           if (this.mode !== "aborting") this.mode = "working";
         } else if (ev.type === "cwd_change") {
           this.cwd = ev.cwd;
@@ -655,14 +716,23 @@ export class MinimalTui {
       this.history.push(...messages);
       if (typeof cwd === "string") this.cwd = cwd;
       if (aborted || ac.signal.aborted) {
+        outcome = "interrupted";
         this.pushBlock({ kind: "result", ok: false, summary: "⏹ interrupted" });
       }
     } catch (err) {
       savedMessages = err.turnMessages ?? savedMessages;
       this.history.push(...savedMessages);
-      if (ac.signal.aborted) this.pushBlock({ kind: "result", ok: false, summary: "⏹ interrupted" });
-      else this.pushBlock({ kind: "error", text: err.message });
+      if (ac.signal.aborted) {
+        outcome = "interrupted";
+        this.pushBlock({ kind: "result", ok: false, summary: "⏹ interrupted" });
+      } else {
+        outcome = "failed";
+        this.pushBlock({ kind: "error", text: err.message });
+      }
     } finally {
+      const durationMs = this.activityStartedAt == null ? 0 : this.now() - this.activityStartedAt;
+      this.lastTurnDurationMs = durationMs;
+      this.pushBlock({ kind: "timing", summary: `${outcome} in ${formatDuration(durationMs)}`, durationMs });
       if (this.session) {
         try {
           await this.session.setCwd(this.cwd);
@@ -685,6 +755,8 @@ export class MinimalTui {
       }
       this.abortController = null;
       this.aborting = false;
+      this.activeToolStartedAt = null;
+      this.activityStartedAt = null;
       this.mode = "idle";
       this.scrollOffset = 0;
       this.dirtyRendered = true;
@@ -707,6 +779,7 @@ export class MinimalTui {
         text:
           `## Status\n\n- Session: \`${this.sessionName ?? "none"}\`\n` +
           `- Model: \`${this.config.model}\`\n- Cwd: \`${this.cwd}\`\n` +
+          `- Last turn: ${this.lastTurnDurationMs == null ? "none yet" : formatDuration(this.lastTurnDurationMs)}\n` +
           `- Context: ${turns} turns, ${contextChars.toLocaleString()} / ${compactAt.toLocaleString()} estimated chars\n` +
           `- Limits: ${this.config.maxSteps ?? 25} model steps, ${this.config.maxRetries ?? 2} retries, ` +
           `${this.config.requestTimeoutMs ?? 120_000}ms/request, ` +
@@ -767,12 +840,15 @@ export class MinimalTui {
 
   async withLocalTask(task) {
     this.mode = "working";
+    this.activityStartedAt = this.now();
+    this.lastClockTick = -1;
     this.dirtyRendered = true;
     try {
       await task();
     } catch (err) {
       this.pushBlock({ kind: "error", text: err.message });
     } finally {
+      this.activityStartedAt = null;
       this.mode = "idle";
       this.dirtyRendered = true;
     }
@@ -784,6 +860,7 @@ export class MinimalTui {
     this.cwd = next.cwd ?? process.cwd();
     this.history = next.history ?? [];
     this.blocks = [...(next.blocks ?? []), { kind: "result", ok: true, summary }];
+    this.lastTurnDurationMs = [...(next.blocks ?? [])].reverse().find((block) => block.kind === "timing")?.durationMs ?? null;
     this.inputHistory = this.history
       .filter((message) => message.role === "user" && typeof message.content === "string")
       .map((message) => message.content);
@@ -847,39 +924,84 @@ export class MinimalTui {
 
   // ---- frame building -----------------------------------------------------
 
+  statusText() {
+    if (this.mode !== "idle") {
+      if (this.activityStartedAt == null) return this.mode;
+      const elapsed = Math.max(0, this.now() - this.activityStartedAt);
+      const spinner = SPINNER[Math.floor(elapsed / 100) % SPINNER.length];
+      return `${spinner} ${this.mode} ${formatDuration(elapsed)}`;
+    }
+    return this.lastTurnDurationMs == null ? "idle" : `idle · last ${formatDuration(this.lastTurnDurationMs)}`;
+  }
+
   footer() {
-    const modeStr = styleText(this.mode, { fg: MODE_COLOR()[this.mode] ?? theme.dim, bold: this.mode !== "idle" });
-    const MODEL = `model ${this.config.model}`;
+    const status = this.statusText();
+    const statusBudget = Math.max(1, Math.min(dispWidth(status), this.width));
+    const statusPlain = truncateMiddle(status, statusBudget);
+    const statusStr = styleText(statusPlain, {
+      fg: MODE_COLOR()[this.mode] ?? theme.dim,
+      bold: this.mode !== "idle",
+    });
+    const model = `model ${this.config.model}`;
     const git =
       this.git.branch != null
         ? `git ${this.git.branch}${this.git.dirty ? ` ~${this.git.dirtyCount}` : " ✓"}`
         : "git -";
     const sepText = "  ·  ";
     const sep = styleText(sepText, { fg: theme.dim });
-    const cwdLen = Math.max(
-      8,
-      this.width - MODEL.length - git.length - stripAnsi(modeStr).length - sepText.length * 2 - 1
+    const metaBudget = this.width - dispWidth(statusPlain) - 2;
+    if (metaBudget < 6) return statusStr;
+
+    let fields;
+    const fullFixed = dispWidth(model) + dispWidth(git) + sepText.length * 2;
+    if (metaBudget >= fullFixed + 8) {
+      const path = truncateMiddle(this.cwd, metaBudget - fullFixed);
+      fields = [
+        styleText(model, { fg: theme.text }),
+        styleText(path, { fg: theme.dim }),
+        styleText(git, { fg: this.git.dirty ? theme.bad : theme.good }),
+      ];
+    } else if (metaBudget >= dispWidth(git) + sepText.length + 8) {
+      const path = truncateMiddle(this.cwd, metaBudget - dispWidth(git) - sepText.length);
+      fields = [styleText(path, { fg: theme.dim }), styleText(git, { fg: this.git.dirty ? theme.bad : theme.good })];
+    } else {
+      fields = [styleText(truncateMiddle(this.cwd, metaBudget), { fg: theme.dim })];
+    }
+    const meta = fields.join(sep);
+    const pad = Math.max(2, this.width - dispWidth(statusPlain) - dispWidth(stripAnsi(meta)));
+    return `${statusStr}${" ".repeat(pad)}${meta}`;
+  }
+
+  header() {
+    const left = `argus  ·  ${this.sessionName ?? "session"}`;
+    if (this.scrollOffset === 0) {
+      if (dispWidth(left) > this.width) {
+        return styleText(truncateMiddle(left, this.width), { fg: theme.accent, bold: true });
+      }
+      return (
+        styleText("argus", { fg: theme.accent, bold: true }) +
+        styleText(`  ·  ${this.sessionName ?? "session"}`, { fg: theme.dim })
+      );
+    }
+    const longRight = `↑ ${this.scrollOffset} from latest · End`;
+    const shortRight = `↑${this.scrollOffset} · End`;
+    const right = dispWidth(longRight) + 10 <= this.width ? longRight : shortRight;
+    const leftBudget = this.width - dispWidth(right) - 2;
+    if (leftBudget < 5) return styleText(truncateEnd(right, this.width), { fg: theme.accent, bold: true });
+    const fittedLeft = truncateMiddle(left, leftBudget);
+    const pad = this.width - dispWidth(fittedLeft) - dispWidth(right);
+    return (
+      styleText(fittedLeft, { fg: theme.accent, bold: true }) +
+      " ".repeat(pad) +
+      styleText(right, { fg: theme.accent })
     );
-    const path = truncateMiddle(this.cwd, cwdLen);
-
-    const meta = [
-      styleText(MODEL, { fg: theme.text }),
-      styleText(path, { fg: theme.dim }),
-      styleText(git, { fg: this.git.dirty ? theme.bad : theme.good }),
-    ].join(sep);
-
-    // mode on the left (just the word), everything else right-aligned
-    const pad = Math.max(1, this.width - stripAnsi(modeStr).length - stripAnsi(meta).length - 2);
-    return `${modeStr}${" ".repeat(pad)}${meta}`;
   }
 
   buildFrame() {
     const frame = new Array(this.height).fill("");
     const width = this.width;
 
-    frame[0] =
-      styleText("argus", { fg: theme.accent, bold: true }) +
-      styleText(`  ·  ${this.sessionName ?? "session"}`, { fg: theme.dim });
+    frame[0] = this.header();
 
     const lines = this.transcriptLines();
     const transcriptHeight = Math.max(1, this.height - 3);
@@ -890,23 +1012,44 @@ export class MinimalTui {
     }
 
     if (this.blocks.length === 0) {
-      const hint = [
-        "argus — a minimal coding agent",
-        "Type a task below and press Enter.",
-        "↑/↓ recall inputs · PgUp/PgDn or wheel scrolls · Esc aborts · Ctrl-C quits",
-      ];
+      const hint =
+        width >= 55
+          ? [
+              "What would you like to build?",
+              "Type a task, or reference a file with @path.",
+              "/help for commands  ·  Tab completes paths  ·  Esc aborts",
+            ]
+          : width >= 40
+            ? ["What would you like to build?", "Type a task or use @path.", "/help commands  ·  Tab paths  ·  Esc aborts"]
+            : width >= 30
+              ? ["What would you like to build?", "Type a task or use @path.", "/help  ·  Tab  ·  Esc aborts"]
+              : ["What will you build?", "Type a task or @path.", "/help  ·  Tab  ·  Esc"];
       const startRow = Math.max(0, Math.floor((transcriptHeight - hint.length) / 2));
       hint.forEach((line, i) => {
-        const l = line.length > width ? line.slice(0, width) : line;
-        const centered = " ".repeat(Math.max(0, Math.floor((width - l.length) / 2))) + l;
+        const l = truncateEnd(line, width);
+        const centered = " ".repeat(Math.max(0, Math.floor((width - dispWidth(l)) / 2))) + l;
         frame[1 + startRow + i] = styleText(centered, { fg: theme.dim });
       });
     }
 
     const { text, col } = this.inputView();
+    const placeholder =
+      this.mode === "idle"
+        ? width >= 45
+          ? "Describe a task…  (/help for commands)"
+          : width >= 25
+            ? "Describe a task…  (/help)"
+            : "Describe a task…"
+        : width >= 45
+          ? "Argus is working…  (Esc to interrupt)"
+          : width >= 25
+            ? "Working…  (Esc to stop)"
+            : "Working… Esc stops";
     frame[this.height - 2] = this.pendingConfirm
       ? styleText(`⚠ ${truncateMiddle(this.pendingConfirm.command, Math.max(12, this.width - 12))}  (y/n)`, { fg: theme.bad })
-      : `${styleText("❯", { fg: theme.accent, bold: true })} ${text}`;
+      : `${styleText("❯", { fg: theme.accent, bold: true })} ${
+          text || styleText(truncateEnd(placeholder, Math.max(1, this.width - 3)), { fg: theme.dim, italic: true })
+        }`;
     this.inputCol = this.pendingConfirm ? 0 : col;
 
     frame[this.height - 1] = this.footer();
@@ -1263,7 +1406,16 @@ export class MinimalTui {
       this.dirtyRendered = true;
     });
 
-    this.timer = setInterval(() => this.render(), 40);
+    this.timer = setInterval(() => {
+      if (this.activityStartedAt != null) {
+        const tick = Math.floor((this.now() - this.activityStartedAt) / 100);
+        if (tick !== this.lastClockTick) {
+          this.lastClockTick = tick;
+          this.dirtyRendered = true;
+        }
+      }
+      this.render();
+    }, 40);
     this.gitTimer = setInterval(() => this.refreshGitStatus(), 3000);
     this.refreshGitStatus();
     this.dirtyRendered = true;

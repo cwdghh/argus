@@ -71,21 +71,27 @@ layout: header, scrollable transcript, a bottom **editor**, and a **footer**.
 ├──────────────────────────────────────────────────────────────┤
 │ ❯ type here… (caret tracks Left/Right/backspace/delete)      │
 ├──────────────────────────────────────────────────────────────┤
-│ idle          model deepseek-v4-flash-0731 · /path/…/argus · git main ✓ │
+│ ⠹ thinking 3.2s  model deepseek-v4-flash-0731 · /path/…/argus · git main ✓ │
 └──────────────────────────────────────────────────────────────┘
 ```
 
 - **Markdown rendering** for assistant replies: headings, bold/italic, inline +
   fenced code, lists, quotes.
 - **Thinking / reasoning** is shown (muted, italic) when the model emits it.
+- **Live working time** follows the current phase (`working`, `thinking`,
+  confirmation, or aborting); completed turns and tool calls keep their timing
+  in the transcript, and `/status` reports the last turn.
 - **Auto light/dark theme** (detected via OSC 11; falls back to light).
-- **Scrollable history**: mouse wheel to scroll; PgUp/PgDn (pages), Home/End (top/bottom).
+- **Scrollable history**: mouse wheel to scroll; PgUp/PgDn (pages), Home/End
+  (top/bottom). The header shows when you are away from the latest output.
 - **Up/Down** navigate past inputs (input history) in the editor.
 - **Editor stays at the bottom**; the caret follows Left/Right/backspace/delete.
 - **Familiar terminal editing**: Ctrl-A/E moves to start/end, Ctrl-U/K deletes
   to start/end, Ctrl-W deletes the previous word, and Ctrl-L redraws.
-- **Footer** always shows model, current path, git status (branch + dirty count),
-  and mode (`idle` / `working` / `thinking` / `aborting`).
+- **Responsive footer** shows phase, elapsed time, model, current path, and git
+  status; lower-priority details collapse cleanly on narrow terminals.
+- **Helpful empty state and editor hints** make commands, `@path` references,
+  completion, and interruption discoverable without opening the manual first.
 - **Ctrl-C during a turn aborts it** (second Ctrl-C force-quits); Ctrl-C when
   idle quits. Esc also aborts a running turn. Ctrl-D deletes at the cursor, or
   quits when the editor is empty.

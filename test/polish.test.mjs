@@ -52,6 +52,40 @@ test("TUI persists its cwd even when no command changes directory", async (t) =>
   assert.equal(savedCwd, "/project");
 });
 
+test("TUI records a completed turn's working time", async (t) => {
+  const srv = await createMockServer(() => [{ content: "ok" }]);
+  t.after(() => srv.close());
+  const times = [1_000, 3_500];
+  const tui = new MinimalTui(
+    { baseUrl: srv.url, apiKey: "", model: "m", systemPrompt: "s" },
+    { now: () => times.shift() ?? 3_500 }
+  );
+  tui.inputBuffer = "time this";
+  await tui.submit();
+  assert.equal(tui.lastTurnDurationMs, 2_500);
+  assert.deepEqual(tui.blocks.at(-1), { kind: "timing", summary: "completed in 2.5s", durationMs: 2_500 });
+  assert.ok(tui.transcriptLines().some((line) => line.includes("completed in 2.5s")));
+});
+
+test("TUI records tool time separately from total turn time", async (t) => {
+  const srv = await createMockServer((call) =>
+    call === 0
+      ? [{ tool_calls: [{ index: 0, id: "c1", function: { name: "bash", arguments: '{"command":"printf hi"}' } }] }]
+      : [{ content: "done" }]
+  );
+  t.after(() => srv.close());
+  const times = [1_000, 2_000, 3_250, 5_000];
+  const tui = new MinimalTui(
+    { baseUrl: srv.url, apiKey: "", model: "m", systemPrompt: "s" },
+    { now: () => times.shift() ?? 5_000 }
+  );
+  tui.inputBuffer = "run it";
+  await tui.submit();
+  const result = tui.blocks.find((block) => block.kind === "result" && block.durationMs != null);
+  assert.equal(result.durationMs, 1_250);
+  assert.equal(tui.lastTurnDurationMs, 4_000);
+});
+
 test("read/write/edit resolve relative to the session cwd", async () => {
   const dir = mkdtempSync(join(tmpdir(), "argus-tools-cwd-"));
   try {
@@ -78,7 +112,8 @@ test("empty transcript shows a centered hint", () => {
   t.width = 60;
   t.height = 12;
   const frame = t.buildFrame();
-  assert.ok(frame.some((row) => row.includes("Type a task")), "hint should be visible");
+  assert.ok(frame.some((row) => row.includes("What would you like to build?")), "hint should be visible");
+  assert.ok(frame.at(-2).includes("Describe a task"), "empty editor should have a useful placeholder");
 });
 
 test("turn divider separates later user blocks", () => {

@@ -9,7 +9,8 @@
  *   argus "<prompt>" --session X   headless: append to a named session (resumes it)
  *   argus --help                   show usage
  */
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { getConfig, validateConfig } from "./config.mjs";
 import { MinimalTui } from "./tui.mjs";
 import { runHeadless } from "./headless.mjs";
@@ -136,7 +137,17 @@ async function sessionState(name, config, loaded = null) {
   };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+/** Compare canonical paths so npm-link/bin symlinks still execute the CLI. */
+export function isMainModule(moduleUrl, entryPath) {
+  if (!entryPath) return false;
+  try {
+    return realpathSync(fileURLToPath(moduleUrl)) === realpathSync(entryPath);
+  } catch {
+    return moduleUrl === pathToFileURL(entryPath).href;
+  }
+}
+
+if (isMainModule(import.meta.url, process.argv[1])) {
   main().catch((err) => {
     process.stderr.write(`error: ${err.message}\n`);
     process.exitCode = 1;

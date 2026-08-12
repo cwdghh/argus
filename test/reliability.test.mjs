@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "../src/main.mjs";
 import { runTurn } from "../src/agent.mjs";
 import { getConfig, validateConfig } from "../src/config.mjs";
@@ -25,9 +27,19 @@ test("CLI consumes session names, joins prompt words, and rejects bad options", 
     help: false,
   });
   assert.equal(parseArgs(["explain", "this", "repo"]).prompt, "explain this repo");
+  assert.equal(parseArgs(["--new"]).forceNew, true);
   assert.throws(() => parseArgs(["--session"]), /requires a name/);
   assert.throws(() => parseArgs(["--session", "../bad"]), /invalid session/);
   assert.throws(() => parseArgs(["--wat"]), /unknown option/);
+});
+
+test("CLI executes through an npm-link-style symlink", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "argus-linked-cli-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const linked = join(dir, "argus");
+  symlinkSync(fileURLToPath(new URL("../src/main.mjs", import.meta.url)), linked);
+  const output = execFileSync(linked, ["--help"], { encoding: "utf8" });
+  assert.match(output, /argus --new\s+start a fresh TUI session/);
 });
 
 test("config rejects missing DashScope credentials and invalid URLs", () => {

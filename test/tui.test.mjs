@@ -46,6 +46,42 @@ test("footer: mode on the left, no 'mode' prefix, meta right-aligned", () => {
   assert.ok(f.length <= 100, "footer should fit the terminal width");
 });
 
+test("footer shows a live phase timer, remembers the last turn, and adapts to narrow terminals", () => {
+  let now = 12_500;
+  const t = new MinimalTui({ model: "mock-model" }, { now: () => now });
+  t.width = 100;
+  t.git = { branch: "main", dirty: true, dirtyCount: 2 };
+  t.cwd = "/workspace/a-very-long-project-name/argus";
+  t.mode = "thinking";
+  t.activityStartedAt = 10_000;
+
+  const active = strip(t.footer());
+  assert.match(active, /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] thinking 2\.5s/);
+  assert.ok(active.includes("git main ~2"));
+
+  t.mode = "idle";
+  t.activityStartedAt = null;
+  t.lastTurnDurationMs = 65_000;
+  t.width = 36;
+  const narrow = strip(t.footer());
+  assert.ok(narrow.startsWith("idle · last 1m 05s"));
+  assert.ok(narrow.length <= 36, `narrow footer overflowed: ${narrow}`);
+});
+
+test("header makes transcript scroll state visible", () => {
+  const t = new MinimalTui({ model: "m" }, { sessionName: "work" });
+  t.width = 60;
+  t.scrollOffset = 12;
+  const header = strip(t.header());
+  assert.ok(header.includes("work"));
+  assert.ok(header.includes("12 from latest") && header.includes("End"));
+  assert.ok(header.length <= 60);
+  t.width = 22;
+  const narrow = strip(t.header());
+  assert.ok(narrow.includes("↑12") && narrow.includes("End"), "narrow headers should still expose scroll state");
+  assert.ok(narrow.length <= 22);
+});
+
 test("input history navigation", () => {
   const t = new MinimalTui({ model: "m" });
   t.inputHistory = ["first", "second"];
@@ -93,7 +129,10 @@ test("local slash commands do not enter model history", async () => {
         session: { name },
         cwd: "/saved",
         history: [{ role: "user", content: "saved prompt" }],
-        blocks: [{ kind: "user", text: "saved prompt" }],
+        blocks: [
+          { kind: "user", text: "saved prompt" },
+          { kind: "timing", summary: "completed in 1.2s", durationMs: 1_200 },
+        ],
       }),
     }
   );
@@ -105,16 +144,19 @@ test("local slash commands do not enter model history", async () => {
   assert.ok(!t.blocks.at(-1).text.includes("Local commands"));
   await t.runCommand("/status");
   assert.ok(t.blocks.at(-1).text.includes("Session: `old`"));
+  assert.ok(t.blocks.at(-1).text.includes("Last turn: none yet"));
   assert.ok(t.blocks.at(-1).text.includes("chars/tool result"));
   await t.runCommand("/sessions");
   assert.ok(t.blocks.at(-1).text.includes("`saved`") && t.blocks.at(-1).text.includes("last task"));
   await t.runCommand("/resume saved");
   assert.equal(t.sessionName, "saved");
   assert.equal(t.cwd, "/saved");
+  assert.equal(t.lastTurnDurationMs, 1_200);
   assert.deepEqual(t.inputHistory, ["saved prompt"]);
   await t.runCommand("/new");
   assert.equal(t.sessionName, "fresh");
   assert.equal(t.cwd, "/fresh");
+  assert.equal(t.lastTurnDurationMs, null);
   assert.deepEqual(t.history, []);
 });
 

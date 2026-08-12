@@ -439,3 +439,31 @@ What was done:
 - ✅ Added regression coverage for every issue above. Verified with syntax
   checks, the full mock-LLM suite, CLI and PTY TUI smoke tests, plus a live
   provider tool-call round trip.
+
+#### 2026-08-13 — live timing and responsive TUI polish
+
+**Status: ✅ done**
+
+- ✅ Added an animated phase indicator with live elapsed time for model work,
+  thinking, confirmations, local tasks, and aborting.
+- ✅ Added subtle per-tool and per-turn durations; completed turn time is saved
+  with the transcript, restored on session resume, and shown by `/status`.
+- ✅ Made the footer responsive: model and git details collapse by priority
+  before the path or active state can overflow a narrow terminal.
+- ✅ Added an always-visible scroll-away indicator with an `End` hint, including
+  a compact form for narrow terminals.
+- ✅ Refined the welcome copy and empty editor placeholder at wide, medium, and
+  narrow widths so useful guidance stays readable instead of truncating badly.
+- ✅ Added deterministic coverage for active/last timings, narrow layout,
+  scroll visibility, session restoration, and the new empty state.
+
+#### 2026-08-13 — fix the npm-linked executable
+
+**Status: ✅ done**
+
+- ✅ Fixed the executable entrypoint check to compare canonical paths. Node
+  resolves the module to its real path while `npm link` invokes its symlink, so
+  the old string comparison silently skipped `main()` for every `argus` command.
+- ✅ Added a regression test that executes `--help` through a real symlink.
+- ✅ Verified the existing linked command directly: two consecutive
+  `argus --new` launches showed empty transcripts and distinct session names.
