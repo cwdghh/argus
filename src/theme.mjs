@@ -13,6 +13,7 @@ export const lightTheme = {
   heading: "#0550ae", // markdown headings (dark blue)
   user: "#8250df", // user prompts (purple)
   think: "#6e7781", // reasoning / thinking (gray)
+  rail: "#d0d7de", // turn separators (soft gray rail)
   tool: "#0e7490", // tool call requests (teal)
   good: "#1a7f37", // success / ✓ (green)
   bad: "#cf222e", // errors / ✗ (red)
@@ -26,6 +27,7 @@ export const darkTheme = {
   heading: "#7dcfff",
   user: "#bb9af7",
   think: "#565f89",
+  rail: "#3b4261",
   tool: "#7aa2f7",
   good: "#9ece6a",
   bad: "#f7768e",

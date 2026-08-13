@@ -1,3 +1,24 @@
+#### 2026-08-13 — rail separators, thinking rails, colored tool bars, multiline editor
+
+**Note:** the WIP batch previously on disk (live timing, responsive header/
+footer, empty state, npm-link fix) was committed and pushed as
+`eec3a46`; the repo itself was also pushed to origin.
+
+**Status: 🚧 in progress**
+
+Goal: friendlier transcript and editor:
+
+- 🚧 "proper separation lines" between turns — replace the plain `─` divider
+  with a colored **rail** row (`│ theme.rail`) so turns are visibly separated.
+- 🚧 thinking marker `…` → a left rail (`│`) that runs down the thinking block,
+  comparable to ChatGPT-style rails.
+- 🚧 **different color vertical bars for tool calls** (`│ theme.tool` for the
+  `⚙` line and the wrapped result lines).
+- 🚧 **multiline editor input**: `Shift+Enter` inserts a newline, Enter submits,
+  Up/Down stay bound to input history, and the editor grows upward above the
+  footer (continuation rows prefixed with `│` rails).
+- documentation + tests updated as part of the change.
+
 #### 2026-08-13 — readiness & polish pass (pre-dogfood)
 
 **Status: ✅ done**

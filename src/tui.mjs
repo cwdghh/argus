@@ -12,7 +12,7 @@
  *   row H-1          footer (live phase/time · model · path · git)
  *
  * Controls:
- *   Up/Down          navigate past inputs (input history)
+ *   Up/Down          navigate past inputs; in multiline input, move the caret
  *   PgUp/PgDn        scroll the transcript by a page
  *   Home/End         jump to top / bottom of the transcript
  *   mouse wheel      scroll the transcript (SGR mouse tracking)
@@ -22,6 +22,7 @@
  *   Ctrl-L           redraw the terminal
  *   Ctrl-C           abort a turn / quit when idle
  *   Ctrl-D           delete at cursor / quit on empty input
+ *   Shift+Enter      insert a newline (Enter submits)
  *   /help             show local commands
  */
 import { exec } from "node:child_process";
@@ -54,8 +55,9 @@ const KEY_HELP = `## Keyboard shortcuts
 - Backspace / Delete — delete before / under the cursor
 - Ctrl-U / Ctrl-K — delete to the start / end
 - Ctrl-W — delete the previous word
-- Up / Down — recall earlier prompts
+- Up / Down — recall earlier prompts; in multiline input, move the caret
 - Tab — complete an @path file reference
+- Shift+Enter — insert a newline
 - Enter — submit
 
 ### Control Argus
@@ -67,7 +69,7 @@ const KEY_HELP = `## Keyboard shortcuts
 
 ### Browse the transcript
 
-- PgUp / PgDn or mouse wheel — scroll
+- PgUp / PgDn or mouse wheel — scroll the transcript by a page
 - Home / End — jump to the top / bottom`;
 
 const HELP_TEXT = `${COMMAND_HELP}\n\n${KEY_HELP}`;
@@ -522,20 +524,33 @@ function blockLines(block, width) {
     }
     case "thinking": {
       const out = [];
+      const contentWidth = Math.max(1, width - 2);
       for (const l of block.text.split("\n")) {
         const t = l.trim();
         if (!t) continue;
-        out.push(...renderSimple(`… ${t}`, { fg: theme.think, italic: true }, width));
+        const pieces = renderSimple(t, { fg: theme.think, italic: true }, contentWidth);
+        pieces.forEach((ln, idx) => {
+          out.push(styleText("│", { fg: theme.think }) + " " + ln);
+        });
       }
       return out;
     }
     case "assistant":
       return markdownLines(block.text, width);
-    case "tool":
-      return renderSimple(`  ⚙ ${block.name}(${formatArgs(block.args)})`, { fg: theme.tool, dim: true }, width);
+    case "tool": {
+      const contentWidth = Math.max(1, width - 4);
+      const pieces = renderSimple(`⚙ ${block.name}(${formatArgs(block.args)})`, { fg: theme.tool, dim: true }, contentWidth);
+      return pieces.map((ln, idx) => styleText("│", { fg: theme.tool }) + (idx === 0 ? "  " : "  ") + ln);
+    }
     case "result": {
       const timing = block.durationMs == null ? "" : `${formatDuration(block.durationMs)} · `;
-      return renderSimple(`  ${block.ok ? "✓" : "✗"} ${timing}${block.summary}`, { fg: block.ok ? theme.good : theme.bad, dim: true }, width);
+      const prefix = block.summary === "interrupted" ? "" : `${block.ok ? "✓" : "✗"} `;
+      const contentWidth = Math.max(1, width - 4);
+      const pieces = renderSimple(`${prefix}${timing}${block.summary}`, {
+        fg: block.ok ? theme.good : theme.bad,
+        dim: true,
+      }, contentWidth);
+      return pieces.map((ln, idx) => styleText("│", { fg: block.ok ? theme.good : theme.bad }) + (idx === 0 ? "  " : "  ") + ln);
     }
     case "timing":
       return renderSimple(`  ◷ ${block.summary}`, { fg: theme.dim, dim: true }, width);
@@ -602,7 +617,12 @@ export class MinimalTui {
     let seen = false;
     for (const block of this.blocks) {
       if (block.kind === "user" && seen) {
-        out.push(styleText(`  ${"─".repeat(Math.min(20, Math.max(4, this.width - 4)))}`, { fg: theme.dim }));
+        const width = Math.min(20, Math.max(4, this.width - 4));
+        out.push(
+          styleText("│", { fg: theme.rail }) +
+            "  " +
+            styleText("─".repeat(width), { fg: theme.rail })
+        );
       }
       seen = true;
       out.push(...blockLines(block, this.width));
@@ -611,18 +631,61 @@ export class MinimalTui {
   }
 
   maxScroll() {
-    return Math.max(0, this.transcriptLines().length - (this.height - 3));
+    return Math.max(0, this.transcriptLines().length - this.transcriptHeight());
+  }
+
+  /** Rows available for the transcript after reserving header/footer/editor. */
+  transcriptHeight() {
+    const editorRows = this._editorHeight ?? 1;
+    return Math.max(1, this.height - 3 - (editorRows - 1));
   }
 
   // ---- input --------------------------------------------------------------
 
+  /**
+   * The editor is a multiline text area. It is rendered bottom-up from the
+   * footer: the last logical line sits on the row just above the footer, and
+   * earlier lines stack upward. Each logical line is wrapped to `width - 4`
+   * columns and rendered as `❯ ` + content (first line) or `│ ` + content
+   * (continuation lines). Long buffers scroll horizontally so the caret stays
+   * visible. `{ rows, height, caretRow, col }` describes the view; `height` is
+   * the number of editor rows the frame must reserve.
+   */
+  editorRows() {
+    const inputWidth = Math.max(1, this.width - 4);
+    const logical = this.inputBuffer.split("\n");
+    const rows = [];
+    for (const l of logical) rows.push(...(l === "" ? [""] : wrap(l, inputWidth)));
+    return rows;
+  }
+
+  /** Absolute cursor -> { row (display-row index), col (char offset in row) }. */
+  caretPos() {
+    const rows = this.editorRows();
+    let idx = this.inputCursor;
+    for (let r = 0; r < rows.length; r++) {
+      const rowLen = rows[r].length;
+      if (idx <= rowLen) return { row: r, col: idx, rows };
+      idx -= rowLen + 1;
+    }
+    const last = Math.max(0, rows.length - 1);
+    return { row: last, col: rows[last].length, rows };
+  }
+
   inputView() {
-    const inputWidth = Math.max(1, this.width - 3);
-    let buff = this.inputBuffer;
-    let cursor = this.inputCursor;
+    const maxEditor = Math.max(1, this.height - 4);
+    const rows = this.editorRows();
+    const pos = this.caretPos();
+    let active = pos.row;
+    let lineCursor = pos.col;
+    if (active >= rows.length) active = rows.length - 1;
+
+    // Horizontal window: center the caret column when a row overflows.
+    let buff = rows[active];
+    let cursor = dispWidth(buff.slice(0, lineCursor));
+    const inputWidth = Math.max(1, this.width - 4);
     if (dispWidth(buff) > inputWidth) {
-      // Window centered-ish on the caret, measured in display columns.
-      const before = dispWidth(buff.slice(0, cursor));
+      const before = dispWidth(buff.slice(0, lineCursor));
       const minBefore = Math.max(0, before - Math.floor(inputWidth / 2));
       let start = 0;
       let startW = 0;
@@ -641,11 +704,72 @@ export class MinimalTui {
         end += ch.length;
       }
       buff = buff.slice(start, end);
-      cursor = dispWidth(buff.slice(0, Math.max(0, cursor - start)));
-    } else {
-      cursor = dispWidth(buff.slice(0, cursor));
+      cursor = dispWidth(buff.slice(0, Math.max(0, lineCursor - start)));
     }
-    return { text: buff, col: 2 + cursor };
+
+    // Vertical window: keep the caret row visible when the buffer overflows
+    // the editor area (rows are laid out bottom-up).
+    let startRow = 0;
+    if (rows.length > maxEditor) {
+      startRow = Math.max(0, active - (maxEditor - 1));
+    }
+    const viewRows = rows.slice(startRow, startRow + maxEditor);
+    const activeInView = active - startRow;
+
+    // Track the caret row relative to the editor's bottom so rendering and
+    // cursor placement agree even when the vertical window scrolls.
+    this._activeInputRow = activeInView;
+
+    return {
+      rows: viewRows,
+      height: viewRows.length,
+      caretRow: activeInView,
+      col: 2 + cursor,
+    };
+  }
+
+  insertNewline() {
+    const s = "\n";
+    this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor) + s + this.inputBuffer.slice(this.inputCursor);
+    this.inputCursor += s.length;
+    this.dirtyRendered = true;
+  }
+
+  /** Move the caret one display row up/down in multiline input; false if no row. */
+  moveCaretVertical(dir) {
+    const pos = this.caretPos();
+    const target = pos.row + dir;
+    if (target < 0 || target >= pos.rows.length) return false;
+    const wantCol = dispWidth(pos.rows[pos.row].slice(0, pos.col));
+    const targetRow = pos.rows[target];
+    let col = 0;
+    let w = 0;
+    for (const ch of targetRow) {
+      const cw = charWidth(ch);
+      if (w + cw > wantCol) break;
+      w += cw;
+      col += ch.length;
+    }
+    let start = 0;
+    for (let r = 0; r < target; r++) start += pos.rows[r].length + 1;
+    this.inputCursor = start + col;
+    this.dirtyRendered = true;
+    return true;
+  }
+
+  /** Ctrl-K: delete from the caret to the end of the current logical line. */
+  deleteToLineEnd() {
+    const nl = this.inputBuffer.indexOf("\n", this.inputCursor);
+    const end = nl === -1 ? this.inputBuffer.length : nl;
+    this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor) + this.inputBuffer.slice(end);
+  }
+
+  /** Ctrl-U: delete from the caret back to the start of the current logical line. */
+  deleteToLineStart() {
+    let start = this.inputBuffer.lastIndexOf("\n", this.inputCursor - 1);
+    start = start === -1 ? 0 : start + 1;
+    this.inputBuffer = this.inputBuffer.slice(0, start) + this.inputBuffer.slice(this.inputCursor);
+    this.inputCursor = start;
   }
 
   // ---- events from the agent ----------------------------------------------
@@ -1003,8 +1127,11 @@ export class MinimalTui {
 
     frame[0] = this.header();
 
+    const view = this.inputView();
+    this._editorHeight = view.height;
+
     const lines = this.transcriptLines();
-    const transcriptHeight = Math.max(1, this.height - 3);
+    const transcriptHeight = this.transcriptHeight();
     this.scrollOffset = Math.min(this.scrollOffset, this.maxScroll());
     const start = Math.max(0, lines.length - transcriptHeight - this.scrollOffset);
     for (let r = 0; r < transcriptHeight; r++) {
@@ -1032,25 +1159,46 @@ export class MinimalTui {
       });
     }
 
-    const { text, col } = this.inputView();
-    const placeholder =
-      this.mode === "idle"
-        ? width >= 45
-          ? "Describe a task…  (/help for commands)"
-          : width >= 25
-            ? "Describe a task…  (/help)"
-            : "Describe a task…"
-        : width >= 45
-          ? "Argus is working…  (Esc to interrupt)"
-          : width >= 25
-            ? "Working…  (Esc to stop)"
-            : "Working… Esc stops";
-    frame[this.height - 2] = this.pendingConfirm
-      ? styleText(`⚠ ${truncateMiddle(this.pendingConfirm.command, Math.max(12, this.width - 12))}  (y/n)`, { fg: theme.bad })
-      : `${styleText("❯", { fg: theme.accent, bold: true })} ${
-          text || styleText(truncateEnd(placeholder, Math.max(1, this.width - 3)), { fg: theme.dim, italic: true })
-        }`;
-    this.inputCol = this.pendingConfirm ? 0 : col;
+    if (this.pendingConfirm) {
+      frame[this.height - 2] = styleText(
+        `⚠ ${truncateMiddle(this.pendingConfirm.command, Math.max(12, this.width - 12))}  (y/n)`,
+        { fg: theme.bad }
+      );
+      this.inputCol = 0;
+      this._inputRow = this.height - 2;
+    } else {
+      const placeholder =
+        this.mode === "idle"
+          ? width >= 45
+            ? "Describe a task…  (/help for commands)"
+            : width >= 25
+              ? "Describe a task…  (/help)"
+              : "Describe a task…"
+          : width >= 45
+            ? "Argus is working…  (Esc to interrupt)"
+            : width >= 25
+              ? "Working…  (Esc to stop)"
+              : "Working… Esc stops";
+      // Editor grows upward: its rows occupy the rows directly above the footer.
+      const firstEditorRow = this.height - 1 - view.height;
+      view.rows.forEach((rowText, i) => {
+        const row = firstEditorRow + i;
+        const isCaretRow = i === view.caretRow;
+        const marker = i === 0 ? "❯" : "│";
+        const markerStyle = i === 0 ? { fg: theme.accent, bold: true } : { fg: theme.rail, dim: true };
+        if (rowText) {
+          frame[row] = `${styleText(marker, markerStyle)} ${rowText}`;
+        } else if (isCaretRow) {
+          frame[row] = `${styleText("❯", { fg: theme.accent, bold: true })} ${
+            styleText(truncateEnd(placeholder, Math.max(1, this.width - 3)), { fg: theme.dim, italic: true })
+          }`;
+        } else {
+          frame[row] = styleText("│", { fg: theme.rail, dim: true }) + " "; // empty continuation rail
+        }
+      });
+      this.inputCol = view.col;
+      this._inputRow = firstEditorRow + view.caretRow;
+    }
 
     frame[this.height - 1] = this.footer();
     return frame;
@@ -1158,6 +1306,7 @@ export class MinimalTui {
       [/^\x1b\[5~/, { type: "pageup" }],
       [/^\x1b\[6~/, { type: "pagedown" }],
       [/^\x1b\[3~/, { type: "delete" }],
+      [/^\x1b\[13;2u/, { type: "shiftenter" }],
     ];
     for (const [re, act] of CSI) {
       const m = re.exec(this.rawBuf);
@@ -1202,12 +1351,10 @@ export class MinimalTui {
           if (!this.inputBuffer) this.stop();
           else this.deleteAtCursor();
         } else if (cp === 5) this.inputCursor = this.inputBuffer.length; // Ctrl-E
-        else if (cp === 11) this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor); // Ctrl-K
+        else if (cp === 11) this.deleteToLineEnd(); // Ctrl-K
         else if (cp === 12) this.redraw(); // Ctrl-L
-        else if (cp === 21) { // Ctrl-U
-          this.inputBuffer = this.inputBuffer.slice(this.inputCursor);
-          this.inputCursor = 0;
-        } else if (cp === 23) { // Ctrl-W
+        else if (cp === 21) this.deleteToLineStart(); // Ctrl-U
+        else if (cp === 23) { // Ctrl-W
           const previous = previousWordIndex(this.inputBuffer, this.inputCursor);
           this.inputBuffer = this.inputBuffer.slice(0, previous) + this.inputBuffer.slice(this.inputCursor);
           this.inputCursor = previous;
@@ -1250,6 +1397,9 @@ export class MinimalTui {
         return this.stop();
       case "enter":
         return this.submit();
+      case "shiftenter":
+        this.insertNewline();
+        break;
       case "backspace":
         this.backspace();
         break;
@@ -1263,16 +1413,22 @@ export class MinimalTui {
         this.inputCursor = nextCharIndex(this.inputBuffer, this.inputCursor);
         break;
       case "up":
+        if (this.inputBuffer.includes("\n")) {
+          if (this.moveCaretVertical(-1)) break;
+        }
         this.historyUp();
         return;
       case "down":
+        if (this.inputBuffer.includes("\n")) {
+          if (this.moveCaretVertical(1)) break;
+        }
         this.historyDown();
         return;
       case "pageup":
-        this.scrollOffset = Math.min(this.scrollOffset + (this.height - 3), this.maxScroll());
+        this.scrollOffset = Math.min(this.scrollOffset + this.transcriptHeight(), this.maxScroll());
         break;
       case "pagedown":
-        this.scrollOffset = Math.max(0, this.scrollOffset - (this.height - 3));
+        this.scrollOffset = Math.max(0, this.scrollOffset - this.transcriptHeight());
         break;
       case "home":
         this.scrollOffset = this.maxScroll();
@@ -1283,6 +1439,11 @@ export class MinimalTui {
       case "escape":
         if (this.pendingConfirm) this.resolveConfirm(false);
         else if (this.mode !== "idle") this.abortTurn();
+        else if (this.inputBuffer.includes("\n")) {
+          // Esc closes a multiline buffer back to a single line.
+          this.inputBuffer = this.inputBuffer.replace(/\n/g, " ");
+          this.inputCursor = this.inputBuffer.length;
+        }
         break;
       case "wheel":
         this.scrollOffset = Math.min(Math.max(0, this.scrollOffset + action.dir * 3), this.maxScroll());
@@ -1452,7 +1613,7 @@ export class MinimalTui {
         this.lastFrame[r] = frame[r];
       }
     }
-    process.stdout.cursorTo(Math.min(this.inputCol, this.width - 1), this.height - 2);
+    process.stdout.cursorTo(Math.min(this.inputCol, this.width - 1), this._inputRow ?? this.height - 2);
     process.stdout.write(`${ESC}[?25h`);
   }
 
