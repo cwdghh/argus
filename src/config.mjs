@@ -37,7 +37,7 @@ export function getConfig() {
     // Bound network stalls and runaway tool-call loops.
     requestTimeoutMs: positiveInt(process.env.ARGUS_REQUEST_TIMEOUT_MS, 120_000, 100),
     maxRetries: nonNegativeInt(process.env.ARGUS_MAX_RETRIES, 2),
-    maxSteps: positiveInt(process.env.ARGUS_MAX_STEPS, 25),
+    maxSteps: positiveInt(process.env.ARGUS_MAX_STEPS, 100),
     maxToolResultChars: positiveInt(process.env.ARGUS_MAX_TOOL_RESULT_CHARS, 50_000, 500),
     // Optional system prompt that shapes the agent's behaviour.
     systemPrompt:
