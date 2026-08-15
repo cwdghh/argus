@@ -140,6 +140,7 @@ export class MinimalTui {
   transcriptLines() {
     const out = [];
     let seen = false;
+    let lastKind = null;
     for (const block of this.blocks) {
       if (block.kind === "user" && seen) {
         const width = Math.min(20, Math.max(4, this.width - 4));
@@ -149,8 +150,28 @@ export class MinimalTui {
             styleText("─".repeat(width), { fg: theme.rail })
         );
       }
+      // Before tool calls or thinking blocks, strip trailing blank lines
+      // (the model's text output may end with natural newlines) and insert
+      // exactly one blank separator line for visual clarity.
+      if (seen && (block.kind === "tool" || block.kind === "thinking")) {
+        while (out.length > 0 && stripAnsi(out[out.length - 1]).trim() === "") {
+          out.pop();
+        }
+        if (out.length > 0) out.push("");
+      }
+      // After a thinking block, add a blank line before the assistant's response.
+      if (lastKind === "thinking" && block.kind === "assistant") {
+        while (out.length > 0 && stripAnsi(out[out.length - 1]).trim() === "") {
+          out.pop();
+        }
+        if (out.length > 0) out.push("");
+      }
       seen = true;
+      lastKind = block.kind;
       out.push(...blockLines(block, this.width));
+      // After a timing block (end of a turn), add a blank line to
+      // separate the recorded time from the input editor below.
+      if (block.kind === "timing") out.push("");
     }
     return out;
   }
