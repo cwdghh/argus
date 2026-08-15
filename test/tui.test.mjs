@@ -221,3 +221,71 @@ test("terminal editing hotkeys manipulate input predictably", () => {
   t.insertText("\x04"); // Ctrl-D
   assert.equal(t.inputBuffer, "ac");
 });
+
+test("multiline cursor positioning: caret stays aligned across logical lines", () => {
+  const t = new MinimalTui({ model: "m" });
+  t.width = 80;
+  
+  // Test case 1: Two short lines (no wrapping)
+  // "line1\nline2" = 5+1+5 = 11 chars total
+  t.inputBuffer = "line1\nline2";
+  t.inputCursor = 11; // at end of "line2"
+  let pos = t.caretPos();
+  assert.equal(pos.row, 1, "cursor should be on row 1");
+  assert.equal(pos.col, 5, "cursor should be at column 5 in line2");
+  
+  // Test case 2: Three lines with cursor at start of third line
+  // "line1\nline2\nline3" = 5+1+5+1+5 = 17 chars total
+  t.inputBuffer = "line1\nline2\nline3";
+  t.inputCursor = 12; // at start of "line3" (after "line1\nline2\n")
+  pos = t.caretPos();
+  assert.equal(pos.row, 2, "cursor should be on row 2");
+  assert.equal(pos.col, 0, "cursor should be at column 0 in line3");
+  
+  // Test case 3: Cursor at end of first line
+  t.inputCursor = 5; // after "line1", before \n
+  pos = t.caretPos();
+  assert.equal(pos.row, 0, "cursor should be on row 0");
+  assert.equal(pos.col, 5, "cursor should be at column 5 in line1");
+  
+  // Test case 4: Cursor just after \n (start of second line)
+  t.inputCursor = 6; // after \n, at start of "line2"
+  pos = t.caretPos();
+  assert.equal(pos.row, 1, "cursor should be on row 1");
+  assert.equal(pos.col, 0, "cursor should be at column 0 in line2");
+  
+  // Test case 5: Cursor in middle of second line
+  t.inputCursor = 8; // at 'n' in "line2" (6+2=8)
+  pos = t.caretPos();
+  assert.equal(pos.row, 1, "cursor should be on row 1");
+  assert.equal(pos.col, 2, "cursor should be at column 2 in line2");
+});
+
+test("multiline vertical cursor movement preserves column position", () => {
+  const t = new MinimalTui({ model: "m" });
+  t.width = 80;
+  
+  // Set up three lines
+  t.inputBuffer = "abcdef\nghijk\nlmnop";
+  t.inputCursor = 4; // at 'e' in first line (col 4)
+  
+  // Move down to second line
+  let moved = t.moveCaretVertical(1);
+  assert.ok(moved, "should move down");
+  assert.equal(t.inputCursor, 11, "cursor should be at col 4 in second line (7+4=11)");
+  
+  // Move down to third line
+  moved = t.moveCaretVertical(1);
+  assert.ok(moved, "should move down");
+  assert.equal(t.inputCursor, 17, "cursor should be at col 4 in third line (13+4=17)");
+  
+  // Move back up to second line
+  moved = t.moveCaretVertical(-1);
+  assert.ok(moved, "should move up");
+  assert.equal(t.inputCursor, 11, "cursor should be back at col 4 in second line");
+  
+  // Move back up to first line
+  moved = t.moveCaretVertical(-1);
+  assert.ok(moved, "should move up");
+  assert.equal(t.inputCursor, 4, "cursor should be back at col 4 in first line");
+});

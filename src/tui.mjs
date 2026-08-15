@@ -186,13 +186,34 @@ export class MinimalTui {
 
   /** Absolute cursor -> { row (display-row index), col (char offset in row) }. */
   caretPos() {
+    const inputWidth = Math.max(1, this.width - 4);
+    const logicalLines = this.inputBuffer.split("\n");
     const rows = this.editorRows();
-    let idx = this.inputCursor;
-    for (let r = 0; r < rows.length; r++) {
-      const rowLen = rows[r].length;
-      if (idx <= rowLen) return { row: r, col: idx, rows };
-      idx -= rowLen + 1;
+    let remaining = this.inputCursor;
+    let displayRow = 0;
+
+    for (let li = 0; li < logicalLines.length; li++) {
+      const line = logicalLines[li];
+      const wrapped = line === "" ? [""] : wrap(line, inputWidth);
+
+      for (let wi = 0; wi < wrapped.length; wi++) {
+        const segLen = wrapped[wi].length;
+        const isLastSegOfLine = wi === wrapped.length - 1;
+        // Place caret in this segment if it fits, or if it's exactly at the
+        // end of the last segment of this logical line.
+        if (remaining < segLen || (remaining === segLen && isLastSegOfLine)) {
+          return { row: displayRow, col: remaining, rows };
+        }
+        remaining -= segLen;
+        displayRow++;
+      }
+
+      // Account for the \n between logical lines.
+      if (li < logicalLines.length - 1) {
+        remaining -= 1;
+      }
     }
+
     const last = Math.max(0, rows.length - 1);
     return { row: last, col: rows[last].length, rows };
   }
@@ -275,9 +296,34 @@ export class MinimalTui {
       w += cw;
       col += ch.length;
     }
-    let start = 0;
-    for (let r = 0; r < target; r++) start += pos.rows[r].length + 1;
-    this.inputCursor = start + col;
+    
+    // Compute absolute cursor position for target row by walking logical lines
+    const inputWidth = Math.max(1, this.width - 4);
+    const logicalLines = this.inputBuffer.split("\n");
+    let displayRow = 0;
+    let absolutePos = 0;
+
+    for (let li = 0; li < logicalLines.length; li++) {
+      const line = logicalLines[li];
+      const wrapped = line === "" ? [""] : wrap(line, inputWidth);
+
+      for (let wi = 0; wi < wrapped.length; wi++) {
+        if (displayRow === target) {
+          this.inputCursor = absolutePos + col;
+          this.dirtyRendered = true;
+          return true;
+        }
+        absolutePos += wrapped[wi].length;
+        displayRow++;
+      }
+
+      // Account for the \n between logical lines.
+      if (li < logicalLines.length - 1) {
+        absolutePos += 1;
+      }
+    }
+    
+    this.inputCursor = absolutePos + col;
     this.dirtyRendered = true;
     return true;
   }
