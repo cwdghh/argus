@@ -33,7 +33,7 @@ function buildBody({ model, systemPrompt, messages, tools, stream }) {
 }
 
 async function request({ baseUrl, apiKey, body, signal, requestTimeoutMs, maxRetries: configuredRetries }) {
-  const timeoutMs = requestTimeoutMs ?? 120_000;
+  const timeoutMs = requestTimeoutMs ?? 300_000;
   const maxRetries = configuredRetries ?? 0;
   const url = `${baseUrl.replace(/\/+$/, "")}${CHAT_PATH}`;
 
@@ -88,6 +88,53 @@ function abortableDelay(ms, signal) {
 }
 
 /**
+ * Race a reader.read() against an idle timeout. Returns `{ done, value }` on
+ * success or throws if the idle timeout fires first (without aborting the
+ * user's cancellation signal).
+ */
+async function readWithIdleTimeout(reader, idleTimeoutMs, signal) {
+  if (idleTimeoutMs == null || idleTimeoutMs <= 0) {
+    return reader.read();
+  }
+  const idleSignal = AbortSignal.timeout(idleTimeoutMs);
+  const combined = signal ? AbortSignal.any([signal, idleSignal]) : idleSignal;
+
+  // Race the read against the idle timeout.
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const settle = (fn, val) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn(val);
+    };
+
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      // If the user signal aborted, propagate as an abort error.
+      if (signal?.aborted) {
+        reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+      } else {
+        // Idle timeout fired.
+        reject(new Error(`LLM stream idle timeout after ${idleTimeoutMs}ms`));
+      }
+    };
+    combined.addEventListener("abort", onAbort, { once: true });
+
+    const cleanup = () => {
+      combined.removeEventListener("abort", onAbort);
+    };
+
+    reader.read().then(
+      (result) => settle(resolve, result),
+      (err) => settle(reject, err)
+    );
+  });
+}
+
+/**
  * One-shot chat. Returns the assistant message object.
  */
 export async function chat({ baseUrl, apiKey, model, systemPrompt, messages, tools, signal, requestTimeoutMs, maxRetries }) {
@@ -98,7 +145,7 @@ export async function chat({ baseUrl, apiKey, model, systemPrompt, messages, too
     data = await res.json();
   } catch (err) {
     if (timeoutSignal.aborted && !signal?.aborted) {
-      throw new Error(`LLM request timed out after ${requestTimeoutMs ?? 120_000}ms`);
+      throw new Error(`LLM request timed out after ${requestTimeoutMs ?? 300_000}ms`);
     }
     throw err;
   }
@@ -117,6 +164,11 @@ export async function chat({ baseUrl, apiKey, model, systemPrompt, messages, too
  *
  * If `signal` aborts at any point (even during the initial request), we stop
  * and yield a final `{ type: "done", aborted: true, message }`.
+ *
+ * The initial request uses `requestTimeoutMs` (default 300s) to cover slow
+ * reasoning models. Once streaming begins, an idle timeout
+ * (`streamIdleTimeoutMs`, default 60s) resets on each chunk so we only abort
+ * if the server stops sending data.
  */
 export async function* streamChat({
   baseUrl,
@@ -127,6 +179,7 @@ export async function* streamChat({
   tools,
   signal,
   requestTimeoutMs,
+  streamIdleTimeoutMs,
   maxRetries,
 }) {
   const body = buildBody({ model, systemPrompt, messages, tools, stream: true });
@@ -134,6 +187,7 @@ export async function* streamChat({
   let finishReason = null;
   const toolCalls = new Map(); // index -> { id, name, arguments }
   let timeoutSignal = null;
+  const idleTimeoutMs = streamIdleTimeoutMs ?? 60_000;
 
   try {
     const requested = await request({ baseUrl, apiKey, body, signal, requestTimeoutMs, maxRetries });
@@ -144,7 +198,7 @@ export async function* streamChat({
     let buffer = "";
 
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readWithIdleTimeout(reader, idleTimeoutMs, signal);
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
 
@@ -203,7 +257,10 @@ export async function* streamChat({
     };
   } catch (err) {
     if (timeoutSignal?.aborted && !signal?.aborted) {
-      throw new Error(`LLM request timed out after ${requestTimeoutMs ?? 120_000}ms`);
+      throw new Error(`LLM request timed out after ${requestTimeoutMs ?? 300_000}ms`);
+    }
+    if (/LLM stream idle timeout after/.test(err?.message ?? "")) {
+      throw err;
     }
     if (signal?.aborted || err?.name === "AbortError") {
       yield { type: "done", aborted: true, finishReason, message: assembleMessage(content, toolCalls) };

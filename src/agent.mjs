@@ -185,7 +185,13 @@ function boundToolResult(result, maxChars) {
  */
 async function streamAssistant(config, messages, toolList, onEvent, signal) {
   onEvent({ type: "assistant_start" });
-  const stream = streamChat({ ...config, messages, tools: toolList, signal });
+  const stream = streamChat({
+    ...config,
+    messages,
+    tools: toolList,
+    signal,
+    streamIdleTimeoutMs: config.streamIdleTimeoutMs,
+  });
   let message = null;
   let finishReason = null;
   for await (const ev of stream) {
