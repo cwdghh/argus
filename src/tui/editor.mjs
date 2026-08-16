@@ -71,7 +71,7 @@ export class Editor {
   /**
    * The visible editor: which wrapped rows fit on screen (with horizontal and
    * vertical windows), where the caret row lands, and the rendered caret
-   * column. `{ rows, height, caretRow, col, activeRow }` describes the view;
+   * column. `{ rows, height, caretRow, col }` describes the view;
    * `height` is the number of editor rows the frame must reserve.
    */
   view(width, height) {
@@ -123,7 +123,7 @@ export class Editor {
       height: viewRows.length,
       caretRow: activeInView,
       col: 2 + cursor,
-      activeRow: activeInView,
+
     };
   }
 

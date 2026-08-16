@@ -48,7 +48,6 @@ test("Editor.view returns the visible rows, caret row, and column", () => {
   assert.equal(view.height, 2);
   assert.equal(view.caretRow, 1);
   assert.equal(view.col, 2 + 5);
-  assert.equal(view.activeRow, 1);
 });
 
 test("Editor.insertNewline splits the buffer at the caret", () => {

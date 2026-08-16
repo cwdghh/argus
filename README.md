@@ -202,7 +202,7 @@ The whole agent lives in a few small files:
 | `src/compact.mjs` | Context compaction (auto-summarize old turns) |
 | `src/session.mjs` | Append-only JSONL session persistence |
 | `src/headless.mjs` | One-shot CLI mode (no TUI) |
-| `src/tui.mjs` + `src/tui/{renderers,editor,keys}.mjs` | Dependency-free TUI (controller + pure renderers, editor widget, key decoding) |
+| `src/tui.mjs` + `src/tui/*.mjs` | Dependency-free TUI (controller + pure renderers / editor / keys / suggestions / frames / help) |
 | `src/theme.mjs` | Colors / styling tokens, auto light-dark detection |
 | `src/main.mjs` | Entry point / CLI |
 | `package.json` | `start` / `test` scripts (loads `.env` if present) |

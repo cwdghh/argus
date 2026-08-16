@@ -53,12 +53,14 @@ for a logging UI or a web UI without touching the loop.
 
 `src/tui.mjs` is the controller; the pure pieces live beside it in
 `src/tui/`: `renderers.mjs` (markdown + layout), `editor.mjs` (the multiline
-prompt: buffer, caret, recall history), and `keys.mjs` (terminal escape/CSI
-decoding). Each is unit-testable without a terminal.
+prompt: buffer, caret, recall history), `keys.mjs` (terminal escape/CSI
+decoding), `suggestions.mjs` (`@path` + `/command` popups), `frames.mjs`
+(status/footer/header rendering), and `help.mjs` (the command table + `/help`
+text). Each is unit-testable without a terminal.
 
 The TUI handles its local command set (the `SLASH_COMMANDS` table in
-`src/tui.mjs` — `/help`, `/status`, `/model`, `/sessions`, `/resume`, `/new`,
-`/exit`) before invoking the loop. Session switches replace the transcript,
+`src/tui/help.mjs` — `/help`, `/status`, `/model`, `/sessions`, `/resume`,
+`/new`, `/exit`) before invoking the loop. Session switches replace the transcript,
 model history, input history, cwd, and writable session handle together. Typing
 a bare `/` command or an `@path` token opens a live suggestion popup above the
 editor (Up/Down to highlight, Tab to accept, Esc to dismiss);

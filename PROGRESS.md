@@ -1,3 +1,24 @@
+#### 2026-08-17 — quality: restructure the TUI into suggestions/frames/help modules
+
+**Status: ✅ done**
+
+- Extracted the remaining separable concerns out of `src/tui.mjs` (down to
+  991 lines of controller code with thin delegation):
+  - `src/tui/help.mjs` — the `SLASH_COMMANDS` table + the `/help`/`/keys`
+    reference text its popup and commands share.
+  - `src/tui/suggestions.mjs` — pure `@path` + `/command` popup logic:
+    `computeSuggestion`, `acceptSuggestion`, `suggestionLines`.
+  - `src/tui/frames.mjs` — pure `statusText` / `footerText` / `headerText`
+    renderers over a read-only controller snapshot.
+- Removed dead state: the write-only `_activeInputRow` field and the duplicate
+  `activeRow` in `Editor.view()` (same value as `caretRow`).
+- Added unit tests for the new modules (`test/help.test.mjs`,
+  `test/suggestions.test.mjs`, `test/frames.test.mjs`); the 28 TUI integration
+  tests pass unchanged.
+
+Verification: 118 tests pass (104 before + 14 new), `node --check` clean, no
+unused imports across `src/` and `src/tui/`.
+
 #### 2026-08-17 — structure: split the TUI into editor + keys modules
 
 **Status: ✅ done**
