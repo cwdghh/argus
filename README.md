@@ -89,6 +89,9 @@ layout: header, scrollable transcript, a bottom **editor**, and a **footer**.
 - **Live working time** follows the current phase (`working`, `thinking`,
   confirmation, or aborting); completed turns and tool calls keep their timing
   in the transcript, and `/status` reports the last turn.
+- **Token usage travels with the turn**: the footer shows live tokens while
+  working, and the last turn's usage (`↑ input / ↓ output`) is kept in the
+  timing row and reported by `/status`.
 - **Auto light/dark theme** (detected via OSC 11; falls back to light).
 - **Scrollable history**: mouse wheel to scroll; PgUp/PgDn (pages), Home/End
   (top/bottom). The header shows when you are away from the latest output.
@@ -119,7 +122,7 @@ Slash commands are handled by the TUI itself, without calling the model:
 |---------|--------|
 | `/help` | Show commands and keyboard shortcuts |
 | `/keys` | Show the keyboard-shortcut reference |
-| `/status` | Show session, model, cwd, context-window usage, and reliability limits |
+| `/status` | Show session, model, cwd, last-turn time + token usage, context-window usage, and reliability limits |
 | `/sessions` | List up to 20 recent sessions with their last prompt |
 | `/resume <name>` | Switch to a saved session without restarting |
 | `/new` | Start a fresh session without restarting |
@@ -145,7 +148,9 @@ Typing shows live suggestions in a popup just above the editor:
   when everything fits. Tab accepts the highlighted suggestion, and Esc
   dismisses the popup without touching your input.
 - Paths containing spaces are quoted automatically; quoted and unquoted
-  `@path` tokens complete the same way.
+  `@path` tokens complete the same way. Directory entries keep a muted trailing
+  slash, and symlinks show a muted arrow to their resolved target (a symlink to
+  a directory sorts, completes, and descends like a directory).
 
 ## Sessions & persistence
 

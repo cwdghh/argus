@@ -129,6 +129,26 @@ export function formatDuration(ms) {
   return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
 }
 
+/** Format a count in human-readable form (e.g., "1.2K", "3.4M"). */
+export function formatChars(n) {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return (n / 1000).toFixed(1) + "K";
+  return (n / 1_000_000).toFixed(1) + "M";
+}
+
+/**
+ * Compact token summary, e.g. "↑1.6K ↓120 tok". `↑` = prompt (input) tokens,
+ * `↓` = completion (output) tokens; reasoning and cached tokens appear only
+ * when the provider reported them.
+ */
+export function formatTokens(u) {
+  if (!u || !Number.isFinite(u.total_tokens)) return null;
+  const parts = [`↑${formatChars(u.prompt_tokens)}`, `↓${formatChars(u.completion_tokens)}`];
+  if (u.reasoning_tokens > 0) parts.push(`✶${formatChars(u.reasoning_tokens)}`);
+  if (u.cached_tokens > 0) parts.push(`≡${formatChars(u.cached_tokens)}`);
+  return parts.join(" ") + " tok";
+}
+
 export function summarize(result) {
   if (!result) return "";
   if (result.error) return result.message ?? "error";
@@ -488,8 +508,10 @@ export function blockLines(block, width) {
       }, contentWidth);
       return pieces.map((ln, idx) => styleText("│", { fg: block.ok ? theme.good : theme.bad, bold: true }) + " " + ln);
     }
-    case "timing":
-      return renderSimple(`  ◷ ${block.summary}`, { fg: theme.dim, dim: true }, width);
+    case "timing": {
+      const usage = formatTokens(block.usage);
+      return renderSimple(`  ◷ ${block.summary}${usage ? ` · ${usage}` : ''}`, { fg: theme.dim, dim: true }, width);
+    }
     case "error":
       return renderSimple(`error: ${block.text}`, { fg: theme.bad }, width);
     default:

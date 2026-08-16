@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MinimalTui } from "../src/tui.mjs";
@@ -381,6 +381,44 @@ test("suggestion popup keeps the highlight visible on short terminals", () => {
   assert.equal(t.suggestion.selected, 14);
   assert.ok(frame.some((line) => line.includes("▸ f14")), "the highlighted row is never clipped");
   assert.ok(frame.some((line) => line.includes("↑")), "the popup says items are hidden above");
+});
+
+test("suggestion popup marks directories and symlinks", () => {
+  const dir = mkdtempSync(join(tmpdir(), "argus-link-"));
+  mkdirSync(join(dir, "subdir"));
+  writeFileSync(join(dir, "file.txt"), "");
+  symlinkSync(join(dir, "subdir"), join(dir, "link-to-dir"));
+  symlinkSync(join(dir, "file.txt"), join(dir, "link-to-file"));
+  const t = new MinimalTui({ model: "m" }, { initialCwd: dir });
+  t.width = 80;
+  t.inputBuffer = "@";
+  t.inputCursor = 1;
+  t.refreshSuggestions();
+  const plain = t.suggestionLines().map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
+
+  // Directories (real and via symlink) sort first and keep a trailing slash.
+  assert.deepEqual(t.suggestion.items.map((i) => i.label), [
+    "link-to-dir/",
+    "subdir/",
+    "file.txt",
+    "link-to-file",
+  ]);
+  assert.ok(plain.some((l) => l.includes("link-to-dir/")), "symlinked dir shows a trailing slash");
+  assert.ok(plain.some((l) => l.includes("subdir/")), "real dir shows a trailing slash");
+  assert.ok(plain.some((l) => l.includes("→ file.txt")), "file symlink shows its resolved target");
+  assert.ok(!plain.some((l) => l.includes("link-to-file.txt")), "symlink marker is never folded into the path");
+});
+
+test("/status and timing rows show real token usage", async () => {
+  const usage = { prompt_tokens: 1600, completion_tokens: 412, total_tokens: 2012, reasoning_tokens: 0, cached_tokens: 0 };
+  const t = new MinimalTui({ model: "m" });
+  t.lastTurnUsage = usage;
+  t.pushBlock({ kind: "timing", summary: "completed in 2.5s", durationMs: 2500, usage });
+  const lines = t.transcriptLines().map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
+  assert.ok(lines.some((l) => l.includes("2.5s") && l.includes("↑1.6K ↓412 tok")), "timing row shows usage");
+
+  await t.runCommand("/status");
+  assert.ok(t.blocks.at(-1).text.includes("↑1.6K ↓412 tok"), "/status shows last-turn usage");
 });
 
 test("Tab never completes plain text without an @ or / token", () => {

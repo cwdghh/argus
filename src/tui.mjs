@@ -27,8 +27,8 @@
  *   @ / slash        live suggestions; Up/Down + Tab to pick, Esc to dismiss
  */
 import { exec } from "node:child_process";
-import { readdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { readdirSync, realpathSync, statSync } from "node:fs";
+import { basename, resolve } from "node:path";
 import { promisify } from "node:util";
 import { runTurn } from "./agent.mjs";
 import { COMPACT_DEFAULTS, estimateChars } from "./compact.mjs";
@@ -86,26 +86,6 @@ const HELP_TEXT = `${COMMAND_HELP}\n\n${KEY_HELP}`;
 const MODE_COLOR = () => ({ idle: theme.dim, working: theme.accent, thinking: theme.think, aborting: theme.bad, confirm: theme.bad });
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-/** Format character count in human-readable form (e.g., "1.2K", "3.4M"). */
-function formatChars(n) {
-  if (n < 1000) return String(n);
-  if (n < 1_000_000) return (n / 1000).toFixed(1) + "K";
-  return (n / 1_000_000).toFixed(1) + "M";
-}
-
-/**
- * Compact token summary for the footer, e.g. "↑1.6K ↓120 tok".
- * `↑` = prompt (input) tokens, `↓` = completion (output) tokens, shown only
- * when the model reported reasoning tokens or cached prompt tokens.
- */
-function formatTokens(u) {
-  if (!u || !Number.isFinite(u.total_tokens)) return null;
-  const parts = [`↑${formatChars(u.prompt_tokens)}`, `↓${formatChars(u.completion_tokens)}`];
-  if (u.reasoning_tokens > 0) parts.push(`✶${formatChars(u.reasoning_tokens)}`);
-  if (u.cached_tokens > 0) parts.push(`≡${formatChars(u.cached_tokens)}`);
-  return parts.join(" ") + " tok";
-}
-
 import {
   styleText,
   stripAnsi,
@@ -114,6 +94,8 @@ import {
   truncateMiddle,
   truncateEnd,
   formatDuration,
+  formatChars,
+  formatTokens,
   summarize,
   markdownLines,
   blockLines,
@@ -546,7 +528,8 @@ export class MinimalTui {
         text:
           `## Status\n\n- Session: \`${this.sessionName ?? "none"}\`\n` +
           `- Model: \`${this.config.model}\`\n- Cwd: \`${this.cwd}\`\n` +
-          `- Last turn: ${this.lastTurnDurationMs == null ? "none yet" : formatDuration(this.lastTurnDurationMs)}\n` +
+          `- Last turn: ${this.lastTurnDurationMs == null ? "none yet" : formatDuration(this.lastTurnDurationMs)}` +
+          `${this.lastTurnUsage ? ` (${formatTokens(this.lastTurnUsage)})` : ""}\n` +
           `- Context window: ${ratio}% used (${contextChars.toLocaleString()} / ${compactAt.toLocaleString()} chars, compacts at threshold)\n` +
           `- Turns: ${turns}\n` +
           `- Limits: ${this.config.maxSteps ?? 100} model steps, ${this.config.maxRetries ?? 2} retries, ` +
@@ -696,7 +679,26 @@ export class MinimalTui {
               (prefix.startsWith(".") || !entry.name.startsWith(".")) &&
               entry.name.startsWith(prefix)
           )
-          .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name));
+          .map((entry) => {
+            // Resolve symlink targets at list time: a link to a directory
+            // sorts and completes as a directory, so Tab can descend into it.
+            let isDirectory = entry.isDirectory();
+            let symlinkTarget = null;
+            if (entry.isSymbolicLink()) {
+              try {
+                symlinkTarget = realpathSync(resolve(this.cwd, dirPart || ".", entry.name));
+                if (statSync(symlinkTarget).isDirectory()) isDirectory = true;
+              } catch {
+                symlinkTarget = null; // broken link: show like a plain file
+              }
+            }
+            return {
+              label: entry.name + (isDirectory ? "/" : ""),
+              isDirectory,
+              symlinkTarget,
+            };
+          })
+          .sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.label.localeCompare(b.label));
       } catch {
         this.suggestion = null;
         return;
@@ -705,10 +707,7 @@ export class MinimalTui {
         this.suggestion = null;
         return;
       }
-      const items = entries.map((entry) => ({
-        label: entry.name + (entry.isDirectory() ? "/" : ""),
-        isDirectory: entry.isDirectory(),
-      }));
+      const items = entries;
       this.suggestion = {
         kind: "path",
         items,
@@ -731,6 +730,13 @@ export class MinimalTui {
     s.selected = Math.max(0, Math.min(s.items.length - 1, s.selected + dir));
     this.dirtyRendered = true;
     return true;
+  }
+
+  /** Compact resolved symlink target for the popup: relative to cwd when inside. */
+  shortTarget(target) {
+    const root = this.cwd.replace(/\/+$/, "");
+    if (target.startsWith(root + "/")) return target.slice(root.length + 1);
+    return basename(target);
   }
 
   /**
@@ -797,10 +803,22 @@ export class MinimalTui {
     for (const [index, item] of w.shown.entries()) {
       const selected = w.start + index === s.selected;
       const marker = selected ? "▸" : " ";
-      const label = styleText(
-        truncateEnd(item.label, Math.max(1, width - 2)),
-        selected ? { fg: theme.accent, bold: true } : { fg: theme.text, dim: true }
-      );
+      const base = selected ? { fg: theme.accent, bold: true } : { fg: theme.text, dim: true };
+      let label;
+      if (s.kind === "path") {
+        // Dirs keep a muted trailing slash; symlinks get a muted arrow to their
+        // resolved target. Neither becomes part of the completed @path label.
+        const name = item.isDirectory ? item.label.slice(0, -1) : item.label;
+        const suffix = item.isDirectory
+          ? "/"
+          : item.symlinkTarget
+            ? ` → ${this.shortTarget(item.symlinkTarget)}`
+            : "";
+        const nameBudget = Math.max(1, width - 2 - dispWidth(suffix));
+        label = styleText(truncateEnd(name, nameBudget), base) + styleText(suffix, { fg: theme.dim });
+      } else {
+        label = styleText(truncateEnd(item.label, Math.max(1, width - 2)), base);
+      }
       let row = `${marker} ${label}`;
       if (item.description) {
         const pad = Math.max(1, maxLabel - dispWidth(item.label));
