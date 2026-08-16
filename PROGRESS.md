@@ -1,23 +1,56 @@
+#### 2026-08-16 — live suggestions for @path and /commands
+
+**Status: ✅ done**
+
+Typing now shows a live completion popup directly above the editor:
+
+- Type `/` at the start of a prompt and the local commands (\`/help\`,
+  \`/keys\`, \`/status\`, \`/sessions\`, \`/resume\`, \`/new\`, \`/exit\`,
+  \`/quit\`) appear; keep typing to filter.
+- Type \`@\` and files/directories relative to the session cwd appear; keep
+  typing to filter or Tab to descend into a directory. Dirs sort first and are
+  quoted automatically when they contain spaces.
+- Up/Down move the highlight (the highlighted command survives narrowing as you
+  type more); the popup scrolls once you arrow past the visible limit so the
+  selection is always on screen. The popup height is fixed: a single always-
+  present status row reports hidden matches (`↑ N` above, `↓ N` below) or the
+  match count when everything fits, instead of toggling extra lines. Tab
+  accepts, Esc dismisses without touching the input.
+- The popup hides when the token ends (space after a command, caret leaves the
+  @token, or a turn starts running). Ambiguous @ matches stay in the popup
+  instead of being dumped into the transcript on Tab. The slash-command table
+  is now a single source of truth that also generates \`/help\`.
+- README, \`docs/architecture.md\`, key help, and empty-state hints updated;
+  tests cover filtering, navigation, sticky selection, accepting via Tab,
+  popup layout/hiding, window scrolling, constant popup height, and
+  short-terminal visibility.
+
+Verification: 71 tests pass, \`node --check\` clean.
+
 #### 2026-08-13 — rail separators, thinking rails, colored tool bars, multiline editor
 
 **Note:** the WIP batch previously on disk (live timing, responsive header/
 footer, empty state, npm-link fix) was committed and pushed as
 `eec3a46`; the repo itself was also pushed to origin.
 
-**Status: 🚧 in progress**
+**Status: ✅ done**
 
 Goal: friendlier transcript and editor:
 
-- 🚧 "proper separation lines" between turns — replace the plain `─` divider
+- ✅ "proper separation lines" between turns — replace the plain `─` divider
   with a colored **rail** row (`│ theme.rail`) so turns are visibly separated.
-- 🚧 thinking marker `…` → a left rail (`│`) that runs down the thinking block,
+- ✅ thinking marker `…` → a left rail (`│`) that runs down the thinking block,
   comparable to ChatGPT-style rails.
-- 🚧 **different color vertical bars for tool calls** (`│ theme.tool` for the
+- ✅ **different color vertical bars for tool calls** (`│ theme.tool` for the
   `⚙` line and the wrapped result lines).
-- 🚧 **multiline editor input**: `Shift+Enter` inserts a newline, Enter submits,
+- ✅ **multiline editor input**: `Shift+Enter` inserts a newline, Enter submits,
   Up/Down stay bound to input history, and the editor grows upward above the
   footer (continuation rows prefixed with `│` rails).
-- documentation + tests updated as part of the change.
+- ✅ documentation + tests updated as part of the change.
+
+These landed in commits `945e9d5` (rail separators / tool bars) and
+`74a2f57` (multiline cursor positioning), then got the 2026-08-16 polish
+batch (footer, suggestions, token usage) on top.
 
 #### 2026-08-13 — readiness & polish pass (pre-dogfood)
 

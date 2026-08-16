@@ -54,8 +54,10 @@ for a logging UI or a web UI without touching the loop.
 The TUI handles its small control plane (`/help`, `/status`, `/sessions`,
 `/resume`, `/new`, `/exit`) before invoking the loop. Session switches replace
 the transcript, model history, input history, cwd, and writable session handle
-together. `@path` is deliberately not a parser-side expansion: Tab completes
-the path locally, then the model sees it as a reference and uses `read` visibly.
+together. Typing a bare `/` command or an `@path` token opens a live suggestion
+popup above the editor (Up/Down to highlight, Tab to accept, Esc to dismiss);
+`@path` is deliberately not a parser-side expansion — the path is completed
+locally, then the model sees it as a reference and uses `read` visibly.
 Elapsed phase/tool/turn timing is also TUI-owned; it needs no agent-protocol or
 tool changes, and completed turn timings persist as ordinary display blocks.
 

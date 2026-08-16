@@ -32,7 +32,7 @@ import { maybeCompact } from "./compact.mjs";
  * @param {string}  userMessage the new user prompt
  * @param {(event: object) => void} [onEvent] called with {type, ...} as things happen
  * @param {{ signal?: AbortSignal }} [opts]
- * @returns {Promise<{ messages: Array, finalText: string, aborted: boolean, cwd: string }>}
+ * @returns {Promise<{ messages: Array, finalText: string, aborted: boolean, cwd: string, usage: object|null }>}
  */
 export async function runTurn(config, history, userMessage, onEvent = () => {}, opts = {}) {
   const { signal } = opts;
@@ -46,6 +46,31 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
   // Everything created during this turn (assistant replies + tool results).
   const turnMessages = [{ role: "user", content: userMessage }];
   onEvent({ type: "user", text: userMessage });
+
+  // Cumulative token usage across all model calls in this turn. Providers
+  // return per-request usage (prompt + completion tokens); we sum them so the
+  // UI can show what the whole turn actually cost. `null` until first seen.
+  let usage = null;
+  const addUsage = (u) => {
+    if (!u || typeof u !== "object") return;
+    const n = (v) => (Number.isFinite(v) ? v : 0);
+    if (!usage) {
+      usage = {
+        prompt_tokens: n(u.prompt_tokens),
+        completion_tokens: n(u.completion_tokens),
+        total_tokens: n(u.total_tokens),
+        reasoning_tokens: n(u.completion_tokens_details?.reasoning_tokens),
+        cached_tokens: n(u.prompt_tokens_details?.cached_tokens),
+      };
+    } else {
+      usage.prompt_tokens += n(u.prompt_tokens);
+      usage.completion_tokens += n(u.completion_tokens);
+      usage.total_tokens += n(u.total_tokens);
+      usage.reasoning_tokens += n(u.completion_tokens_details?.reasoning_tokens);
+      usage.cached_tokens += n(u.prompt_tokens_details?.cached_tokens);
+    }
+    onEvent({ type: "usage", usage });
+  };
 
   // Keep the model context within the window: drop the oldest turns and replace
   // them with a compact summary when the history grows too large.
@@ -61,18 +86,19 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
         throw new Error(`agent stopped after ${maxSteps} model steps (ARGUS_MAX_STEPS)`);
       }
       steps++;
-      const { message: reply, finishReason } = await streamAssistant(
+      const { message: reply, finishReason, usage: stepUsage } = await streamAssistant(
         config,
         [...sendHistory, ...turnMessages],
         toolList,
         onEvent,
         signal
       );
+      addUsage(stepUsage);
 
       // If the turn was aborted mid-stream, the assistant reply may be incomplete
       // (or contain partial tool_calls), so don't push it into the conversation.
       if (signal?.aborted) {
-        return { messages: turnMessages, finalText: "", aborted: true, cwd };
+        return { messages: turnMessages, finalText: "", aborted: true, cwd, usage };
       }
 
       if (finishReason === "length") {
@@ -86,7 +112,7 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
       if (toolCalls.length === 0) {
         // No tools requested -> the model gave its final answer.
         onEvent({ type: "assistant_end", text: reply.content ?? "" });
-        return { messages: turnMessages, finalText: reply.content ?? "", aborted: false, cwd };
+        return { messages: turnMessages, finalText: reply.content ?? "", aborted: false, cwd, usage };
       }
 
       // Execute each requested tool call and feed the result back as a
@@ -138,7 +164,7 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
 
         // Stop early if aborted (e.g. while a tool was running).
         if (signal?.aborted) {
-          return { messages: turnMessages, finalText: "", aborted: true, cwd };
+          return { messages: turnMessages, finalText: "", aborted: true, cwd, usage };
         }
       }
       // Loop again: the model now sees the tool results and can continue.
@@ -148,6 +174,7 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
     // that completed audit trail so sessions and subsequent turns stay honest.
     err.turnMessages = turnMessages;
     err.cwd = cwd;
+    err.usage = usage;
     throw err;
   }
 }
@@ -194,6 +221,7 @@ async function streamAssistant(config, messages, toolList, onEvent, signal) {
   });
   let message = null;
   let finishReason = null;
+  let usage = null;
   for await (const ev of stream) {
     if (ev.type === "text_delta") {
       onEvent({ type: "text_delta", delta: ev.delta });
@@ -202,6 +230,7 @@ async function streamAssistant(config, messages, toolList, onEvent, signal) {
     } else if (ev.type === "done") {
       message = ev.message;
       finishReason = ev.finishReason;
+      usage = ev.usage ?? null;
     }
   }
   if (!message) throw new Error("model returned no message");
@@ -209,5 +238,5 @@ async function streamAssistant(config, messages, toolList, onEvent, signal) {
     throw new Error("model returned an empty response");
   }
   onEvent({ type: "assistant_stop" });
-  return { message, finishReason };
+  return { message, finishReason, usage };
 }

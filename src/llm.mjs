@@ -28,7 +28,9 @@ function buildBody({ model, systemPrompt, messages, tools, stream }) {
       },
     })),
     tool_choice: "auto",
-    ...(stream ? { stream: true } : {}),
+    ...(stream
+      ? { stream: true, stream_options: { include_usage: true } }
+      : {}),
   };
 }
 
@@ -135,7 +137,7 @@ async function readWithIdleTimeout(reader, idleTimeoutMs, signal) {
 }
 
 /**
- * One-shot chat. Returns the assistant message object.
+ * One-shot chat. Returns the assistant message object and usage stats.
  */
 export async function chat({ baseUrl, apiKey, model, systemPrompt, messages, tools, signal, requestTimeoutMs, maxRetries }) {
   const body = buildBody({ model, systemPrompt, messages, tools, stream: false });
@@ -151,13 +153,13 @@ export async function chat({ baseUrl, apiKey, model, systemPrompt, messages, too
   }
   const choice = data.choices?.[0];
   if (!choice) throw new Error("LLM response had no choices");
-  return choice.message;
+  return { message: choice.message, usage: data.usage ?? null };
 }
 
 /**
  * Streaming chat. Yields:
  *   { type: "text_delta", delta }          as text arrives
- *   { type: "done", message, finishReason } at the end
+ *   { type: "done", message, finishReason, usage } at the end
  *
  * Tool calls are streamed in pieces (id + name + chunks of arguments); we
  * aggregate them and emit them only in the `done` event, fully assembled.
@@ -185,6 +187,7 @@ export async function* streamChat({
   const body = buildBody({ model, systemPrompt, messages, tools, stream: true });
   let content = "";
   let finishReason = null;
+  let usage = null;
   const toolCalls = new Map(); // index -> { id, name, arguments }
   let timeoutSignal = null;
   const idleTimeoutMs = streamIdleTimeoutMs ?? 60_000;
@@ -212,6 +215,7 @@ export async function* streamChat({
           yield {
             type: "done",
             finishReason,
+            usage,
             message: assembleMessage(content, toolCalls),
           };
           return;
@@ -223,6 +227,12 @@ export async function* streamChat({
         } catch {
           continue; // ignore partial/heartbeat lines
         }
+
+        // Capture usage from the final chunk (when stream_options.include_usage is true)
+        if (json.usage) {
+          usage = json.usage;
+        }
+
         const choice = json.choices?.[0];
         if (!choice) continue;
         if (choice.finish_reason) finishReason = choice.finish_reason;
@@ -253,6 +263,7 @@ export async function* streamChat({
     yield {
       type: "done",
       finishReason,
+      usage,
       message: assembleMessage(content, toolCalls),
     };
   } catch (err) {
@@ -263,7 +274,7 @@ export async function* streamChat({
       throw err;
     }
     if (signal?.aborted || err?.name === "AbortError") {
-      yield { type: "done", aborted: true, finishReason, message: assembleMessage(content, toolCalls) };
+      yield { type: "done", aborted: true, finishReason, usage, message: assembleMessage(content, toolCalls) };
       return;
     }
     throw err;

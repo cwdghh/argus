@@ -40,7 +40,7 @@ test("footer: mode on the left, no 'mode' prefix, meta right-aligned", () => {
   const f = strip(t.footer());
   assert.ok(f.startsWith("working"), "mode should be first");
   assert.ok(!f.includes("mode working"), "no 'mode ' prefix");
-  assert.ok(f.includes("model mock-model"), "model present");
+  assert.ok(f.includes("mock-model"), "model present");
   assert.ok(f.includes("git main"), "git present");
   assert.ok(f.includes("/workspace/argus"), "ANSI bytes must not crowd out the working directory");
   assert.ok(f.length <= 100, "footer should fit the terminal width");
@@ -192,6 +192,204 @@ test("Tab completes only @path tokens and preserves surrounding input", () => {
   t.inputCursor = t.inputBuffer.length;
   t.completePath();
   assert.equal(t.inputBuffer, 'Review @"space dir/file name.txt" ');
+});
+
+test("live suggestions: /commands filter, navigate, Tab accepts, Esc dismisses", () => {
+  const t = new MinimalTui({ model: "m" });
+  t.width = 80;
+
+  t.insertText("/re");
+  assert.equal(t.suggestion?.kind, "slash");
+  assert.deepEqual(t.suggestion.items.map((i) => i.label), ["/resume"]);
+
+  t.insertText("\t"); // Tab accepts the highlighted command
+  assert.equal(t.inputBuffer, "/resume ");
+  assert.equal(t.suggestion, null, "a completed command leaves no popup");
+
+  t.inputBuffer = "/";
+  t.inputCursor = 1;
+  t.refreshSuggestions();
+  assert.equal(t.suggestion.items.length, 8);
+  t.runAction({ type: "down" });
+  t.runAction({ type: "down" });
+  assert.equal(t.suggestion.selected, 2, "arrow keys move the highlight");
+  t.insertText("\t");
+  assert.equal(t.inputBuffer, "/status ", "Tab accepts the moved highlight");
+
+  // Typing more shrinks the list but keeps the highlighted command.
+  t.inputBuffer = "/";
+  t.inputCursor = 1;
+  t.refreshSuggestions();
+  t.runAction({ type: "down" });
+  t.runAction({ type: "down" });
+  t.insertText("s");
+  assert.deepEqual(t.suggestion.items.map((i) => i.label), ["/status", "/sessions"]);
+  assert.equal(t.suggestion.selected, 0, "highlight follows the previously selected command");
+  t.insertText("e");
+  assert.deepEqual(t.suggestion.items.map((i) => i.label), ["/sessions"]);
+
+  // A space ends the bare-command token, so the popup hides.
+  t.inputBuffer = "/re";
+  t.inputCursor = 3;
+  t.insertText(" ");
+  assert.equal(t.suggestion, null);
+  assert.equal(t.inputBuffer, "/re ");
+
+  // Esc dismisses the popup without touching the input.
+  t.inputBuffer = "/";
+  t.inputCursor = 1;
+  t.refreshSuggestions();
+  t.runAction({ type: "escape" });
+  assert.equal(t.suggestion, null);
+  assert.equal(t.inputBuffer, "/");
+});
+
+test("live suggestions: @path list follows the caret and Tab accepts entries", () => {
+  const dir = mkdtempSync(join(tmpdir(), "argus-suggest-"));
+  mkdirSync(join(dir, "src"));
+  mkdirSync(join(dir, "lib"));
+  writeFileSync(join(dir, "src", "agent.mjs"), "");
+  writeFileSync(join(dir, "src", "cli.mjs"), "");
+  writeFileSync(join(dir, "lib", "reader.mjs"), "");
+  const t = new MinimalTui({ model: "m" }, { initialCwd: dir });
+  t.width = 80;
+
+  t.insertText("read ");
+  assert.equal(t.suggestion, null);
+  t.insertText("@sr");
+  assert.equal(t.suggestion?.kind, "path");
+  assert.deepEqual(t.suggestion.items.map((i) => i.label), ["src/"], "dirs sort first and filter by prefix");
+
+  t.insertText("\t"); // accept src/ so the token points into the real dir
+  assert.equal(t.inputBuffer, "read @src/", "Tab fills the directory");
+  t.insertText("ag");
+  assert.deepEqual(t.suggestion.items.map((i) => i.label), ["agent.mjs"]);
+  t.insertText("\t");
+  assert.equal(t.inputBuffer, "read @src/agent.mjs ", "Tab fills the file and closes the token");
+
+  t.inputBuffer = "read @li";
+  t.inputCursor = t.inputBuffer.length;
+  t.refreshSuggestions();
+  assert.deepEqual(t.suggestion.items.map((i) => i.label), ["lib/"]);
+  t.insertText("\t"); // accept the directory, opening it for descent
+  t.insertText("r");
+  assert.deepEqual(t.suggestion.items.map((i) => i.label), ["reader.mjs"]);
+  t.runAction({ type: "escape" });
+  assert.equal(t.suggestion, null);
+
+  // No popup for a plain slash or an @token that is not at the caret end.
+  t.inputBuffer = "read @src/agent.mjs and keep typing";
+  t.inputCursor = t.inputBuffer.length;
+  t.refreshSuggestions();
+  assert.equal(t.suggestion, null);
+});
+
+test("suggestion popup renders above the editor and hides while working", () => {
+  const t = new MinimalTui({ model: "mock-model" });
+  t.width = 60;
+  t.height = 24;
+  t.inputBuffer = "/";
+  t.inputCursor = 1;
+  t.refreshSuggestions();
+
+  const frame = t.buildFrame();
+  const plain = frame.map((r) => r.replace(/\x1b\[[0-9;]*m/g, ""));
+  assert.ok(plain.includes("commands"), "popup header labels slash suggestions");
+  assert.ok(plain.some((line) => line.includes("▸ /help")), "selected suggestion is marked");
+  assert.ok(plain[22] === "❯ /", "editor stays in its own row");
+  assert.ok(plain[23].startsWith("idle"), "footer stays at the bottom");
+
+  t.mode = "working";
+  t.refreshSuggestions();
+  assert.equal(t.suggestion, null, "no popup while a turn is running");
+});
+
+test("suggestion popup scrolls when Up/Down move past the visible limit", () => {
+  const dir = mkdtempSync(join(tmpdir(), "argus-scroll-"));
+  for (const name of ["a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "b0"]) {
+    writeFileSync(join(dir, name), "");
+  }
+  const t = new MinimalTui({ model: "m" }, { initialCwd: dir });
+  t.width = 60;
+  t.height = 24;
+  t.inputBuffer = "@";
+  t.inputCursor = 1;
+  t.refreshSuggestions();
+  const plain = () => t.buildFrame().map((r) => r.replace(/\x1b\[[0-9;]*m/g, ""));
+
+  let frame = plain();
+  assert.equal(t.suggestion.items.length, 11);
+  assert.ok(frame.some((line) => line.includes("▸ a0")), "the first match is highlighted");
+  assert.ok(frame.some((line) => line.includes("↓ 3 more")), "the status row says how many are hidden below");
+  assert.ok(!frame.some((line) => line.includes("a8")), "a8 is past the first window");
+
+  for (let i = 0; i < 8; i++) t.runAction({ type: "down" });
+  frame = plain();
+  assert.equal(t.suggestion.selected, 8);
+  assert.ok(frame.some((line) => line.includes("▸ a8")), "the highlight follows the selection past the limit");
+  assert.ok(!frame.some((line) => line.includes("▸ a0")), "scrolled rows leave the window");
+
+  for (let i = 0; i < 2; i++) t.runAction({ type: "down" });
+  frame = plain();
+  assert.equal(t.suggestion.selected, 10);
+  assert.ok(frame.some((line) => line.includes("▸ b0")), "the last match is shown at the bottom");
+  assert.ok(frame.some((line) => line.includes("↑ 3 more")), "scrolling down reveals how many are above");
+  assert.ok(!frame.some((line) => line.includes("↓")), "no down arrow when the window ends at the list end");
+
+  for (let i = 0; i < 5; i++) t.runAction({ type: "up" });
+  frame = plain();
+  assert.equal(t.suggestion.selected, 5);
+  assert.ok(frame.some((line) => line.includes("▸ a5")), "highlight stays visible arrowing back up");
+});
+
+test("suggestion popup keeps a constant height while scrolling", () => {
+  const dir = mkdtempSync(join(tmpdir(), "argus-const-"));
+  for (const name of ["a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "b0", "b1", "b2"]) {
+    writeFileSync(join(dir, name), "");
+  }
+  const t = new MinimalTui({ model: "m" }, { initialCwd: dir });
+  t.width = 60;
+  t.height = 24;
+  t.inputBuffer = "@";
+  t.inputCursor = 1;
+  t.refreshSuggestions();
+
+  const heights = [];
+  for (let i = 0; i < t.suggestion.items.length; i++) {
+    heights.push(t.suggestionLines().length);
+    t.runAction({ type: "down" });
+  }
+  assert.ok(heights.length > 1, "the list is long enough to scroll");
+  assert.equal(new Set(heights).size, 1, "the popup height never changes while arrowing");
+
+  const frame = t.buildFrame().map((r) => r.replace(/\x1b\[[0-9;]*m/g, ""));
+  assert.ok(frame.some((l) => l.includes("↑")), "hidden-above count lives in the fixed status row");
+});
+
+test("suggestion popup keeps the highlight visible on short terminals", () => {
+  const dir = mkdtempSync(join(tmpdir(), "argus-short-"));
+  for (let i = 0; i < 15; i++) writeFileSync(join(dir, `f${String(i).padStart(2, "0")}`), "");
+  const t = new MinimalTui({ model: "m" }, { initialCwd: dir });
+  t.width = 60;
+  t.height = 8;
+  t.inputBuffer = "@";
+  t.inputCursor = 1;
+  t.refreshSuggestions();
+
+  for (let i = 0; i < 14; i++) t.runAction({ type: "down" });
+  const frame = t.buildFrame().map((r) => r.replace(/\x1b\[[0-9;]*m/g, ""));
+  assert.equal(t.suggestion.selected, 14);
+  assert.ok(frame.some((line) => line.includes("▸ f14")), "the highlighted row is never clipped");
+  assert.ok(frame.some((line) => line.includes("↑")), "the popup says items are hidden above");
+});
+
+test("Tab never completes plain text without an @ or / token", () => {
+  const t = new MinimalTui({ model: "m" });
+  t.inputBuffer = "Review src/ag";
+  t.inputCursor = t.inputBuffer.length;
+  t.insertText("\t");
+  assert.equal(t.inputBuffer, "Review src/ag");
+  assert.equal(t.suggestion, null);
 });
 
 test("bracketed multiline paste becomes one editor input", () => {

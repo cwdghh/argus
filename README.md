@@ -1,8 +1,10 @@
 # argus — a minimal terminal coding agent
 
 A tiny, **dependency-free** terminal coding agent built to understand how agents
-work. It is a deliberately stripped-down mirror of the tool-calling loop in
-[pi](https://github.com/earendil-works/pi) (cloned into `references/pi`).
+work. Argus is a standalone project: a small tool-calling loop around a language
+model — call the model, run the tools it requests, repeat. No build step, no
+dependencies; the whole thing fits in a handful of files under `src/`, written
+to be read end to end.
 
 ## Run it
 
@@ -22,24 +24,27 @@ Optional: run `npm link` once to make the shorter `argus` command available
 from any directory. It still uses this checkout, so your local updates apply
 immediately.
 
-Defaults already point at Alibaba Cloud DashScope with the `deepseek-v4-flash-0731`
-model, so with just an API key it works out of the box.
+Defaults already point at Alibaba Cloud DashScope with the
+`deepseek-v4-flash-0731` model, so with just an API key it works out of the box.
 
 ### Configuration
 
 Env vars are read from your shell and from `.env` (loaded automatically if it
 exists). `.env` is gitignored; `.env.example` is the committed template.
 
-| Variable           | Default                                    | Purpose                          |
-|--------------------|--------------------------------------------|----------------------------------|
-| `ARGUS_API_KEY`    | empty                                       | API key for DashScope/custom endpoints |
-| `ARGUS_BASE_URL`   | `https://dashscope.aliyuncs.com/compatible-mode/v1` | Base URL of the chat endpoint |
-| `ARGUS_MODEL`      | `deepseek-v4-flash-0731`                   | Model identifier                 |
-| `ARGUS_SYSTEM_PROMPT` | built-in coding-agent prompt            | System prompt                    |
-| `ARGUS_REQUEST_TIMEOUT_MS` | `120000`                           | Overall timeout per model request |
-| `ARGUS_MAX_RETRIES` | `2`                                        | Retries for 408/429/5xx/network failures |
-| `ARGUS_MAX_STEPS`  | `25`                                       | Maximum model calls in one turn  |
-| `ARGUS_MAX_TOOL_RESULT_CHARS` | `50000`                        | Maximum characters returned by one tool |
+| Variable | Default | Purpose |
+|---|---|---|
+| `ARGUS_API_KEY` | empty | API key for DashScope/custom endpoints |
+| `ARGUS_BASE_URL` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | Base URL of the chat endpoint |
+| `ARGUS_MODEL` | `deepseek-v4-flash-0731` | Model identifier |
+| `ARGUS_SYSTEM_PROMPT` | built-in coding-agent prompt | System prompt |
+| `ARGUS_REQUEST_TIMEOUT_MS` | `300000` | Overall timeout per model request (long default helps reasoning models) |
+| `ARGUS_STREAM_IDLE_TIMEOUT_MS` | `60000` | Streaming idle timeout; resets on each chunk |
+| `ARGUS_MAX_RETRIES` | `2` | Retries for 408/429/5xx/network failures |
+| `ARGUS_MAX_STEPS` | `100` | Maximum model calls in one turn |
+| `ARGUS_MAX_TOOL_RESULT_CHARS` | `50000` | Maximum characters returned by one tool |
+| `ARGUS_COMPACT_AT` | `300000` | History size (chars) that triggers compaction |
+| `ARGUS_COMPACT_KEEP` | `8` | Recent turns kept intact when compacting |
 
 You can point it at any OpenAI-compatible endpoint (OpenAI, Ollama, LM Studio,
 vLLM, LiteLLM, …). Example with a local model:
@@ -58,26 +63,29 @@ A minimal, dependency-free terminal UI (raw-mode input + ANSI escapes). Fixed
 layout: header, scrollable transcript, a bottom **editor**, and a **footer**.
 
 ```text
-┌──────────────────────────────────────────────────────────────┐
-│ argus  ·  minimal coding agent                               │
-├──────────────────────────────────────────────────────────────┤
-│ ❯ list the files here                                       │
-│ … I need to figure out what to run.                          │  thinking (muted)
-│ ## Result                                                    │  markdown heading
-│ Here is **bold** and `code`.                                │  markdown inline
-│   ⚙ bash({"command":"ls -la"})                               │  tool call
-│   ✓ stdout: src                                              │  tool result
-│ This directory contains …                                    │
-├──────────────────────────────────────────────────────────────┤
-│ ❯ type here… (caret tracks Left/Right/backspace/delete)      │
-├──────────────────────────────────────────────────────────────┤
-│ ⠹ thinking 3.2s  model deepseek-v4-flash-0731 · /path/…/argus · git main ✓ │
-└──────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│argus  ·  rogue                                                                                     │
+│────────────────────────────────────────────────────────────────────────────────────────────────────│
+│❯ list the files here                                                                               │
+│                                                                                                    │
+││ I need to figure out what to run.                                                                 │
+│                                                                                                    │
+││ ⚙ bash({"command":"ls -la"})                                                                      │
+││ ✓ stdout: src                                                                                     │
+│This directory contains src/, test/, and docs.                                                      │
+│                                                                                                    │
+│────────────────────────────────────────────────────────────────────────────────────────────────────│
+│❯ Describe a task…  (/help for commands)                                                            │
+│────────────────────────────────────────────────────────────────────────────────────────────────────│
+│idle · last 12s  git main ~2 · deepseek-v4-flash-0731 · 0% 300.0K · ↑1.6K ↓412 tok · /User…rgus     │
+└────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 - **Markdown rendering** for assistant replies: headings, bold/italic, inline +
   fenced code, lists, quotes.
-- **Thinking / reasoning** is shown (muted, italic) when the model emits it.
+- **Block rails and separators** make the transcript scannable: thinking, tool
+  calls, and tool results are visually grouped, and each turn gets a divider.
+- **Thinking / reasoning** is shown (muted, italic) while the model emits it.
 - **Live working time** follows the current phase (`working`, `thinking`,
   confirmation, or aborting); completed turns and tool calls keep their timing
   in the transcript, and `/status` reports the last turn.
@@ -85,13 +93,18 @@ layout: header, scrollable transcript, a bottom **editor**, and a **footer**.
 - **Scrollable history**: mouse wheel to scroll; PgUp/PgDn (pages), Home/End
   (top/bottom). The header shows when you are away from the latest output.
 - **Up/Down** navigate past inputs (input history) in the editor.
-- **Editor stays at the bottom**; the caret follows Left/Right/backspace/delete.
+- **Multiline editing**: Shift+Enter inserts a soft line break; the caret
+  tracks double-width characters and wraps within the terminal width.
 - **Familiar terminal editing**: Ctrl-A/E moves to start/end, Ctrl-U/K deletes
   to start/end, Ctrl-W deletes the previous word, and Ctrl-L redraws.
-- **Responsive footer** shows phase, elapsed time, model, current path, and git
-  status; lower-priority details collapse cleanly on narrow terminals.
+- **Responsive footer** shows phase + elapsed time, git status, model, context
+  window usage (percent of the compaction budget), live token usage (`↑` input /
+  `↓` output, plus `✶` reasoning and `≡` cached when the provider reports them),
+  and the current path — lower-priority details collapse cleanly on narrow
+  terminals.
 - **Helpful empty state and editor hints** make commands, `@path` references,
-  completion, and interruption discoverable without opening the manual first.
+  live suggestions, completion, and interruption discoverable without opening
+  the manual first.
 - **Ctrl-C during a turn aborts it** (second Ctrl-C force-quits); Ctrl-C when
   idle quits. Esc also aborts a running turn. Ctrl-D deletes at the cursor, or
   quits when the editor is empty.
@@ -106,7 +119,7 @@ Slash commands are handled by the TUI itself, without calling the model:
 |---------|--------|
 | `/help` | Show commands and keyboard shortcuts |
 | `/keys` | Show the keyboard-shortcut reference |
-| `/status` | Show session, model, cwd, context usage, and reliability limits |
+| `/status` | Show session, model, cwd, context-window usage, and reliability limits |
 | `/sessions` | List up to 20 recent sessions with their last prompt |
 | `/resume <name>` | Switch to a saved session without restarting |
 | `/new` | Start a fresh session without restarting |
@@ -120,9 +133,19 @@ Review @src/agent.mjs and explain its failure modes.
 
 Argus does not inject the file eagerly. The built-in prompt tells the model to
 use `read`, keeping access visible and letting normal tool-result limits apply.
-Press Tab while the caret is after an `@path` token to complete files and
-directories relative to the session cwd. Paths containing spaces are quoted
-automatically; ambiguous matches are shown locally.
+
+Typing shows live suggestions in a popup just above the editor:
+
+- `/` lists the local commands; keep typing to filter.
+- `@` lists files and directories relative to the session cwd; keep typing to
+  filter or Tab to descend into a directory.
+- Up/Down move the highlight; the window scrolls once you arrow past the
+  visible limit without ever changing the popup's height. A fixed status row
+  reports the hidden matches (`↑ N` above, `↓ N` below) or the match count
+  when everything fits. Tab accepts the highlighted suggestion, and Esc
+  dismisses the popup without touching your input.
+- Paths containing spaces are quoted automatically; quoted and unquoted
+  `@path` tokens complete the same way.
 
 ## Sessions & persistence
 
@@ -154,8 +177,12 @@ The whole agent lives in a few small files:
 | `src/llm.mjs` | OpenAI-compatible chat client, incl. **streaming** + thinking |
 | `src/tools.mjs` | Tool schemas + implementations (`read`, `write`, `edit`, `bash`) |
 | `src/agent.mjs` | **The loop**: call LLM → run requested tools → repeat |
-| `src/tui.mjs` | Minimal dependency-free terminal UI |
-| `src/main.mjs` | Entry point |
+| `src/compact.mjs` | Context compaction (auto-summarize old turns) |
+| `src/session.mjs` | Append-only JSONL session persistence |
+| `src/headless.mjs` | One-shot CLI mode (no TUI) |
+| `src/tui.mjs` + `src/tui/renderers.mjs` | Dependency-free TUI (frame/input logic + pure renderers) |
+| `src/theme.mjs` | Colors / styling tokens, auto light-dark detection |
+| `src/main.mjs` | Entry point / CLI |
 | `docs/` | Architecture, tool contract, self-updating guide |
 
 ### The core loop (`src/agent.mjs`)
@@ -205,12 +232,13 @@ with untrusted repositories.
 
 ## Context
 
-Long sessions eventually overflow the model’s context window. argus compacts
-automatically: when history passes a budget (default 300k chars, ~= 75k tokens)
-the oldest turns are replaced by a short summary and the most recent
-`ARGUS_COMPACT_KEEP` (default 8) turns are kept. Full messages stay in the
-session file, so the original requests remain reconstructable. Tune with
-`ARGUS_COMPACT_AT` (chars) and `ARGUS_COMPACT_KEEP`.
+Long sessions eventually overflow the model's context window. argus compacts
+automatically: when the estimated history size passes the `ARGUS_COMPACT_AT`
+budget (default 300k chars) the oldest turns are replaced by a short summary and
+the most recent `ARGUS_COMPACT_KEEP` (default 8) turns are kept intact. Full
+messages stay in the session file, so the original requests remain
+reconstructable. The footer shows how much of that budget the active session
+is using.
 
 Individual tool results are capped at `ARGUS_MAX_TOOL_RESULT_CHARS`; oversized
 results include a marked preview so the model can retry with a narrower read or
@@ -221,49 +249,49 @@ command instead of overflowing the active turn.
 Argus can modify its own source — that's the point of the docs. Start with
 `AGENTS.md` and `docs/self-updating.md`.
 
-## How it maps to pi
+## Acknowledgements
 
-The reference project is far richer, but every piece here has a direct analogue:
-
-| This project | pi |
-|--------------|-----|
-| `src/agent.mjs` loop | `packages/agent/src/agent-loop.ts` (`runLoop`) |
-| `src/tools.mjs` (`read`/`write`/`edit`/`bash`) | `packages/agent/src/harness/tools/*.ts` |
-| `src/llm.mjs` | `packages/ai` (multi-provider `Message[]` transport) |
-| system prompt | `packages/agent/src/harness/system-prompt.ts` |
-| `src/tui.mjs` | `packages/tui` + `packages/coding-agent` CLI |
-
-Things pi still adds beyond argus (see `GAPS.md`): a comprehensive permission
-system, parallel tool execution, richer context management, and a native
-multi-provider abstraction layer.
+Argus stands on its own now, but it grew out of studying
+[pi](https://github.com/earendil-works/pi), a far richer terminal coding agent
+that made a great reference for how a tool-calling agent is put together. The
+loop, the tool harness (`read`/`write`/`edit`/`bash`), the streaming LLM
+transport, and the TUI all re-implement a deliberately smaller slice of pi's
+ideas from scratch in this one dependency-free codebase. Thanks to pi and its
+maintainers for the design that got argus started. See `GAPS.md` for where argus
+intentionally stays simpler.
 
 ## Files
 
 ```
 argus/
-  package.json       # start script (loads .env if present)
-  README.md          # this file
-  PROGRESS.md        # running log of what we've done
-  GAPS.md            # reference: where argus stands vs a production agent
-  AGENTS.md          # rules for working with/updating argus
-  .env.example       # committed template for local secrets
-  .gitignore         # ignores .env, node_modules, references/pi/, etc.
+  package.json          # start/test scripts (loads .env if present)
+  README.md             # this file
+  PROGRESS.md           # running log of what we've done
+  GAPS.md               # open design questions & where argus stays simple
+  NEXT_STEPS.md         # candidate next directions (planning reference)
+  REFACTOR_PLAN.md      # refactor notes
+  AGENTS.md             # rules for working with/updating argus
+  .env.example          # committed template for local secrets
+  .gitignore            # ignores .env, node_modules, scratch dirs, etc.
   src/
-    main.mjs
-    session.mjs
-    tui.mjs
-    agent.mjs
-    llm.mjs
-    tools.mjs
-    theme.mjs
-    config.mjs
+    main.mjs            # entry point / CLI
+    config.mjs          # env-driven configuration
+    llm.mjs             # streaming OpenAI-compatible chat client
+    tools.mjs           # read / write / edit / bash
+    agent.mjs           # the tool-calling loop
+    compact.mjs         # context compaction
+    session.mjs         # JSONL session persistence
+    headless.mjs        # one-shot mode without the TUI
+    theme.mjs           # colors / styling tokens
+    tui.mjs             # terminal UI (frame + input handling)
+    tui/renderers.mjs   # pure rendering helpers
   docs/
     architecture.md
     tools.md
     self-updating.md
-  references/
-    pi/              # the pi reference clone (gitignored)
-    *.md             # API reference docs
+  test/
+    *.test.mjs          # node:test suites (scripted mock LLM server)
+    helpers/mock-llm.mjs
 ```
 
 ## Headless one-shot
@@ -290,5 +318,6 @@ edits safely without a real API:
 npm test
 ```
 
-Covers the agent loop (tools, abort, persistent cwd), headless mode, session
-round-trip, and TUI rendering/navigation.
+Covers the agent loop (tools, abort, persistent cwd), context compaction,
+headless mode, session round-trip, safety gates, retry/reliability behaviour,
+and TUI rendering and navigation.

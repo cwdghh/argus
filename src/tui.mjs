@@ -24,6 +24,7 @@
  *   Ctrl-D           delete at cursor / quit on empty input
  *   Shift+Enter      insert a newline (Enter submits)
  *   /help             show local commands
+ *   @ / slash        live suggestions; Up/Down + Tab to pick, Esc to dismiss
  */
 import { exec } from "node:child_process";
 import { readdirSync } from "node:fs";
@@ -36,15 +37,24 @@ import { theme, setTheme } from "./theme.mjs";
 const execAsync = promisify(exec);
 const ESC = "\x1b";
 const RESET = `${ESC}[0m`;
+const SUGGESTION_ROWS = 8;
+/**
+ * Local slash commands, in the order they are suggested. One source of truth:
+ * the same table drives the in-editor suggestion popup and `/help`.
+ */
+const SLASH_COMMANDS = [
+  { name: "/help", description: "show commands and keyboard shortcuts" },
+  { name: "/keys", description: "show keyboard shortcuts" },
+  { name: "/status", description: "show the active session, model, cwd, context, and limits" },
+  { name: "/sessions", description: "list recent saved sessions" },
+  { name: "/resume", description: "switch to a saved session" },
+  { name: "/new", description: "start a fresh session without restarting Argus" },
+  { name: "/exit", description: "quit Argus" },
+  { name: "/quit", description: "quit Argus (same as /exit)" },
+];
 const COMMAND_HELP = `## Local commands
 
-- /help — show commands and keyboard shortcuts
-- /keys — show keyboard shortcuts
-- /status — show the active session, model, cwd, context, and limits
-- /sessions — list recent saved sessions
-- /resume <name> — switch to a saved session
-- /new — start a fresh session without restarting Argus
-- /exit or /quit — quit Argus`;
+${SLASH_COMMANDS.map((c) => `- ${c.name}${c.name === "/resume" ? " <name>" : ""} — ${c.description}`).join("\n")}`;
 
 const KEY_HELP = `## Keyboard shortcuts
 
@@ -55,8 +65,8 @@ const KEY_HELP = `## Keyboard shortcuts
 - Backspace / Delete — delete before / under the cursor
 - Ctrl-U / Ctrl-K — delete to the start / end
 - Ctrl-W — delete the previous word
-- Up / Down — recall earlier prompts; in multiline input, move the caret
-- Tab — complete an @path file reference
+- Up / Down — move through the suggestion popup; recall earlier prompts otherwise
+- Tab — accept the suggested @path or /command
 - Shift+Enter — insert a newline
 - Enter — submit
 
@@ -75,6 +85,26 @@ const KEY_HELP = `## Keyboard shortcuts
 const HELP_TEXT = `${COMMAND_HELP}\n\n${KEY_HELP}`;
 const MODE_COLOR = () => ({ idle: theme.dim, working: theme.accent, thinking: theme.think, aborting: theme.bad, confirm: theme.bad });
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/** Format character count in human-readable form (e.g., "1.2K", "3.4M"). */
+function formatChars(n) {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return (n / 1000).toFixed(1) + "K";
+  return (n / 1_000_000).toFixed(1) + "M";
+}
+
+/**
+ * Compact token summary for the footer, e.g. "↑1.6K ↓120 tok".
+ * `↑` = prompt (input) tokens, `↓` = completion (output) tokens, shown only
+ * when the model reported reasoning tokens or cached prompt tokens.
+ */
+function formatTokens(u) {
+  if (!u || !Number.isFinite(u.total_tokens)) return null;
+  const parts = [`↑${formatChars(u.prompt_tokens)}`, `↓${formatChars(u.completion_tokens)}`];
+  if (u.reasoning_tokens > 0) parts.push(`✶${formatChars(u.reasoning_tokens)}`);
+  if (u.cached_tokens > 0) parts.push(`≡${formatChars(u.cached_tokens)}`);
+  return parts.join(" ") + " tok";
+}
 
 import {
   styleText,
@@ -130,11 +160,21 @@ export class MinimalTui {
     this.escTimer = null;
     this.pendingConfirm = null;
     this.pasting = false;
+    // Live suggestion state for @path and /command completions, recomputed by
+    // refreshSuggestions() after every input mutation. Null when no popup is
+    // shown. Otherwise: { kind: "path"|"slash", items, selected, start, end,
+    // ... } where items is the filtered list and start/end are the token bounds
+    // in inputBuffer that accepting a suggestion replaces.
+    this.suggestion = null;
     this.now = opts.now ?? Date.now;
     this.activityStartedAt = null;
     this.lastTurnDurationMs = [...this.blocks].reverse().find((block) => block.kind === "timing")?.durationMs ?? null;
+    this.lastTurnUsage = [...this.blocks].reverse().find((block) => block.kind === "timing")?.usage ?? null;
     this.lastClockTick = -1;
     this.activeToolStartedAt = null;
+    // Cumulative token usage for the active turn (real provider counts, not a
+    // char estimate). Reset at the start of each turn in submit().
+    this.turnUsage = null;
   }
 
   transcriptLines() {
@@ -300,6 +340,7 @@ export class MinimalTui {
     this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor) + s + this.inputBuffer.slice(this.inputCursor);
     this.inputCursor += s.length;
     this.dirtyRendered = true;
+    this.refreshSuggestions();
   }
 
   /** Move the caret one display row up/down in multiline input; false if no row. */
@@ -317,7 +358,7 @@ export class MinimalTui {
       w += cw;
       col += ch.length;
     }
-    
+
     // Compute absolute cursor position for target row by walking logical lines
     const inputWidth = Math.max(1, this.width - 4);
     const logicalLines = this.inputBuffer.split("\n");
@@ -332,6 +373,7 @@ export class MinimalTui {
         if (displayRow === target) {
           this.inputCursor = absolutePos + col;
           this.dirtyRendered = true;
+          this.refreshSuggestions();
           return true;
         }
         absolutePos += wrapped[wi].length;
@@ -343,9 +385,10 @@ export class MinimalTui {
         absolutePos += 1;
       }
     }
-    
+
     this.inputCursor = absolutePos + col;
     this.dirtyRendered = true;
+    this.refreshSuggestions();
     return true;
   }
 
@@ -354,6 +397,7 @@ export class MinimalTui {
     const nl = this.inputBuffer.indexOf("\n", this.inputCursor);
     const end = nl === -1 ? this.inputBuffer.length : nl;
     this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor) + this.inputBuffer.slice(end);
+    this.refreshSuggestions();
   }
 
   /** Ctrl-U: delete from the caret back to the start of the current logical line. */
@@ -362,6 +406,7 @@ export class MinimalTui {
     start = start === -1 ? 0 : start + 1;
     this.inputBuffer = this.inputBuffer.slice(0, start) + this.inputBuffer.slice(this.inputCursor);
     this.inputCursor = start;
+    this.refreshSuggestions();
   }
 
   // ---- events from the agent ----------------------------------------------
@@ -384,6 +429,7 @@ export class MinimalTui {
     if (!text) return;
     this.inputBuffer = "";
     this.inputCursor = 0;
+    this.suggestion = null;
     if (text.startsWith("/")) {
       await this.runCommand(text);
       return;
@@ -391,6 +437,7 @@ export class MinimalTui {
     this.mode = "working";
     this.activityStartedAt = this.now();
     this.lastClockTick = -1;
+    this.turnUsage = null;
     this.dirtyRendered = true;
 
     if (this.inputHistory[this.inputHistory.length - 1] !== text) this.inputHistory.push(text);
@@ -425,6 +472,8 @@ export class MinimalTui {
         } else if (ev.type === "compacted") {
           this.pushBlock({ kind: "result", ok: true, summary: "… earlier context compacted" });
           if (this.mode !== "aborting") this.mode = "working";
+        } else if (ev.type === "usage") {
+          this.turnUsage = ev.usage;
         }
         this.dirtyRendered = true;
       }, { signal: ac.signal, cwd: this.cwd, confirm: (cmd) => this.confirm(cmd) });
@@ -448,7 +497,8 @@ export class MinimalTui {
     } finally {
       const durationMs = this.activityStartedAt == null ? 0 : this.now() - this.activityStartedAt;
       this.lastTurnDurationMs = durationMs;
-      this.pushBlock({ kind: "timing", summary: `${outcome} in ${formatDuration(durationMs)}`, durationMs });
+      this.lastTurnUsage = this.turnUsage;
+      this.pushBlock({ kind: "timing", summary: `${outcome} in ${formatDuration(durationMs)}`, durationMs, usage: this.turnUsage });
       if (this.session) {
         try {
           await this.session.setCwd(this.cwd);
@@ -490,15 +540,17 @@ export class MinimalTui {
       const turns = this.history.filter((message) => message.role === "user").length;
       const contextChars = estimateChars(this.history);
       const compactAt = COMPACT_DEFAULTS.compactAtChars;
+      const ratio = Math.round((contextChars / compactAt) * 100);
       this.pushBlock({
         kind: "assistant",
         text:
           `## Status\n\n- Session: \`${this.sessionName ?? "none"}\`\n` +
           `- Model: \`${this.config.model}\`\n- Cwd: \`${this.cwd}\`\n` +
           `- Last turn: ${this.lastTurnDurationMs == null ? "none yet" : formatDuration(this.lastTurnDurationMs)}\n` +
-          `- Context: ${turns} turns, ${contextChars.toLocaleString()} / ${compactAt.toLocaleString()} estimated chars\n` +
-          `- Limits: ${this.config.maxSteps ?? 25} model steps, ${this.config.maxRetries ?? 2} retries, ` +
-          `${this.config.requestTimeoutMs ?? 120_000}ms/request, ` +
+          `- Context window: ${ratio}% used (${contextChars.toLocaleString()} / ${compactAt.toLocaleString()} chars, compacts at threshold)\n` +
+          `- Turns: ${turns}\n` +
+          `- Limits: ${this.config.maxSteps ?? 100} model steps, ${this.config.maxRetries ?? 2} retries, ` +
+          `${this.config.requestTimeoutMs ?? 300_000}ms/request, ` +
           `${(this.config.maxToolResultChars ?? 50_000).toLocaleString()} chars/tool result`,
       });
     } else if (command === "/sessions") {
@@ -577,65 +629,202 @@ export class MinimalTui {
     this.history = next.history ?? [];
     this.blocks = [...(next.blocks ?? []), { kind: "result", ok: true, summary }];
     this.lastTurnDurationMs = [...(next.blocks ?? [])].reverse().find((block) => block.kind === "timing")?.durationMs ?? null;
+    this.lastTurnUsage = [...(next.blocks ?? [])].reverse().find((block) => block.kind === "timing")?.usage ?? null;
     this.inputHistory = this.history
       .filter((message) => message.role === "user" && typeof message.content === "string")
       .map((message) => message.content);
     this.historyIndex = -1;
     this.scrollOffset = 0;
+    this.suggestion = null;
     this.refreshGitStatus();
   }
 
+  // ---- suggestions (@path + /command completions) --------------------------
+
+  /**
+   * Recompute the live suggestion popup from the current buffer and caret.
+   * Shows slash commands while the input is a bare `/...` command, and @path
+   * entries while the caret sits right after an `@token`. Hides (null) when
+   * nothing matches, the caret leaves the token, or a turn is running.
+   */
+  refreshSuggestions() {
+    if (this.mode !== "idle") {
+      this.suggestion = null;
+      return;
+    }
+    const buffer = this.inputBuffer;
+    const before = buffer.slice(0, this.inputCursor);
+    // Preserve the highlighted row across recomputes (each keystroke shrinks
+    // the list): keep the same label when it still matches, otherwise clamp the
+    // old index to the new size; reset only when the token kind changes or no
+    // popup was open.
+    const prev = this.suggestion;
+    const selectedFor = (kind, items) => {
+      if (!prev || prev.kind !== kind || prev.items.length === 0) return 0;
+      const chosen = prev.items[Math.min(prev.selected, prev.items.length - 1)].label;
+      const idx = items.findIndex((item) => item.label === chosen);
+      return idx === -1 ? Math.min(prev.selected, items.length - 1) : idx;
+    };
+
+    // Slash commands: the whole input is still a bare command, e.g. "/sta".
+    const slash = /^\/([^\s]*)$/.exec(buffer);
+    if (slash) {
+      const items = SLASH_COMMANDS.filter((c) => c.name.startsWith("/" + slash[1])).map((c) => ({
+        label: c.name,
+        description: c.description,
+      }));
+      this.suggestion = items.length
+        ? { kind: "slash", items, start: 0, end: buffer.length, selected: selectedFor("slash", items) }
+        : null;
+      return;
+    }
+
+    // @path token ending exactly at the caret, e.g. "Review @src/ag".
+    const token = /(?:^|\s)@(?:"([^"]*)|([^\s]*))$/.exec(before);
+    if (token) {
+      const quoted = token[1] !== undefined;
+      const typed = token[1] ?? token[2];
+      const lastSlash = typed.lastIndexOf("/");
+      const dirPart = lastSlash === -1 ? "" : typed.slice(0, lastSlash + 1);
+      const prefix = lastSlash === -1 ? typed : typed.slice(lastSlash + 1);
+      let entries;
+      try {
+        entries = readdirSync(resolve(this.cwd, dirPart || "."), { withFileTypes: true })
+          .filter(
+            (entry) =>
+              !entry.name.includes('"') &&
+              (prefix.startsWith(".") || !entry.name.startsWith(".")) &&
+              entry.name.startsWith(prefix)
+          )
+          .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name));
+      } catch {
+        this.suggestion = null;
+        return;
+      }
+      if (!entries.length) {
+        this.suggestion = null;
+        return;
+      }
+      const items = entries.map((entry) => ({
+        label: entry.name + (entry.isDirectory() ? "/" : ""),
+        isDirectory: entry.isDirectory(),
+      }));
+      this.suggestion = {
+        kind: "path",
+        items,
+        start: before.length - typed.length - (quoted ? 2 : 1),
+        end: this.inputCursor,
+        dirPart,
+        quoted,
+        selected: selectedFor("path", items),
+      };
+      return;
+    }
+
+    this.suggestion = null;
+  }
+
+  /** Move the highlighted row; false when no popup is open. */
+  suggestionMove(dir) {
+    const s = this.suggestion;
+    if (!s) return false;
+    s.selected = Math.max(0, Math.min(s.items.length - 1, s.selected + dir));
+    this.dirtyRendered = true;
+    return true;
+  }
+
+  /**
+   * Accept the highlighted suggestion. Slash commands replace the whole input
+   * with the command name; @path tokens are replaced in place (quoted when
+   * needed, trailing slash for directories, trailing space for files).
+   */
+  acceptSuggestion(s = this.suggestion) {
+    if (!s) return;
+    if (s.kind === "slash") {
+      const item = s.items[s.selected] ?? s.items[0];
+      this.inputBuffer = item.label + " ";
+      this.inputCursor = this.inputBuffer.length;
+      return;
+    }
+    const item = s.items[s.selected] ?? s.items[0];
+    const path = `${s.dirPart}${item.label}`;
+    const needsQuotes = s.quoted || /\s/.test(path);
+    const replacement = needsQuotes
+      ? `@"${path}${item.isDirectory ? "" : '" '}`
+      : `@${path}${item.isDirectory ? "" : " "}`;
+    this.inputBuffer = this.inputBuffer.slice(0, s.start) + replacement + this.inputBuffer.slice(s.end);
+    this.inputCursor = s.start + replacement.length;
+  }
+
+  /**
+   * Tab / the old @path completer. Recomputes the popup first so it also works
+   * when the buffer was set directly, then accepts the highlighted item.
+   */
   completePath() {
     if (this.mode !== "idle") return;
-    const before = this.inputBuffer.slice(0, this.inputCursor);
-    const token = /(?:^|\s)@(?:"([^"]*)|([^\s]*))$/.exec(before);
-    if (!token) return;
+    this.refreshSuggestions();
+    this.acceptSuggestion();
+    this.refreshSuggestions();
+  }
 
-    const quoted = token[1] !== undefined;
-    const typed = token[1] ?? token[2];
-    const slash = typed.lastIndexOf("/");
-    const dirPart = slash === -1 ? "" : typed.slice(0, slash + 1);
-    const prefix = slash === -1 ? typed : typed.slice(slash + 1);
-    let entries;
-    try {
-      entries = readdirSync(resolve(this.cwd, dirPart || "."), { withFileTypes: true })
-        .filter(
-          (entry) =>
-            !entry.name.includes('"') &&
-            (prefix.startsWith(".") || !entry.name.startsWith(".")) &&
-            entry.name.startsWith(prefix)
-        )
-        .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name));
-    } catch {
-      return;
+  /** Styled rows for the suggestion popup, ready to paste into a frame. */
+  suggestionLines() {
+    const s = this.suggestion;
+    if (!s || !s.items.length) return [];
+    const width = Math.max(1, this.width - 4);
+    // How many rows are visible above the editor (header included). buildFrame
+    // reserves exactly this many for the popup, so the window must match it.
+    const editorRows = this._editorHeight ?? 1;
+    const budget = Math.max(1, this.height - 2 - editorRows);
+    // Fixed layout: header + item window + one status row. The item window
+    // scrolls with the highlight, and the status row is always present, so the
+    // popup keeps a constant height instead of growing or shrinking as the
+    // "… N more" / "↑ N more" hints appear and disappear.
+    const itemCount = Math.min(SUGGESTION_ROWS, Math.max(1, budget - 2));
+    const windowFor = (count) => {
+      const start =
+        s.items.length <= count ? 0 : Math.max(0, Math.min(s.selected - (count - 1), s.items.length - count));
+      return { start, shown: s.items.slice(start, start + count), above: start, below: s.items.length - (start + count) };
+    };
+    const w = windowFor(itemCount);
+
+    const header =
+      s.kind === "slash"
+        ? styleText("commands", { fg: theme.dim, italic: true })
+        : styleText(`files in ${s.dirPart.replace(/\/$/, "") || "."}`, { fg: theme.dim, italic: true });
+    const lines = [header];
+    const maxLabel = Math.max(...w.shown.map((item) => dispWidth(item.label)));
+    for (const [index, item] of w.shown.entries()) {
+      const selected = w.start + index === s.selected;
+      const marker = selected ? "▸" : " ";
+      const label = styleText(
+        truncateEnd(item.label, Math.max(1, width - 2)),
+        selected ? { fg: theme.accent, bold: true } : { fg: theme.text, dim: true }
+      );
+      let row = `${marker} ${label}`;
+      if (item.description) {
+        const pad = Math.max(1, maxLabel - dispWidth(item.label));
+        const budget = Math.max(0, width - dispWidth(stripAnsi(row)) - pad - 2);
+        if (budget > 0) row += " ".repeat(pad) + "  " + styleText(truncateEnd(item.description, budget), { fg: theme.dim });
+      }
+      lines.push(row);
     }
-    if (!entries.length) return;
-
-    let completion = entries[0].name;
-    for (const entry of entries.slice(1)) {
-      let i = 0;
-      while (i < completion.length && completion[i] === entry.name[i]) i++;
-      completion = completion.slice(0, i);
-    }
-
-    if (entries.length === 1 || completion.length > prefix.length) {
-      const chosen = entries.length === 1 ? entries[0].name : completion;
-      const completeEntry = entries.length === 1 ? entries[0] : null;
-      const path = `${dirPart}${chosen}${completeEntry?.isDirectory() ? "/" : ""}`;
-      const needsQuotes = quoted || /\s/.test(path);
-      const replacement = needsQuotes
-        ? `@"${path}${completeEntry && !completeEntry.isDirectory() ? '" ' : ""}`
-        : `@${path}${completeEntry && !completeEntry.isDirectory() ? " " : ""}`;
-      const start = before.length - typed.length - (quoted ? 2 : 1);
-      this.inputBuffer = this.inputBuffer.slice(0, start) + replacement + this.inputBuffer.slice(this.inputCursor);
-      this.inputCursor = start + replacement.length;
-      this.dirtyRendered = true;
-      return;
-    }
-
-    const shown = entries.slice(0, 12).map((entry) => `${entry.name}${entry.isDirectory() ? "/" : ""}`);
-    const extra = entries.length > shown.length ? ` … +${entries.length - shown.length} more` : "";
-    this.pushBlock({ kind: "result", ok: true, summary: `@path matches: ${shown.join("  ")}${extra}` });
+    // One always-present status row keeps the height fixed and reports what is
+    // hidden, using one arrow per direction: `↑ N more` above, `↓ N more`
+    // below (or the match count when all fit).
+    const status =
+      w.above > 0 && w.below > 0
+        ? `↑ ${w.above} more · ↓ ${w.below} more`
+        : w.above > 0
+          ? `↑ ${w.above} more`
+          : w.below > 0
+            ? `↓ ${w.below} more`
+            : `${s.items.length} ${s.items.length === 1 ? "match" : "matches"}`;
+    lines.push(styleText(truncateEnd(status, width), { fg: theme.dim }));
+    // Degenerate tiny terminals: the status row is the first to go, keeping
+    // the header and the highlighted item on screen.
+    if (lines.length > budget) lines.pop();
+    return lines;
   }
 
   // ---- frame building -----------------------------------------------------
@@ -658,31 +847,68 @@ export class MinimalTui {
       fg: MODE_COLOR()[this.mode] ?? theme.dim,
       bold: this.mode !== "idle",
     });
-    const model = `model ${this.config.model}`;
+    const model = this.config.model;
     const git =
       this.git.branch != null
         ? `git ${this.git.branch}${this.git.dirty ? ` ~${this.git.dirtyCount}` : " ✓"}`
         : "git -";
-    const sepText = "  ·  ";
+    const contextChars = estimateChars(this.history);
+    const compactAt = COMPACT_DEFAULTS.compactAtChars;
+    const ratio = Math.round((contextChars / compactAt) * 100);
+    const context = `${ratio}% ${formatChars(compactAt)}`;
+    // Real provider token usage: live while working, the last turn's when idle.
+    const tokUsage = this.mode === "idle" ? this.lastTurnUsage : this.turnUsage;
+    const tokens = formatTokens(tokUsage);
+    const sepText = " · ";
     const sep = styleText(sepText, { fg: theme.dim });
     const metaBudget = this.width - dispWidth(statusPlain) - 2;
     if (metaBudget < 6) return statusStr;
 
-    let fields;
-    const fullFixed = dispWidth(model) + dispWidth(git) + sepText.length * 2;
-    if (metaBudget >= fullFixed + 8) {
-      const path = truncateMiddle(this.cwd, metaBudget - fullFixed);
-      fields = [
-        styleText(model, { fg: theme.text }),
-        styleText(path, { fg: theme.dim }),
-        styleText(git, { fg: this.git.dirty ? theme.bad : theme.good }),
-      ];
-    } else if (metaBudget >= dispWidth(git) + sepText.length + 8) {
-      const path = truncateMiddle(this.cwd, metaBudget - dispWidth(git) - sepText.length);
-      fields = [styleText(path, { fg: theme.dim }), styleText(git, { fg: this.git.dirty ? theme.bad : theme.good })];
+    // Build the candidate fields (some optional), then fit as many as the
+    // width allows, dropping the least important (tokens, context, model)
+    // first. Git status always comes first; the working directory fills
+    // whatever space is left.
+    const tokField = tokens ? [styleText(tokens, { fg: theme.dim })] : [];
+    const ctxField = [styleText(context, { fg: theme.dim })];
+    const gitField = [styleText(git, { fg: this.git.dirty ? theme.bad : theme.good })];
+    const modelField = [styleText(model, { fg: theme.text })];
+
+    const fields = [];
+    // Exact display width of `fields`, including separators between them.
+    let used = 0;
+    const pushIfFits = (field) => {
+      if (!field.length) return true; // optional field absent (e.g. no usage yet)
+      const width = dispWidth(stripAnsi(field[0]));
+      const extra = (fields.length ? sepText.length : 0) + width;
+      if (used + extra > metaBudget) return false;
+      if (fields.length) used += sepText.length;
+      fields.push(field[0]);
+      used += width;
+      return true;
+    };
+
+    // Always try to keep at least the git status; if even that won't fit,
+    // fall back to showing the working directory alone.
+    if (!pushIfFits(gitField)) {
+      fields.length = 0;
+      const cwdOnly = styleText(truncateMiddle(this.cwd, metaBudget), { fg: theme.dim });
+      fields.push(cwdOnly);
+      used = dispWidth(stripAnsi(cwdOnly));
     } else {
-      fields = [styleText(truncateMiddle(this.cwd, metaBudget), { fg: theme.dim })];
+      pushIfFits(modelField);
+      pushIfFits(ctxField);
+      pushIfFits(tokField);
+      const remaining = metaBudget - used - (fields.length ? sepText.length : 0);
+      if (remaining > 0) {
+        const path = truncateMiddle(this.cwd, remaining);
+        if (path) {
+          if (fields.length) used += sepText.length;
+          fields.push(styleText(path, { fg: theme.dim }));
+          used += dispWidth(path);
+        }
+      }
     }
+
     const meta = fields.join(sep);
     const pad = Math.max(2, this.width - dispWidth(statusPlain) - dispWidth(stripAnsi(meta)));
     return `${statusStr}${" ".repeat(pad)}${meta}`;
@@ -736,12 +962,12 @@ export class MinimalTui {
           ? [
               "What would you like to build?",
               "Type a task, or reference a file with @path.",
-              "/help for commands  ·  Tab completes paths  ·  Esc aborts",
+              "/help for commands  ·  Tab completes @paths & /commands  ·  Esc aborts",
             ]
           : width >= 40
-            ? ["What would you like to build?", "Type a task or use @path.", "/help commands  ·  Tab paths  ·  Esc aborts"]
+            ? ["What would you like to build?", "Type a task or use @path.", "/help commands  ·  Tab @ or /  ·  Esc aborts"]
             : width >= 30
-              ? ["What would you like to build?", "Type a task or use @path.", "/help  ·  Tab  ·  Esc aborts"]
+              ? ["What would you like to build?", "Type a task or use @path.", "/help  ·  Tab @ or /  ·  Esc aborts"]
               : ["What will you build?", "Type a task or @path.", "/help  ·  Tab  ·  Esc"];
       const startRow = Math.max(0, Math.floor((transcriptHeight - hint.length) / 2));
       hint.forEach((line, i) => {
@@ -773,6 +999,19 @@ export class MinimalTui {
               : "Working… Esc stops";
       // Editor grows upward: its rows occupy the rows directly above the footer.
       const firstEditorRow = this.height - 1 - view.height;
+
+      // Live suggestion popup sits directly above the editor, overlaying the
+      // bottom of the transcript while it is open.
+      const suggestionRows = this.suggestion ? this.suggestionLines() : [];
+      if (suggestionRows.length) {
+        const maxPopupRows = Math.max(1, firstEditorRow - 1);
+        const visible = suggestionRows.slice(0, maxPopupRows);
+        const popupStart = firstEditorRow - visible.length;
+        visible.forEach((line, i) => {
+          frame[popupStart + i] = line;
+        });
+      }
+
       view.rows.forEach((rowText, i) => {
         const row = firstEditorRow + i;
         const isCaretRow = i === view.caretRow;
@@ -963,17 +1202,20 @@ export class MinimalTui {
       this.inputCursor += s.length;
       this.dirtyRendered = true;
     }
+    this.refreshSuggestions();
   }
 
   backspace() {
     const previous = previousCharIndex(this.inputBuffer, this.inputCursor);
     this.inputBuffer = this.inputBuffer.slice(0, previous) + this.inputBuffer.slice(this.inputCursor);
     this.inputCursor = previous;
+    this.refreshSuggestions();
   }
 
   deleteAtCursor() {
     this.inputBuffer =
       this.inputBuffer.slice(0, this.inputCursor) + this.inputBuffer.slice(nextCharIndex(this.inputBuffer, this.inputCursor));
+    this.refreshSuggestions();
   }
 
   redraw() {
@@ -1000,17 +1242,27 @@ export class MinimalTui {
         break;
       case "left":
         this.inputCursor = previousCharIndex(this.inputBuffer, this.inputCursor);
+        this.refreshSuggestions();
         break;
       case "right":
         this.inputCursor = nextCharIndex(this.inputBuffer, this.inputCursor);
+        this.refreshSuggestions();
         break;
       case "up":
+        if (this.suggestion) {
+          this.suggestionMove(-1);
+          break;
+        }
         if (this.inputBuffer.includes("\n")) {
           if (this.moveCaretVertical(-1)) break;
         }
         this.historyUp();
         return;
       case "down":
+        if (this.suggestion) {
+          this.suggestionMove(1);
+          break;
+        }
         if (this.inputBuffer.includes("\n")) {
           if (this.moveCaretVertical(1)) break;
         }
@@ -1031,10 +1283,13 @@ export class MinimalTui {
       case "escape":
         if (this.pendingConfirm) this.resolveConfirm(false);
         else if (this.mode !== "idle") this.abortTurn();
-        else if (this.inputBuffer.includes("\n")) {
+        else if (this.suggestion) {
+          this.suggestion = null;
+        } else if (this.inputBuffer.includes("\n")) {
           // Esc closes a multiline buffer back to a single line.
           this.inputBuffer = this.inputBuffer.replace(/\n/g, " ");
           this.inputCursor = this.inputBuffer.length;
+          this.refreshSuggestions();
         }
         break;
       case "wheel":
@@ -1053,6 +1308,7 @@ export class MinimalTui {
     this.inputBuffer = this.inputHistory[this.historyIndex];
     this.inputCursor = this.inputBuffer.length;
     this.dirtyRendered = true;
+    this.refreshSuggestions();
   }
 
   historyDown() {
@@ -1066,6 +1322,7 @@ export class MinimalTui {
     }
     this.inputCursor = this.inputBuffer.length;
     this.dirtyRendered = true;
+    this.refreshSuggestions();
   }
 
   handleCtrlC() {

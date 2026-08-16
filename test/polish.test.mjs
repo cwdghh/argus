@@ -63,7 +63,7 @@ test("TUI records a completed turn's working time", async (t) => {
   tui.inputBuffer = "time this";
   await tui.submit();
   assert.equal(tui.lastTurnDurationMs, 2_500);
-  assert.deepEqual(tui.blocks.at(-1), { kind: "timing", summary: "completed in 2.5s", durationMs: 2_500 });
+  assert.deepEqual(tui.blocks.at(-1), { kind: "timing", summary: "completed in 2.5s", durationMs: 2_500, usage: null });
   assert.ok(tui.transcriptLines().some((line) => line.includes("completed in 2.5s")));
 });
 
