@@ -51,6 +51,11 @@ src/main.mjs ──▶ src/tui.mjs ──▶ src/agent.mjs ──▶ src/llm.mjs
 UI can render live without knowing how the loop works. `src/tui.mjs` is one such UI; you could swap it
 for a logging UI or a web UI without touching the loop.
 
+`src/tui.mjs` is the controller; the pure pieces live beside it in
+`src/tui/`: `renderers.mjs` (markdown + layout), `editor.mjs` (the multiline
+prompt: buffer, caret, recall history), and `keys.mjs` (terminal escape/CSI
+decoding). Each is unit-testable without a terminal.
+
 The TUI handles its local command set (the `SLASH_COMMANDS` table in
 `src/tui.mjs` — `/help`, `/status`, `/model`, `/sessions`, `/resume`, `/new`,
 `/exit`) before invoking the loop. Session switches replace the transcript,

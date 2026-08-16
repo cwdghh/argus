@@ -1,3 +1,26 @@
+#### 2026-08-17 — structure: split the TUI into editor + keys modules
+
+**Status: ✅ done**
+
+- `src/tui.mjs` was the only oversized file (1518 lines): one controller class
+  mixing terminal decoding, the multiline prompt editor, and frame/command
+  logic. Extracted the two separable, pure concerns beside the existing
+  renderers module:
+  - `src/tui/keys.mjs` (82 lines) — `decodeEscape()`: CSI keys, SGR mouse,
+    bracketed paste, and OSC skips. `tryEscape()` in the controller is now a
+    thin slice-and-dispatch wrapper.
+  - `src/tui/editor.mjs` (232 lines) — the `Editor` widget: buffer / caret /
+    recall-history state plus wrap, caret, and view geometry and text
+    mutations, with no rendering or I/O. The TUI keeps plain-field accessors
+    (`inputBuffer`, `inputCursor`, `inputHistory`, `historyIndex`) that
+    delegate to the editor, so behavior is unchanged.
+- `src/tui.mjs` shrank by 200 lines (1518 → 1318) and dropped three now-unused
+  renderer imports; each new module is unit-tested in isolation.
+- Added `test/keys.test.mjs` (8 tests) and `test/editor.test.mjs` (9 tests);
+  updated the README and AGENTS.md file maps plus docs/architecture.md.
+
+Verification: 104 tests pass (87 before + 17 new), `node --check` clean.
+
 #### 2026-08-16 — footer: context-window usage vs. compaction budget
 
 **Status: ✅ done**

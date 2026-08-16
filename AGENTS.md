@@ -19,7 +19,7 @@ model. The default tool set is deliberately tiny: `read`, `write`, `edit`, `bash
 | `src/compact.mjs` | Context compaction |
 | `src/session.mjs` | JSONL session persistence (also shared session helpers) |
 | `src/headless.mjs` | One-shot CLI mode (no TUI) |
-| `src/tui.mjs` + `src/tui/renderers.mjs` | Terminal UI (input/frame logic + pure renderers) |
+| `src/tui.mjs` + `src/tui/{renderers,editor,keys}.mjs` | Terminal UI (controller + pure renderers / editor widget / key decoding) |
 | `src/theme.mjs` | Colors / styling tokens |
 | `src/config.mjs` | Env-driven config |
 | `docs/` | Architecture, tool contract, self-updating guide |

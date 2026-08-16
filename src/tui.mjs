@@ -32,6 +32,8 @@ import { basename, resolve } from "node:path";
 import { promisify } from "node:util";
 import { runTurn } from "./agent.mjs";
 import { COMPACT_DEFAULTS, estimateChars } from "./compact.mjs";
+import { Editor } from "./tui/editor.mjs";
+import { decodeEscape } from "./tui/keys.mjs";
 import { sessionConfig } from "./session.mjs";
 import { theme, setTheme } from "./theme.mjs";
 
@@ -90,7 +92,6 @@ const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", 
 import {
   styleText,
   stripAnsi,
-  charWidth,
   dispWidth,
   truncateMiddle,
   truncateEnd,
@@ -98,12 +99,10 @@ import {
   formatChars,
   formatTokens,
   summarize,
-  markdownLines,
   blockLines,
   previousCharIndex,
   nextCharIndex,
   previousWordIndex,
-  wrap,
 } from "./tui/renderers.mjs";
 
 export class MinimalTui {
@@ -121,6 +120,10 @@ export class MinimalTui {
     this.listSessions = opts.listSessions ?? null;
     this.resumeSession = opts.resumeSession ?? null;
     this.cwd = opts.initialCwd ?? process.cwd();
+    // The multiline prompt editor is a separate pure widget (src/tui/editor.mjs);
+    // the accessors below expose its state as plain inputBuffer/inputCursor/
+    // inputHistory/historyIndex fields for the rest of the class and the tests.
+    this.editor = new Editor();
     this.inputBuffer = "";
     this.inputCursor = 0;
     this.inputHistory = this.history
@@ -207,186 +210,63 @@ export class MinimalTui {
     return Math.max(1, this.height - 4 - (editorRows - 1));
   }
 
-  // ---- input --------------------------------------------------------------
+  // ---- prompt editor (pure widget in src/tui/editor.mjs) ------------------
 
-  /**
-   * The editor is a multiline text area. It is rendered bottom-up from the
-   * footer: the last logical line sits on the row just above the footer, and
-   * earlier lines stack upward. Each logical line is wrapped to `width - 4`
-   * columns and rendered as `❯ ` + content (first line) or `│ ` + content
-   * (continuation lines). Long buffers scroll horizontally so the caret stays
-   * visible. `{ rows, height, caretRow, col }` describes the view; `height` is
-   * the number of editor rows the frame must reserve.
-   */
+  // The editor's state lives in `this.editor`; the accessors below expose it as
+  // plain fields so the rest of the class (and the tests) can keep talking in
+  // terms of inputBuffer/inputCursor/inputHistory/historyIndex.
+  get inputBuffer() { return this.editor.buffer; }
+  set inputBuffer(value) { this.editor.buffer = value; }
+  get inputCursor() { return this.editor.cursor; }
+  set inputCursor(value) { this.editor.cursor = value; }
+  get inputHistory() { return this.editor.history; }
+  set inputHistory(value) { this.editor.history = value; }
+  get historyIndex() { return this.editor.historyIndex; }
+  set historyIndex(value) { this.editor.historyIndex = value; }
+
+  /** Wrapped logical editor lines (see Editor.rows). */
   editorRows() {
-    const inputWidth = Math.max(1, this.width - 4);
-    const logical = this.inputBuffer.split("\n");
-    const rows = [];
-    for (const l of logical) rows.push(...(l === "" ? [""] : wrap(l, inputWidth)));
-    return rows;
+    return this.editor.rows(this.width);
   }
 
-  /** Absolute cursor -> { row (display-row index), col (char offset in row) }. */
+  /** Absolute cursor -> { row, col } (see Editor.caretPos). */
   caretPos() {
-    const inputWidth = Math.max(1, this.width - 4);
-    const logicalLines = this.inputBuffer.split("\n");
-    const rows = this.editorRows();
-    let remaining = this.inputCursor;
-    let displayRow = 0;
-
-    for (let li = 0; li < logicalLines.length; li++) {
-      const line = logicalLines[li];
-      const wrapped = line === "" ? [""] : wrap(line, inputWidth);
-
-      for (let wi = 0; wi < wrapped.length; wi++) {
-        const segLen = wrapped[wi].length;
-        const isLastSegOfLine = wi === wrapped.length - 1;
-        // Place caret in this segment if it fits, or if it's exactly at the
-        // end of the last segment of this logical line.
-        if (remaining < segLen || (remaining === segLen && isLastSegOfLine)) {
-          return { row: displayRow, col: remaining, rows };
-        }
-        remaining -= segLen;
-        displayRow++;
-      }
-
-      // Account for the \n between logical lines.
-      if (li < logicalLines.length - 1) {
-        remaining -= 1;
-      }
-    }
-
-    const last = Math.max(0, rows.length - 1);
-    return { row: last, col: rows[last].length, rows };
+    return this.editor.caretPos(this.width);
   }
 
+  /** Visible editor view; also pins the caret row for cursor placement. */
   inputView() {
-    const maxEditor = Math.max(1, this.height - 4);
-    const rows = this.editorRows();
-    const pos = this.caretPos();
-    let active = pos.row;
-    let lineCursor = pos.col;
-    if (active >= rows.length) active = rows.length - 1;
-
-    // Horizontal window: center the caret column when a row overflows.
-    let buff = rows[active];
-    let cursor = dispWidth(buff.slice(0, lineCursor));
-    const inputWidth = Math.max(1, this.width - 4);
-    if (dispWidth(buff) > inputWidth) {
-      const before = dispWidth(buff.slice(0, lineCursor));
-      const minBefore = Math.max(0, before - Math.floor(inputWidth / 2));
-      let start = 0;
-      let startW = 0;
-      for (const ch of buff) {
-        const cw = charWidth(ch);
-        if (startW + cw > minBefore) break;
-        startW += cw;
-        start += ch.length;
-      }
-      let end = start;
-      let endW = 0;
-      for (const ch of buff.slice(start)) {
-        const cw = charWidth(ch);
-        if (endW + cw > inputWidth) break;
-        endW += cw;
-        end += ch.length;
-      }
-      buff = buff.slice(start, end);
-      cursor = dispWidth(buff.slice(0, Math.max(0, lineCursor - start)));
-    }
-
-    // Vertical window: keep the caret row visible when the buffer overflows
-    // the editor area (rows are laid out bottom-up).
-    let startRow = 0;
-    if (rows.length > maxEditor) {
-      startRow = Math.max(0, active - (maxEditor - 1));
-    }
-    const viewRows = rows.slice(startRow, startRow + maxEditor);
-    const activeInView = active - startRow;
-
-    // Track the caret row relative to the editor's bottom so rendering and
-    // cursor placement agree even when the vertical window scrolls.
-    this._activeInputRow = activeInView;
-
-    return {
-      rows: viewRows,
-      height: viewRows.length,
-      caretRow: activeInView,
-      col: 2 + cursor,
-    };
+    const view = this.editor.view(this.width, this.height);
+    this._activeInputRow = view.activeRow;
+    return view;
   }
 
+  /** Shift+Enter: insert a newline, then refresh rendering + suggestions. */
   insertNewline() {
-    const s = "\n";
-    this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor) + s + this.inputBuffer.slice(this.inputCursor);
-    this.inputCursor += s.length;
+    this.editor.insertNewline();
     this.dirtyRendered = true;
     this.refreshSuggestions();
   }
 
-  /** Move the caret one display row up/down in multiline input; false if no row. */
+  /** Move the caret one display row up/down in multiline input; false if none. */
   moveCaretVertical(dir) {
-    const pos = this.caretPos();
-    const target = pos.row + dir;
-    if (target < 0 || target >= pos.rows.length) return false;
-    const wantCol = dispWidth(pos.rows[pos.row].slice(0, pos.col));
-    const targetRow = pos.rows[target];
-    let col = 0;
-    let w = 0;
-    for (const ch of targetRow) {
-      const cw = charWidth(ch);
-      if (w + cw > wantCol) break;
-      w += cw;
-      col += ch.length;
+    const moved = this.editor.moveCaretVertical(dir, this.width);
+    if (moved) {
+      this.dirtyRendered = true;
+      this.refreshSuggestions();
     }
-
-    // Compute absolute cursor position for target row by walking logical lines
-    const inputWidth = Math.max(1, this.width - 4);
-    const logicalLines = this.inputBuffer.split("\n");
-    let displayRow = 0;
-    let absolutePos = 0;
-
-    for (let li = 0; li < logicalLines.length; li++) {
-      const line = logicalLines[li];
-      const wrapped = line === "" ? [""] : wrap(line, inputWidth);
-
-      for (let wi = 0; wi < wrapped.length; wi++) {
-        if (displayRow === target) {
-          this.inputCursor = absolutePos + col;
-          this.dirtyRendered = true;
-          this.refreshSuggestions();
-          return true;
-        }
-        absolutePos += wrapped[wi].length;
-        displayRow++;
-      }
-
-      // Account for the \n between logical lines.
-      if (li < logicalLines.length - 1) {
-        absolutePos += 1;
-      }
-    }
-
-    this.inputCursor = absolutePos + col;
-    this.dirtyRendered = true;
-    this.refreshSuggestions();
-    return true;
+    return moved;
   }
 
   /** Ctrl-K: delete from the caret to the end of the current logical line. */
   deleteToLineEnd() {
-    const nl = this.inputBuffer.indexOf("\n", this.inputCursor);
-    const end = nl === -1 ? this.inputBuffer.length : nl;
-    this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor) + this.inputBuffer.slice(end);
+    this.editor.deleteToLineEnd();
     this.refreshSuggestions();
   }
 
   /** Ctrl-U: delete from the caret back to the start of the current logical line. */
   deleteToLineStart() {
-    let start = this.inputBuffer.lastIndexOf("\n", this.inputCursor - 1);
-    start = start === -1 ? 0 : start + 1;
-    this.inputBuffer = this.inputBuffer.slice(0, start) + this.inputBuffer.slice(this.inputCursor);
-    this.inputCursor = start;
+    this.editor.deleteToLineStart();
     this.refreshSuggestions();
   }
 
@@ -1130,75 +1010,12 @@ export class MinimalTui {
   }
 
   tryEscape() {
-    // Bracketed paste: collect the entire payload so embedded newlines cannot
-    // accidentally submit several prompts. The one-line editor folds them.
-    if (this.rawBuf.startsWith("\x1b[200~")) {
-      this.rawBuf = this.rawBuf.slice(6);
-      this.pasting = true;
-      return true;
-    }
-
-    // OSC sequence -> ignore (theme response is handled earlier, before input).
-    if (this.rawBuf.startsWith("\x1b]")) {
-      const st = this.rawBuf.indexOf("\x1b\\", 2);
-      const bel = this.rawBuf.indexOf("\x07", 2);
-      let end = -1;
-      if (st !== -1 && (bel === -1 || st < bel)) end = st + 2;
-      else if (bel !== -1) end = bel + 1;
-      if (end === -1) return false;
-      this.rawBuf = this.rawBuf.slice(end);
-      return true;
-    }
-
-    // SGR mouse events (wheel = buttons 64/65).
-    if (this.rawBuf.startsWith("\x1b[<")) {
-      const m = this.rawBuf.match(/^\x1b\[<(\d+);(\d+);(\d+)([Mm])/);
-      if (!m) return false;
-      const btn = Number(m[1]);
-      this.rawBuf = this.rawBuf.slice(m[0].length);
-      if (btn === 64) this.runAction({ type: "wheel", dir: 1 });
-      else if (btn === 65) this.runAction({ type: "wheel", dir: -1 });
-      return true;
-    }
-
-    const CSI = [
-      [/^\x1b\[A/, { type: "up" }],
-      [/^\x1b\[B/, { type: "down" }],
-      [/^\x1b\[C/, { type: "right" }],
-      [/^\x1b\[D/, { type: "left" }],
-      [/^\x1b\[H/, { type: "home" }],
-      [/^\x1b\[F/, { type: "end" }],
-      [/^\x1b\[1~/, { type: "home" }],
-      [/^\x1b\[4~/, { type: "end" }],
-      [/^\x1b\[5~/, { type: "pageup" }],
-      [/^\x1b\[6~/, { type: "pagedown" }],
-      [/^\x1b\[3~/, { type: "delete" }],
-      [/^\x1b\[13;2u/, { type: "shiftenter" }],
-    ];
-    for (const [re, act] of CSI) {
-      const m = re.exec(this.rawBuf);
-      if (m) {
-        this.rawBuf = this.rawBuf.slice(m[0].length);
-        this.runAction(act);
-        return true;
-      }
-    }
-
-    // Unknown CSI sequence: consume up to and including the final byte
-    // (in range 0x40-0x7E), so no trailing bytes leak into text.
-    if (this.rawBuf.startsWith("\x1b[")) {
-      let j = 2;
-      while (j < this.rawBuf.length && this.rawBuf.charCodeAt(j) < 0x40) j++;
-      if (j >= this.rawBuf.length) return false; // incomplete sequence
-      this.rawBuf = this.rawBuf.slice(j + 1);
-      return true;
-    }
-    // Alt+key escape: consume ESC + next byte, ignore.
-    if (this.rawBuf.length >= 2) {
-      this.rawBuf = this.rawBuf.slice(2);
-      return true;
-    }
-    return false;
+    const decoded = decodeEscape(this.rawBuf);
+    if (!decoded) return false;
+    this.rawBuf = this.rawBuf.slice(decoded.consumed);
+    if (decoded.pasting) this.pasting = true;
+    else if (decoded.action) this.runAction(decoded.action);
+    return true;
   }
 
   insertText(text) {
@@ -1233,24 +1050,19 @@ export class MinimalTui {
         this.dirtyRendered = true;
         continue;
       }
-      const s = String.fromCodePoint(cp);
-      this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor) + s + this.inputBuffer.slice(this.inputCursor);
-      this.inputCursor += s.length;
+      this.editor.insert(String.fromCodePoint(cp));
       this.dirtyRendered = true;
     }
     this.refreshSuggestions();
   }
 
   backspace() {
-    const previous = previousCharIndex(this.inputBuffer, this.inputCursor);
-    this.inputBuffer = this.inputBuffer.slice(0, previous) + this.inputBuffer.slice(this.inputCursor);
-    this.inputCursor = previous;
+    this.editor.backspace();
     this.refreshSuggestions();
   }
 
   deleteAtCursor() {
-    this.inputBuffer =
-      this.inputBuffer.slice(0, this.inputCursor) + this.inputBuffer.slice(nextCharIndex(this.inputBuffer, this.inputCursor));
+    this.editor.deleteAtCursor();
     this.refreshSuggestions();
   }
 
@@ -1338,25 +1150,13 @@ export class MinimalTui {
   }
 
   historyUp() {
-    if (!this.inputHistory.length) return;
-    if (this.historyIndex === -1) this.historyIndex = this.inputHistory.length - 1;
-    else this.historyIndex = Math.max(0, this.historyIndex - 1);
-    this.inputBuffer = this.inputHistory[this.historyIndex];
-    this.inputCursor = this.inputBuffer.length;
+    this.editor.historyUp();
     this.dirtyRendered = true;
     this.refreshSuggestions();
   }
 
   historyDown() {
-    if (this.historyIndex === -1) return;
-    this.historyIndex++;
-    if (this.historyIndex >= this.inputHistory.length) {
-      this.historyIndex = -1;
-      this.inputBuffer = "";
-    } else {
-      this.inputBuffer = this.inputHistory[this.historyIndex];
-    }
-    this.inputCursor = this.inputBuffer.length;
+    this.editor.historyDown();
     this.dirtyRendered = true;
     this.refreshSuggestions();
   }
