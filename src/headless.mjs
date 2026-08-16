@@ -13,17 +13,8 @@
  * the turn errors, so the error block is preserved.
  */
 import { runTurn } from "./agent.mjs";
-import { loadSession } from "./session.mjs";
-
-function summarize(result) {
-  if (!result) return "";
-  if (result.error) return result.message ?? "error";
-  if (result.stdout != null) {
-    const first = String(result.stdout).trim().split("\n")[0];
-    return first ? `stdout: ${first.slice(0, 80)}${first.length > 80 ? "…" : ""}` : "ok (no output)";
-  }
-  return JSON.stringify(result).slice(0, 80);
-}
+import { loadSession, sessionConfig, sessionData } from "./session.mjs";
+import { summarize } from "./tui/renderers.mjs";
 
 export async function runHeadless(config, prompt, { session, cwd, stdout, stderr } = {}) {
   // Streams are injectable so tests can capture output without monkeypatching.
@@ -35,11 +26,12 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
   let activeCwd = cwd ?? process.cwd();
   if (session) {
     const loaded = await loadSession(session.name);
-    for (const turn of loaded?.turns ?? []) history.push(...(turn.messages ?? []));
-    activeCwd = cwd ?? loaded?.meta?.cwd ?? process.cwd();
-    if (loaded?.meta?.cwd) session.lastCwd = loaded.meta.cwd;
+    const { history: saved, cwd: savedCwd, model } = sessionData(loaded);
+    history = saved;
+    activeCwd = cwd ?? savedCwd ?? process.cwd();
+    if (savedCwd) session.lastCwd = savedCwd;
     // Honor a persisted per-session model override (e.g. set by /model).
-    if (loaded?.meta?.model) config = { ...config, model: loaded.meta.model };
+    if (model) config = { ...config, model };
   }
 
   // Build display blocks alongside events (mirrors the TUI) so a turn saved to
@@ -100,15 +92,7 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
       }
     }
     await session.appendTurn({
-      config: {
-        baseUrl: config.baseUrl,
-        model: config.model,
-        systemPrompt: config.systemPrompt,
-        requestTimeoutMs: config.requestTimeoutMs,
-        maxRetries: config.maxRetries,
-        maxSteps: config.maxSteps,
-        maxToolResultChars: config.maxToolResultChars,
-      },
+      config: sessionConfig(config),
       messages: result?.messages ?? error?.turnMessages ?? [{ role: "user", content: prompt }],
       blocks,
     });

@@ -7,7 +7,7 @@ import { join } from "node:path";
 // Keep all session fixtures out of the user's real ~/.argus directory.
 process.env.ARGUS_HOME = mkdtempSync(join(tmpdir(), "argus-sess-test-"));
 
-const { Session, listSessions, loadSession, latestSessionName, newSessionName, pruneSessions, sanitizeName, sessionSummaries, sessionsDir } = await import("../src/session.mjs");
+const { Session, listSessions, loadSession, latestSessionName, newSessionName, pruneSessions, sanitizeName, sessionConfig, sessionData, sessionSummaries, sessionsDir } = await import("../src/session.mjs");
 
 const config = { baseUrl: "http://x", model: "mock", systemPrompt: "s" };
 
@@ -141,6 +141,46 @@ test("pruneSessions with keep <= 0 removes nothing", async () => {
   assert.equal(await pruneSessions(0), 0);
   assert.equal(await pruneSessions(-1), 0);
   assert.ok((await listSessions()).some((entry) => entry.name === "keep-all"));
+});
+
+test("sessionConfig persists exactly the turn-affecting config, never the API key", () => {
+  const cfg = {
+    baseUrl: "http://x",
+    apiKey: "secret",
+    model: "m",
+    systemPrompt: "s",
+    requestTimeoutMs: 42,
+    streamIdleTimeoutMs: 1,
+    maxRetries: 2,
+    maxSteps: 3,
+    maxToolResultChars: 500,
+    sessionKeep: 9,
+  };
+  assert.deepEqual(sessionConfig(cfg), {
+    baseUrl: "http://x",
+    model: "m",
+    systemPrompt: "s",
+    requestTimeoutMs: 42,
+    maxRetries: 2,
+    maxSteps: 3,
+    maxToolResultChars: 500,
+  });
+});
+
+test("sessionData rebuilds transcript, history, and meta in one place", () => {
+  const data = {
+    meta: { cwd: "/w", model: "model-x" },
+    turns: [
+      { messages: [{ role: "user", content: "a" }], blocks: [{ kind: "user", text: "a" }] },
+      { messages: [{ role: "assistant", content: "b" }], blocks: [{ kind: "assistant", text: "b" }] },
+    ],
+  };
+  const { blocks, history, cwd, model } = sessionData(data);
+  assert.deepEqual(history.map((m) => m.content), ["a", "b"]);
+  assert.deepEqual(blocks.map((b) => b.kind), ["user", "assistant"]);
+  assert.equal(cwd, "/w");
+  assert.equal(model, "model-x");
+  assert.deepEqual(sessionData(null), { blocks: [], history: [], cwd: null, model: null });
 });
 
 test("ARGUS_HOME is resolved lazily after module import", () => {

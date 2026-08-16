@@ -12,10 +12,14 @@ model. The default tool set is deliberately tiny: `read`, `write`, `edit`, `bash
 
 | Path | Purpose |
 |------|---------|
+| `src/main.mjs` | Entry point / CLI |
 | `src/agent.mjs` | The agent loop (call model → run tools → repeat) |
-| `src/llm.mjs` | OpenAI-compatible chat client, incl. streaming |
+| `src/llm.mjs` | OpenAI-compatible chat client (streaming only) |
 | `src/tools.mjs` | Tool schemas + implementations |
-| `src/tui.mjs` | The terminal UI (dependency-free, ANSI + raw-mode) |
+| `src/compact.mjs` | Context compaction |
+| `src/session.mjs` | JSONL session persistence (also shared session helpers) |
+| `src/headless.mjs` | One-shot CLI mode (no TUI) |
+| `src/tui.mjs` + `src/tui/renderers.mjs` | Terminal UI (input/frame logic + pure renderers) |
 | `src/theme.mjs` | Colors / styling tokens |
 | `src/config.mjs` | Env-driven config |
 | `docs/` | Architecture, tool contract, self-updating guide |

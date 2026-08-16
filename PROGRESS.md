@@ -1,3 +1,34 @@
+#### 2026-08-16 — housekeeping: dedupe, dead code, single source of truth
+
+**Status: ✅ done** (branch `housekeeping`, merged to `main`)
+
+- Removed the never-used one-shot `chat()` from `src/llm.mjs` (all turns stream
+  via `streamChat`), simplified `buildBody` to always request `include_usage`,
+  and updated the module docs.
+- Removed the duplicated local `summarize()` in `src/headless.mjs` — it now
+  imports the single implementation from `src/tui/renderers.mjs`.
+- Extracted two shared session helpers into `src/session.mjs` and used them in
+  both call sites:
+  - `sessionData(data)` rebuilds transcript blocks + model history + cwd/model
+    meta (was duplicated in `main.mjs sessionState` and `headless.mjs`);
+  - `sessionConfig(config)` is the one persisted-config shape (was duplicated
+    in the TUI and headless `appendTurn` calls) — keeps the API key out of
+    session files by construction.
+- Dropped the unused `RESET` constant in `src/tui.mjs` and trimmed the usage
+  comment in `src/main.mjs` (the `USAGE` constant is the source).
+- Docs single-sourcing:
+  - Deleted stale `REFACTOR_PLAN.md` (its tasks are long done and recorded in
+    PROGRESS.md).
+  - README now keeps one file map (the "What it teaches" table) instead of a
+    duplicate ASCII tree, and links to `docs/architecture.md` for the loop
+    diagram instead of copying it.
+  - `docs/architecture.md` reflects thinking deltas and the `SLASH_COMMANDS`
+    single source for the command set.
+  - `AGENTS.md` file map completed so it can't drift from the repo.
+
+Verification: 85 tests pass (added `sessionConfig`/`sessionData` unit tests),
+`node --check` clean across src + tests.
+
 #### 2026-08-16 — usage in /status + timing, /model switching, session retention
 
 **Status: ✅ done** (commits `ce99d04`, `e92d53f`, and the session-retention
