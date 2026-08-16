@@ -123,7 +123,7 @@ test("local slash commands do not enter model history", async () => {
       sessionName: "old",
       initialHistory: [{ role: "user", content: "earlier" }],
       newSession: () => ({ sessionName: "fresh", session: {}, cwd: "/fresh" }),
-      listSessions: () => [{ name: "saved", mtime: 1, turns: 2, lastPrompt: "last task" }],
+      listSessions: () => [{ name: "saved", mtime: 1, size: 2048, turns: 2, lastPrompt: "last task" }],
       resumeSession: (name) => ({
         sessionName: name,
         session: { name },
@@ -148,6 +148,7 @@ test("local slash commands do not enter model history", async () => {
   assert.ok(t.blocks.at(-1).text.includes("chars/tool result"));
   await t.runCommand("/sessions");
   assert.ok(t.blocks.at(-1).text.includes("`saved`") && t.blocks.at(-1).text.includes("last task"));
+  assert.ok(t.blocks.at(-1).text.includes("2.0KB"), "session listing reports file size");
   await t.runCommand("/resume saved");
   assert.equal(t.sessionName, "saved");
   assert.equal(t.cwd, "/saved");

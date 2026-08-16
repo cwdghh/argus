@@ -19,6 +19,7 @@ import {
   loadSession,
   latestSessionName,
   newSessionName,
+  pruneSessions,
   sanitizeName,
   sessionSummaries,
 } from "./session.mjs";
@@ -90,6 +91,12 @@ async function main() {
   if (name) sessionName = name;
   else if (forceNew) sessionName = newSessionName();
   else sessionName = (await latestSessionName()) ?? newSessionName();
+
+  // Optional housekeeping: keep only the newest ARGUS_SESSION_KEEP sessions,
+  // always preserving the session we are about to open.
+  if (config.sessionKeep > 0) {
+    await pruneSessions(config.sessionKeep, { exclude: sessionName });
+  }
 
   const initial = await sessionState(sessionName, config);
 

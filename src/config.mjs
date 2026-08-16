@@ -42,6 +42,9 @@ export function getConfig() {
     maxRetries: nonNegativeInt(process.env.ARGUS_MAX_RETRIES, 2),
     maxSteps: positiveInt(process.env.ARGUS_MAX_STEPS, 100),
     maxToolResultChars: positiveInt(process.env.ARGUS_MAX_TOOL_RESULT_CHARS, 50_000, 500),
+    // Keep only the N most recent saved sessions (the active one is never
+    // pruned); 0 keeps everything. Pruning runs on TUI startup.
+    sessionKeep: nonNegativeInt(process.env.ARGUS_SESSION_KEEP, 0),
     // Optional system prompt that shapes the agent's behaviour.
     systemPrompt:
       process.env.ARGUS_SYSTEM_PROMPT ??

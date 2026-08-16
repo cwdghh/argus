@@ -576,10 +576,11 @@ export class MinimalTui {
           const lines = sessions.map((item) => {
             const active = item.name === this.sessionName ? "→" : "-";
             const date = new Date(item.mtime).toLocaleString();
+            const size = item.size != null ? ` · ${formatChars(item.size)}B` : "";
             const prompt = item.lastPrompt
               ? ` — ${item.lastPrompt.replace(/`/g, "'").slice(0, 80)}${item.lastPrompt.length > 80 ? "…" : ""}`
               : "";
-            return `${active} \`${item.name}\` — ${item.turns} turn${item.turns === 1 ? "" : "s"}, ${date}${prompt}`;
+            return `${active} \`${item.name}\` — ${item.turns} turn${item.turns === 1 ? "" : "s"}, ${date}${size}${prompt}`;
           });
           this.pushBlock({
             kind: "assistant",

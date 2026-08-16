@@ -42,6 +42,21 @@ test("CLI executes through an npm-link-style symlink", (t) => {
   assert.match(output, /argus --new\s+start a fresh TUI session/);
 });
 
+test("ARGUS_SESSION_KEEP defaults to 0 and parses a non-negative limit", () => {
+  const saved = process.env.ARGUS_SESSION_KEEP;
+  try {
+    delete process.env.ARGUS_SESSION_KEEP;
+    assert.equal(getConfig().sessionKeep, 0, "0 means keep everything");
+    process.env.ARGUS_SESSION_KEEP = "5";
+    assert.equal(getConfig().sessionKeep, 5);
+    process.env.ARGUS_SESSION_KEEP = "-1";
+    assert.equal(getConfig().sessionKeep, 0, "negative values fall back to keep-all");
+  } finally {
+    if (saved === undefined) delete process.env.ARGUS_SESSION_KEEP;
+    else process.env.ARGUS_SESSION_KEEP = saved;
+  }
+});
+
 test("config rejects missing DashScope credentials and invalid URLs", () => {
   assert.throws(
     () => validateConfig({ baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "m", apiKey: "" }),

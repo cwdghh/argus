@@ -15,7 +15,7 @@
  *
  * The API key is never written to disk.
  */
-import { mkdir, readdir, readFile, appendFile, stat } from "node:fs/promises";
+import { mkdir, readdir, readFile, appendFile, stat, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, basename } from "node:path";
 import { tools } from "./tools.mjs";
@@ -48,7 +48,7 @@ async function ensureDir() {
   await mkdir(sessionsDir(), { recursive: true });
 }
 
-/** List sessions (name, file, mtime), newest first. */
+/** List sessions (name, file, mtime, size), newest first. */
 export async function listSessions() {
   await ensureDir();
   const dir = sessionsDir();
@@ -59,7 +59,7 @@ export async function listSessions() {
     try {
       const st = await stat(join(dir, e.name));
       const name = sanitizeName(basename(e.name, ".jsonl"));
-      if (name) sessions.push({ name, file: join(dir, e.name), mtime: st.mtimeMs });
+      if (name) sessions.push({ name, file: join(dir, e.name), mtime: st.mtimeMs, size: st.size });
     } catch {
       // ignore unreadable entries
     }
@@ -85,9 +85,33 @@ export async function sessionSummaries(limit = 20) {
         const user = (turns[i].messages ?? []).find((message) => message.role === "user");
         if (user?.content) lastPrompt = String(user.content).replace(/\s+/g, " ").trim();
       }
-      return { name: item.name, mtime: item.mtime, turns: turns.length, lastPrompt };
+      return { name: item.name, mtime: item.mtime, size: item.size, turns: turns.length, lastPrompt };
     })
   );
+}
+
+/**
+ * Delete all but the newest `keep` sessions (by mtime), never touching
+ * `exclude`. `keep <= 0` keeps everything. Returns how many were removed.
+ */
+export async function pruneSessions(keep, { exclude } = {}) {
+  if (!Number.isInteger(keep) || keep <= 0) return 0;
+  const listed = await listSessions();
+  let kept = 0;
+  let removed = 0;
+  for (const item of listed) {
+    if (item.name === exclude || kept < keep) {
+      kept++;
+      continue;
+    }
+    try {
+      await rm(item.file, { force: true });
+      removed++;
+    } catch {
+      // unreadable/racing file: leave it alone
+    }
+  }
+  return removed;
 }
 
 /** Load a session: { meta, turns }. Returns null if it doesn't exist. */

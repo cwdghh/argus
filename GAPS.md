@@ -82,8 +82,13 @@ questions are deliberately unresolved — we'll discuss them.
   task, audit what happened).
 - **pi's approach (conceptual):** session backends (memory, SQLite, JSONL) that
   store the transcript.
+> **2026-08-16:** automatic retention is resolved via `ARGUS_SESSION_KEEP` (prune
+> on TUI startup, newest-first by mtime, active session always preserved), and
+> `/sessions` now reports file sizes. Manual deletion/renaming commands remain
+> an open question.
+
 - **Open questions for argus:**
-  - Do we need session deletion/renaming commands or automatic retention?
+  - Do we need `/session delete` / `/session rename` on top of retention?
   - When would JSONL stop being sufficient and justify SQLite?
 
 ## 6. Multi-provider abstraction

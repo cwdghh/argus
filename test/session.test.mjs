@@ -1,13 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // Keep all session fixtures out of the user's real ~/.argus directory.
 process.env.ARGUS_HOME = mkdtempSync(join(tmpdir(), "argus-sess-test-"));
 
-const { Session, loadSession, latestSessionName, newSessionName, sanitizeName, sessionSummaries, sessionsDir } = await import("../src/session.mjs");
+const { Session, listSessions, loadSession, latestSessionName, newSessionName, pruneSessions, sanitizeName, sessionSummaries, sessionsDir } = await import("../src/session.mjs");
 
 const config = { baseUrl: "http://x", model: "mock", systemPrompt: "s" };
 
@@ -100,6 +100,47 @@ test("a resumed session skips a redundant model rewrite", async () => {
   await resumed.setModel("deepseek-chat");
   const file = readFileSync(join(process.env.ARGUS_HOME, "sessions", "resume-model.jsonl"), "utf8");
   assert.equal(file.split("\n").filter((l) => l.includes('"type":"model"')).length, 1);
+});
+
+test("listSessions and sessionSummaries expose file sizes", async () => {
+  const s = new Session("size-check", config);
+  await s.appendTurn({ config, messages: [{ role: "user", content: "x".repeat(500) }], blocks: [] });
+  const item = (await listSessions()).find((entry) => entry.name === "size-check");
+  assert.ok(item.size > 0, "listSessions carries the JSONL size");
+  const summary = (await sessionSummaries()).find((entry) => entry.name === "size-check");
+  assert.ok(summary.size > 0, "sessionSummaries carries the JSONL size");
+});
+
+test("pruneSessions keeps the newest N and never removes the excluded active one", async () => {
+  const original = process.env.ARGUS_HOME;
+  process.env.ARGUS_HOME = mkdtempSync(join(tmpdir(), "argus-prune-test-"));
+  try {
+    const names = ["oldest", "older", "newer", "newest"];
+    for (const n of names) {
+      const s = new Session(n, config);
+      await s.appendTurn({ config, messages: [{ role: "user", content: n }], blocks: [] });
+    }
+    const now = Date.now() / 1000;
+    utimesSync(join(sessionsDir(), "oldest.jsonl"), now - 400, now - 400);
+    utimesSync(join(sessionsDir(), "older.jsonl"), now - 300, now - 300);
+    utimesSync(join(sessionsDir(), "newer.jsonl"), now - 200, now - 200);
+    utimesSync(join(sessionsDir(), "newest.jsonl"), now - 100, now - 100);
+
+    const removed = await pruneSessions(2, { exclude: "oldest" });
+    assert.equal(removed, 1, "only the oldest non-excluded session is pruned");
+    const remaining = (await listSessions()).map((entry) => entry.name).sort();
+    assert.deepEqual(remaining, ["newer", "newest", "oldest"], "the excluded active session survives");
+  } finally {
+    process.env.ARGUS_HOME = original;
+  }
+});
+
+test("pruneSessions with keep <= 0 removes nothing", async () => {
+  const s = new Session("keep-all", config);
+  await s.appendTurn({ config, messages: [{ role: "user", content: "x" }], blocks: [] });
+  assert.equal(await pruneSessions(0), 0);
+  assert.equal(await pruneSessions(-1), 0);
+  assert.ok((await listSessions()).some((entry) => entry.name === "keep-all"));
 });
 
 test("ARGUS_HOME is resolved lazily after module import", () => {

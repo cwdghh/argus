@@ -1,3 +1,32 @@
+#### 2026-08-16 — usage in /status + timing, /model switching, session retention
+
+**Status: ✅ done** (commits `ce99d04`, `e92d53f`, and the session-retention
+batch)
+
+- Token usage now travels with the turn: the last turn's real `↑` input /
+  `↓` output tokens appear in the timing row and in `/status` (the shared
+  formatter moved into `src/tui/renderers.mjs` so the footer, timing rows, and
+  `/status` use one implementation).
+- `@path` popup polish: symlink targets are resolved at list time (a link to a
+  directory sorts, completes, and descends like a directory), directories keep a
+  muted trailing slash, and symlinks get a muted arrow to their resolved target
+  without polluting the completed path.
+- `/model <name>` switches the model at runtime. The override is saved per
+  session (one `{"type":"model",...}` JSONL line, deduped), restored on resume,
+  and `/new` plus sessions without an override fall back to the `ARGUS_MODEL`
+  env default. Headless runs against a session honor the same override so the
+  persisted turn config records the model that actually ran. `/help`,
+  `SLASH_COMMANDS`, README, `NEXT_STEPS.md`, and `GAPS.md` updated in the same
+  changes.
+- Session housekeeping: `ARGUS_SESSION_KEEP` (default `0` = keep all) prunes
+  old sessions on TUI startup, newest-first by mtime, always preserving the
+  session being opened; `/sessions` now reports each session's file size.
+  `.env.example`, README config table, and `GAPS.md` updated.
+
+Verification: 83 tests pass (`node --check` clean), covering usage rendering,
+dir/symlink popup markers, `/model` switch + persistence + resume-apply +
+headless override, and prune/size behaviour.
+
 #### 2026-08-16 — live suggestions for @path and /commands
 
 **Status: ✅ done**

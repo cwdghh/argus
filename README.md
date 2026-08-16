@@ -45,6 +45,7 @@ exists). `.env` is gitignored; `.env.example` is the committed template.
 | `ARGUS_MAX_TOOL_RESULT_CHARS` | `50000` | Maximum characters returned by one tool |
 | `ARGUS_COMPACT_AT` | `300000` | History size (chars) that triggers compaction |
 | `ARGUS_COMPACT_KEEP` | `8` | Recent turns kept intact when compacting |
+| `ARGUS_SESSION_KEEP` | `0` | Keep only the newest N saved sessions on startup (`0` keeps all; the active session is never pruned) |
 
 You can point it at any OpenAI-compatible endpoint (OpenAI, Ollama, LM Studio,
 vLLM, LiteLLM, …). Example with a local model:
@@ -124,7 +125,7 @@ Slash commands are handled by the TUI itself, without calling the model:
 | `/keys` | Show the keyboard-shortcut reference |
 | `/status` | Show session, model, cwd, last-turn time + token usage, context-window usage, and reliability limits |
 | `/model <name>` | Show or switch the model for this session (`/model` alone shows the current one) |
-| `/sessions` | List up to 20 recent sessions with their last prompt |
+| `/sessions` | List up to 20 recent sessions (turns, size, last prompt) |
 | `/resume <name>` | Switch to a saved session without restarting |
 | `/new` | Start a fresh session without restarting |
 | `/exit`, `/quit` | Quit Argus |
@@ -160,7 +161,12 @@ the root with the `ARGUS_HOME` env var). JSONL is append-only and keeps
 everything needed to reconstruct the exact requests a session made: the config
 (model, base URL, system prompt), the full `messages` (verbatim tool calls +
 results), the tool schemas, and the on-screen blocks (incl. thinking).
-Your API key is never written to disk.
+Your API key is never written to disk. `/sessions` lists saved sessions
+with their turn count, file size, and last prompt.
+
+Set `ARGUS_SESSION_KEEP` to a positive number to prune everything but the
+newest sessions on startup — the session you are opening is always preserved.
+`0` (the default) keeps everything.
 
 By default `npm start` resumes the most recent session:
 
