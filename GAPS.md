@@ -127,10 +127,10 @@ questions are deliberately unresolved — we'll discuss them.
   responsive status.
 - **Why it matters:** the interface shapes how it feels to drive the agent.
 - **pi's approach (conceptual):** a full differential-rendering TUI.
-- **Open questions for argus:**
-  - Is runtime model switching worth adding beyond the current local commands?
-  - Would optional desktop notification for unusually long turns earn its
-    complexity, or should Argus remain terminal-only?
+> **2026-08-16:** runtime model switching is resolved via `/model <name>` — the
+> switch is per-session, persisted in the session JSONL, restored on resume, and
+> resets to `ARGUS_MODEL` on `/new`. Desktop notifications remain an open
+> question (would a terminal-only agent keep its identity?).
 
 ## 9. Testing & evals
 
@@ -149,11 +149,14 @@ questions are deliberately unresolved — we'll discuss them.
 
 ## 10. Model catalog / configuration
 
+> **Status: partially resolved (2026-08-16)** — `/model <name>` switches the
+> model at runtime; the override is stored per session and restored on resume,
+> and `/new` falls back to the `ARGUS_MODEL` env default.
+
 - **What:** one model + one system prompt, read from env.
 - **Why it matters:** model choice and prompt are the user-facing "knobs."
 - **pi's approach (conceptual):** a generated model catalog; per-session config.
 - **Open questions for argus:**
-  - Multiple named models switchable at runtime?
   - Version the system prompt as a first-class artifact?
 
 ---

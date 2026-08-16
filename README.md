@@ -123,6 +123,7 @@ Slash commands are handled by the TUI itself, without calling the model:
 | `/help` | Show commands and keyboard shortcuts |
 | `/keys` | Show the keyboard-shortcut reference |
 | `/status` | Show session, model, cwd, last-turn time + token usage, context-window usage, and reliability limits |
+| `/model <name>` | Show or switch the model for this session (`/model` alone shows the current one) |
 | `/sessions` | List up to 20 recent sessions with their last prompt |
 | `/resume <name>` | Switch to a saved session without restarting |
 | `/new` | Start a fresh session without restarting |
@@ -171,6 +172,12 @@ npm start -- --session X  # resume/create a session named X
 
 The active session name is shown in the header.
 Use `/sessions` and `/resume <name>` to move between saved sessions from the TUI.
+
+`/model <name>` switches the model for the current session only. The override
+is saved with the session (in its JSONL file) and restored when you resume it;
+`/status` and the footer reflect it immediately. A fresh session (`/resume` of a
+session without an override, or `/new`) uses the `ARGUS_MODEL` default again.
+Headless runs against a session honor the same override.
 
 ## What it teaches
 

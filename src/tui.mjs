@@ -46,6 +46,7 @@ const SLASH_COMMANDS = [
   { name: "/help", description: "show commands and keyboard shortcuts" },
   { name: "/keys", description: "show keyboard shortcuts" },
   { name: "/status", description: "show the active session, model, cwd, context, and limits" },
+  { name: "/model", description: "show or switch the model (e.g. /model gpt-4o-mini)" },
   { name: "/sessions", description: "list recent saved sessions" },
   { name: "/resume", description: "switch to a saved session" },
   { name: "/new", description: "start a fresh session without restarting Argus" },
@@ -108,6 +109,7 @@ import {
 export class MinimalTui {
   constructor(config, opts = {}) {
     this.config = config;
+    this.defaultModel = opts.defaultModel ?? config.model;
     this.blocks = opts.initialBlocks ?? [];
     if (this.blocks.length > 0) {
       this.blocks.unshift({ kind: "result", ok: true, summary: `resumed session${opts.sessionName ? ` ${opts.sessionName}` : ""}` });
@@ -536,6 +538,33 @@ export class MinimalTui {
           `${this.config.requestTimeoutMs ?? 300_000}ms/request, ` +
           `${(this.config.maxToolResultChars ?? 50_000).toLocaleString()} chars/tool result`,
       });
+    } else if (command === "/model") {
+      if (args.length === 0) {
+        this.pushBlock({
+          kind: "assistant",
+          text:
+            `## Model\n\nCurrent model: \`${this.config.model}\`\n` +
+            `Use \`/model <name>\` to switch. The override is saved with this session ` +
+            `and restored on resume; \`/new\` resets to \`${this.defaultModel}\`.`,
+        });
+      } else if (args.length > 1) {
+        this.pushBlock({ kind: "error", text: "usage: /model <name>" });
+      } else {
+        const model = args[0].trim();
+        if (!model) {
+          this.pushBlock({ kind: "error", text: "usage: /model <name>" });
+        } else if (model === this.config.model) {
+          this.pushBlock({ kind: "result", ok: true, summary: `model is already ${model}` });
+        } else {
+          this.config.model = model;
+          if (this.session) {
+            await this.session.setModel(model).catch((err) => {
+              this.pushBlock({ kind: "error", text: `could not save the model to this session: ${err.message}` });
+            });
+          }
+          this.pushBlock({ kind: "result", ok: true, summary: `model switched to ${model}` });
+        }
+      }
     } else if (command === "/sessions") {
       if (args.length) {
         this.pushBlock({ kind: "error", text: "/sessions does not take arguments" });
@@ -609,6 +638,7 @@ export class MinimalTui {
     this.sessionName = next.sessionName;
     this.session = next.session;
     this.cwd = next.cwd ?? process.cwd();
+    this.config = { ...this.config, model: next.model ?? this.defaultModel };
     this.history = next.history ?? [];
     this.blocks = [...(next.blocks ?? []), { kind: "result", ok: true, summary }];
     this.lastTurnDurationMs = [...(next.blocks ?? [])].reverse().find((block) => block.kind === "timing")?.durationMs ?? null;

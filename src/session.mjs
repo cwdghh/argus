@@ -111,6 +111,7 @@ export async function loadSession(name) {
     if (obj.type === "meta") Object.assign(meta, obj);
     else if (obj.type === "turn") turns.push(obj);
     else if (obj.type === "cwd") meta.cwd = obj.cwd;
+    else if (obj.type === "model") meta.model = obj.model;
   }
   return { meta, turns };
 }
@@ -126,6 +127,7 @@ export class Session {
     this.file = sessionFilePath(name);
     this.metaWritten = false;
     this.lastCwd = opts.initialCwd ?? null;
+    this.lastModel = opts.initialModel ?? null;
     this.writeQueue = Promise.resolve();
   }
 
@@ -142,6 +144,16 @@ export class Session {
     return this.enqueue(async () => {
       await this.ensureMeta();
       await appendFile(this.file, JSON.stringify({ type: "cwd", cwd }) + "\n", "utf8");
+    });
+  }
+
+  /** Persist a per-session model override (written once per distinct value). */
+  async setModel(model) {
+    if (model === this.lastModel) return this.writeQueue;
+    this.lastModel = model;
+    return this.enqueue(async () => {
+      await this.ensureMeta();
+      await appendFile(this.file, JSON.stringify({ type: "model", model }) + "\n", "utf8");
     });
   }
 

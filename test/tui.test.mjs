@@ -160,6 +160,50 @@ test("local slash commands do not enter model history", async () => {
   assert.deepEqual(t.history, []);
 });
 
+test("/model switches the runtime model and persists the override per session", async () => {
+  let savedModel = null;
+  const t = new MinimalTui({ model: "mock" }, { session: { setModel: async (m) => (savedModel = m) } });
+  await t.runCommand("/model");
+  assert.ok(t.blocks.at(-1).text.includes("Current model: `mock`"));
+  assert.ok(t.blocks.at(-1).text.includes("/model <name>"));
+
+  await t.runCommand("/model gpt-4o-mini");
+  assert.equal(t.config.model, "gpt-4o-mini");
+  assert.equal(savedModel, "gpt-4o-mini");
+  assert.ok(t.blocks.at(-1).summary.includes("gpt-4o-mini"));
+
+  await t.runCommand("/model already gpt-4o-mini");
+  assert.equal(t.blocks.at(-1).kind, "error", "more than one name is a usage error");
+});
+
+test("/help lists /model as a runtime-switchable command", async () => {
+  const t = new MinimalTui({ model: "m" });
+  await t.runCommand("/help");
+  assert.ok(t.blocks.at(-1).text.includes("/model"));
+});
+
+test("resuming a session applies its stored model; /new resets to the default", async () => {
+  const t = new MinimalTui(
+    { model: "env-default" },
+    {
+      defaultModel: "env-default",
+      newSession: () => ({ sessionName: "fresh", session: {}, cwd: "/fresh" }),
+      resumeSession: async () => ({
+        sessionName: "saved",
+        session: {},
+        cwd: "/saved",
+        model: "deepseek-chat",
+        history: [],
+        blocks: [],
+      }),
+    }
+  );
+  await t.runCommand("/resume saved");
+  assert.equal(t.config.model, "deepseek-chat", "the session's stored override wins");
+  await t.runCommand("/new");
+  assert.equal(t.config.model, "env-default", "fresh sessions go back to the env default");
+});
+
 test("Tab completes only @path tokens and preserves surrounding input", () => {
   const dir = mkdtempSync(join(tmpdir(), "argus-complete-"));
   mkdirSync(join(dir, "src"));
@@ -209,7 +253,7 @@ test("live suggestions: /commands filter, navigate, Tab accepts, Esc dismisses",
   t.inputBuffer = "/";
   t.inputCursor = 1;
   t.refreshSuggestions();
-  assert.equal(t.suggestion.items.length, 8);
+  assert.equal(t.suggestion.items.length, 9, "one entry per SLASH_COMMANDS command");
   t.runAction({ type: "down" });
   t.runAction({ type: "down" });
   assert.equal(t.suggestion.selected, 2, "arrow keys move the highlight");

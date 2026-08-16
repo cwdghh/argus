@@ -21,16 +21,7 @@ See `GAPS.md` for the broader design territory and open questions.
     agent decide automatically?
   - Safety: parallel `bash` calls share the same shell cwd — is that a problem?
 
-### 2. Runtime model switching
-
-- **What:** switch models mid-session without restarting (e.g. `/model gpt-4`).
-- **Why:** lets you use a fast model for simple tasks and a reasoning model for
-  hard ones, or test different providers without losing session state.
-- **Considerations:**
-  - Should the switch apply to the current turn or only subsequent ones?
-  - Persist the per-session model override in the session JSONL?
-
-### 3. Desktop notifications for long tasks
+### 2. Desktop notifications for long tasks
 
 - **What:** when a turn takes longer than a threshold (e.g. 30s), send a
   desktop notification when it completes.
@@ -44,7 +35,7 @@ See `GAPS.md` for the broader design territory and open questions.
 
 ## Practical improvements
 
-### 4. Session management commands
+### 3. Session management commands
 
 - **What:** `/session delete <name>` and `/session rename <old> <new>` for
   housekeeping.
@@ -54,7 +45,7 @@ See `GAPS.md` for the broader design territory and open questions.
   - Confirmation before delete?
   - Should delete accept multiple names or a glob?
 
-### 5. Behavioral evals
+### 4. Behavioral evals
 
 - **What:** a small suite of coding tasks ("fix this bug", "add this feature",
   "explain this code") with automated success criteria.
@@ -65,7 +56,7 @@ See `GAPS.md` for the broader design territory and open questions.
   - Which tasks actually predict useful coding performance?
   - Should evals run against the real API or a mock?
 
-### 6. Smarter context compaction
+### 5. Smarter context compaction
 
 - **What:** model-generated summaries for older turns, instead of deterministic
   truncation.
@@ -79,7 +70,7 @@ See `GAPS.md` for the broader design territory and open questions.
 
 ## Nice-to-have
 
-### 7. Multi-provider support
+### 6. Multi-provider support
 
 - **What:** native Anthropic support (or a provider registry) beyond the
   current OpenAI-compatible protocol.
@@ -88,7 +79,7 @@ See `GAPS.md` for the broader design territory and open questions.
   - Requires maintaining provider-specific message formats.
   - The abstraction layer needs careful design to stay minimal.
 
-### 8. Transcript replay as tests
+### 7. Transcript replay as tests
 
 - **What:** save real sessions and replay them as tests.
 - **Why:** catches regressions in actual usage patterns, not just mock
@@ -97,7 +88,7 @@ See `GAPS.md` for the broader design territory and open questions.
   - Real sessions depend on the model, so replay would need a recorded
     response trace or a deterministic mock.
 
-### 9. Process sandbox
+### 8. Process sandbox
 
 - **What:** run shell tools in a sandbox (containers, seccomp, etc.) instead
   of on the host.

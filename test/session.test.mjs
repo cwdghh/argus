@@ -80,6 +80,28 @@ test("session summaries expose useful discovery metadata", async () => {
   assert.ok(Number.isFinite(item.mtime));
 });
 
+test("per-session model override persists and dedupes", async () => {
+  const s = new Session("model-ovr", config);
+  await s.setModel("gpt-4o-mini");
+  await s.setModel("gpt-4o-mini"); // dedupe
+  let loaded = await loadSession("model-ovr");
+  assert.equal(loaded.meta.model, "gpt-4o-mini");
+  await s.setModel("deepseek-chat");
+  loaded = await loadSession("model-ovr");
+  assert.equal(loaded.meta.model, "deepseek-chat");
+  const file = readFileSync(join(process.env.ARGUS_HOME, "sessions", "model-ovr.jsonl"), "utf8");
+  assert.equal(file.split("\n").filter((l) => l.includes('"type":"model"')).length, 2);
+});
+
+test("a resumed session skips a redundant model rewrite", async () => {
+  const s = new Session("resume-model", config);
+  await s.setModel("deepseek-chat");
+  const resumed = new Session("resume-model", config, { initialModel: "deepseek-chat" });
+  await resumed.setModel("deepseek-chat");
+  const file = readFileSync(join(process.env.ARGUS_HOME, "sessions", "resume-model.jsonl"), "utf8");
+  assert.equal(file.split("\n").filter((l) => l.includes('"type":"model"')).length, 1);
+});
+
 test("ARGUS_HOME is resolved lazily after module import", () => {
   const original = process.env.ARGUS_HOME;
   const lateHome = mkdtempSync(join(tmpdir(), "argus-late-home-"));

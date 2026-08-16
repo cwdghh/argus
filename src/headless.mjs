@@ -38,6 +38,8 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
     for (const turn of loaded?.turns ?? []) history.push(...(turn.messages ?? []));
     activeCwd = cwd ?? loaded?.meta?.cwd ?? process.cwd();
     if (loaded?.meta?.cwd) session.lastCwd = loaded.meta.cwd;
+    // Honor a persisted per-session model override (e.g. set by /model).
+    if (loaded?.meta?.model) config = { ...config, model: loaded.meta.model };
   }
 
   // Build display blocks alongside events (mirrors the TUI) so a turn saved to

@@ -93,7 +93,8 @@ async function main() {
 
   const initial = await sessionState(sessionName, config);
 
-  const tui = new MinimalTui(config, {
+  const tui = new MinimalTui(initial.model ? { ...config, model: initial.model } : config, {
+    defaultModel: config.model,
     sessionName,
     session: initial.session,
     initialBlocks: initial.blocks,
@@ -130,10 +131,11 @@ async function sessionState(name, config, loaded = null) {
   }
   return {
     sessionName: name,
-    session: new Session(name, config, { initialCwd: data?.meta?.cwd }),
+    session: new Session(name, config, { initialCwd: data?.meta?.cwd, initialModel: data?.meta?.model }),
     blocks,
     history,
     cwd,
+    model: data?.meta?.model ?? null,
   };
 }
 

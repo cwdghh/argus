@@ -58,6 +58,25 @@ test("headless: error -> exitCode 1 and error block saved", async (t) => {
   process.exitCode = 0;
 });
 
+test("headless: a session's stored model override is used for the request", async (t) => {
+  const session = new Session("hs-model", { model: "base", systemPrompt: "s" });
+  await session.setModel("deepseek-chat");
+  let seenModel = null;
+  const srv = await createMockServer((i, body) => {
+    seenModel = body.model;
+    return [{ content: "ok" }];
+  });
+  t.after(() => srv.close());
+  await runHeadless({ baseUrl: srv.url, apiKey: "", model: "base", systemPrompt: "s" }, "hi", {
+    session,
+    stdout: () => {},
+    stderr: () => {},
+  });
+  assert.equal(seenModel, "deepseek-chat");
+  const loaded = await loadSession("hs-model");
+  assert.equal(loaded.turns[0].config.model, "deepseek-chat", "the persisted turn records the override");
+});
+
 test("headless: resumed session uses its persisted cwd", async (t) => {
   const config = { apiKey: "", model: "mock", systemPrompt: "s" };
   const session = new Session("hs-resume-cwd", config);
