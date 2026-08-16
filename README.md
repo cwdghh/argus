@@ -201,29 +201,20 @@ The whole agent lives in a few small files:
 | `src/tui.mjs` + `src/tui/renderers.mjs` | Dependency-free TUI (frame/input logic + pure renderers) |
 | `src/theme.mjs` | Colors / styling tokens, auto light-dark detection |
 | `src/main.mjs` | Entry point / CLI |
+| `package.json` | `start` / `test` scripts (loads `.env` if present) |
 | `docs/` | Architecture, tool contract, self-updating guide |
+| `test/` | `node:test` suites + `helpers/mock-llm.mjs` (scripted mock LLM server) |
+| `AGENTS.md` | Rules for working with/updating argus |
+| `PROGRESS.md` | Running log of what we've done |
+| `GAPS.md` | Open design questions & where argus stays simple |
+| `NEXT_STEPS.md` | Candidate next directions (planning reference) |
 
 ### The core loop (`src/agent.mjs`)
 
-```text
-user prompt
-   │
-   ▼
-send full history + tool schemas to the model
-   │
-   ▼
-model replies (streamed): thinking, text and/or tool_calls
-   │
-   ├─ no tool_calls ─▶ final answer, done
-   │
-   └─ tool_calls ─▶ for each: execute → append result as a `tool` message
-                       │
-                       └──────────────▶ loop again (model now sees the results)
-```
-
-The key idea: **the model never executes tools — it only requests them.** Your
-code decides what actually runs. That separation (model proposes, code disposes)
-is the single most important concept in agent engineering.
+See `docs/architecture.md` for the loop diagram and its invariants. The key
+idea: **the model never executes tools — it only requests them.** Your code
+decides what actually runs. That separation (model proposes, code disposes) is
+the single most important concept in agent engineering.
 
 The loop is **UI-agnostic**: it emits events (`thinking_delta`, `text_delta`,
 `tool_call`, `tool_result`, …) so any front-end can render live. `src/tui.mjs` is
@@ -277,40 +268,6 @@ transport, and the TUI all re-implement a deliberately smaller slice of pi's
 ideas from scratch in this one dependency-free codebase. Thanks to pi and its
 maintainers for the design that got argus started. See `GAPS.md` for where argus
 intentionally stays simpler.
-
-## Files
-
-```
-argus/
-  package.json          # start/test scripts (loads .env if present)
-  README.md             # this file
-  PROGRESS.md           # running log of what we've done
-  GAPS.md               # open design questions & where argus stays simple
-  NEXT_STEPS.md         # candidate next directions (planning reference)
-  REFACTOR_PLAN.md      # refactor notes
-  AGENTS.md             # rules for working with/updating argus
-  .env.example          # committed template for local secrets
-  .gitignore            # ignores .env, node_modules, scratch dirs, etc.
-  src/
-    main.mjs            # entry point / CLI
-    config.mjs          # env-driven configuration
-    llm.mjs             # streaming OpenAI-compatible chat client
-    tools.mjs           # read / write / edit / bash
-    agent.mjs           # the tool-calling loop
-    compact.mjs         # context compaction
-    session.mjs         # JSONL session persistence
-    headless.mjs        # one-shot mode without the TUI
-    theme.mjs           # colors / styling tokens
-    tui.mjs             # terminal UI (frame + input handling)
-    tui/renderers.mjs   # pure rendering helpers
-  docs/
-    architecture.md
-    tools.md
-    self-updating.md
-  test/
-    *.test.mjs          # node:test suites (scripted mock LLM server)
-    helpers/mock-llm.mjs
-```
 
 ## Headless one-shot
 

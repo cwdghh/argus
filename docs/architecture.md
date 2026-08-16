@@ -12,7 +12,7 @@ user prompt
 send full history + tool schemas to the model
    │
    ▼
-model replies (streamed): text and/or tool_calls
+model replies (streamed): thinking, text and/or tool_calls
    │
    ├─ no tool_calls ─▶ final answer, done
    │
@@ -51,11 +51,12 @@ src/main.mjs ──▶ src/tui.mjs ──▶ src/agent.mjs ──▶ src/llm.mjs
 UI can render live without knowing how the loop works. `src/tui.mjs` is one such UI; you could swap it
 for a logging UI or a web UI without touching the loop.
 
-The TUI handles its small control plane (`/help`, `/status`, `/sessions`,
-`/resume`, `/new`, `/exit`) before invoking the loop. Session switches replace
-the transcript, model history, input history, cwd, and writable session handle
-together. Typing a bare `/` command or an `@path` token opens a live suggestion
-popup above the editor (Up/Down to highlight, Tab to accept, Esc to dismiss);
+The TUI handles its local command set (the `SLASH_COMMANDS` table in
+`src/tui.mjs` — `/help`, `/status`, `/model`, `/sessions`, `/resume`, `/new`,
+`/exit`) before invoking the loop. Session switches replace the transcript,
+model history, input history, cwd, and writable session handle together. Typing
+a bare `/` command or an `@path` token opens a live suggestion popup above the
+editor (Up/Down to highlight, Tab to accept, Esc to dismiss);
 `@path` is deliberately not a parser-side expansion — the path is completed
 locally, then the model sees it as a reference and uses `read` visibly.
 Elapsed phase/tool/turn timing is also TUI-owned; it needs no agent-protocol or

@@ -1,13 +1,7 @@
 #!/usr/bin/env node
 /**
- * Entry point.
- *
- *   argus                          start the TUI (auto-resume latest session)
- *   argus --new                    start a fresh TUI session
- *   argus --session <name>         TUI: resume/create a named session
- *   argus "<prompt>"               headless: run one prompt to stdout
- *   argus "<prompt>" --session X   headless: append to a named session (resumes it)
- *   argus --help                   show usage
+ * Entry point. Run `argus --help` for usage; prompts go through
+ * src/headless.mjs, the interactive TUI through src/tui.mjs.
  */
 import { realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -21,6 +15,7 @@ import {
   newSessionName,
   pruneSessions,
   sanitizeName,
+  sessionData,
   sessionSummaries,
 } from "./session.mjs";
 
@@ -129,20 +124,14 @@ async function main() {
 
 async function sessionState(name, config, loaded = null) {
   const data = loaded ?? (await loadSession(name));
-  const cwd = data?.meta?.cwd ?? process.cwd();
-  const blocks = [];
-  const history = [];
-  for (const turn of data?.turns ?? []) {
-    if (Array.isArray(turn.blocks)) blocks.push(...turn.blocks);
-    if (Array.isArray(turn.messages)) history.push(...turn.messages);
-  }
+  const { blocks, history, cwd, model } = sessionData(data);
   return {
     sessionName: name,
     session: new Session(name, config, { initialCwd: data?.meta?.cwd, initialModel: data?.meta?.model }),
     blocks,
     history,
-    cwd,
-    model: data?.meta?.model ?? null,
+    cwd: cwd ?? process.cwd(),
+    model,
   };
 }
 

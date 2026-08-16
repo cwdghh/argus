@@ -1,21 +1,17 @@
 /**
  * A tiny OpenAI-compatible "chat completions" client built on fetch.
  *
- * Two functions:
- *   - `chat`        : one-shot request, returns the assistant message.
- *   - `streamChat`  : same request with `stream: true`, returns an async
- *                     generator that yields `text_delta` events and finally a
- *                     `done` event with the assembled assistant message.
- *
- * Both accept an optional `signal` (AbortSignal) so a long-running turn can be
- * cancelled (e.g. when the user interrupts from the TUI).
+ * The one entry point is `streamChat`: a streaming request that yields
+ * `text_delta` events and finally a `done` event with the assembled assistant
+ * message. It accepts an optional `signal` (AbortSignal) so a long-running
+ * turn can be cancelled (e.g. when the user interrupts from the TUI).
  *
  * This is intentionally minimal, but it is the only place that talks to the
- * network, so both paths live here.
+ * network, and all turns stream so token usage can be captured.
  */
 const CHAT_PATH = "/chat/completions";
 
-function buildBody({ model, systemPrompt, messages, tools, stream }) {
+function buildBody({ model, systemPrompt, messages, tools }) {
   return {
     model,
     messages: [{ role: "system", content: systemPrompt }, ...messages],
@@ -28,9 +24,8 @@ function buildBody({ model, systemPrompt, messages, tools, stream }) {
       },
     })),
     tool_choice: "auto",
-    ...(stream
-      ? { stream: true, stream_options: { include_usage: true } }
-      : {}),
+    stream: true,
+    stream_options: { include_usage: true },
   };
 }
 
@@ -137,26 +132,6 @@ async function readWithIdleTimeout(reader, idleTimeoutMs, signal) {
 }
 
 /**
- * One-shot chat. Returns the assistant message object and usage stats.
- */
-export async function chat({ baseUrl, apiKey, model, systemPrompt, messages, tools, signal, requestTimeoutMs, maxRetries }) {
-  const body = buildBody({ model, systemPrompt, messages, tools, stream: false });
-  const { response: res, timeoutSignal } = await request({ baseUrl, apiKey, body, signal, requestTimeoutMs, maxRetries });
-  let data;
-  try {
-    data = await res.json();
-  } catch (err) {
-    if (timeoutSignal.aborted && !signal?.aborted) {
-      throw new Error(`LLM request timed out after ${requestTimeoutMs ?? 300_000}ms`);
-    }
-    throw err;
-  }
-  const choice = data.choices?.[0];
-  if (!choice) throw new Error("LLM response had no choices");
-  return { message: choice.message, usage: data.usage ?? null };
-}
-
-/**
  * Streaming chat. Yields:
  *   { type: "text_delta", delta }          as text arrives
  *   { type: "done", message, finishReason, usage } at the end
@@ -184,7 +159,7 @@ export async function* streamChat({
   streamIdleTimeoutMs,
   maxRetries,
 }) {
-  const body = buildBody({ model, systemPrompt, messages, tools, stream: true });
+  const body = buildBody({ model, systemPrompt, messages, tools });
   let content = "";
   let finishReason = null;
   let usage = null;

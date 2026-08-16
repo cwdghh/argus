@@ -32,11 +32,11 @@ import { basename, resolve } from "node:path";
 import { promisify } from "node:util";
 import { runTurn } from "./agent.mjs";
 import { COMPACT_DEFAULTS, estimateChars } from "./compact.mjs";
+import { sessionConfig } from "./session.mjs";
 import { theme, setTheme } from "./theme.mjs";
 
 const execAsync = promisify(exec);
 const ESC = "\x1b";
-const RESET = `${ESC}[0m`;
 const SUGGESTION_ROWS = 8;
 /**
  * Local slash commands, in the order they are suggested. One source of truth:
@@ -487,15 +487,7 @@ export class MinimalTui {
         try {
           await this.session.setCwd(this.cwd);
           await this.session.appendTurn({
-            config: {
-              baseUrl: this.config.baseUrl,
-              model: this.config.model,
-              systemPrompt: this.config.systemPrompt,
-              requestTimeoutMs: this.config.requestTimeoutMs,
-              maxRetries: this.config.maxRetries,
-              maxSteps: this.config.maxSteps,
-              maxToolResultChars: this.config.maxToolResultChars,
-            },
+            config: sessionConfig(this.config),
             messages: savedMessages,
             blocks: this.blocks.slice(turnStart),
           });
