@@ -31,6 +31,7 @@ import { readdirSync, realpathSync, statSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { promisify } from "node:util";
 import { runTurn } from "./agent.mjs";
+import { COMPACT_DEFAULTS, estimateChars } from "./compact.mjs";
 import { sessionConfig } from "./session.mjs";
 import { theme, setTheme } from "./theme.mjs";
 
@@ -890,8 +891,10 @@ export class MinimalTui {
       this.git.branch != null
         ? `git ${this.git.branch}${this.git.dirty ? ` ~${this.git.dirtyCount}` : " ✓"}`
         : "git -";
-    const contextTokens = this.lastTurnUsage?.total_tokens ?? 0;
-    const context = contextTokens > 0 ? formatChars(contextTokens) : "0";
+    const contextChars = estimateChars(this.history);
+    const compactAt = COMPACT_DEFAULTS.compactAtChars;
+    const usedRatio = Math.min(100, Math.max(0, Math.round((contextChars / compactAt) * 100)));
+    const context = `${formatChars(contextChars)} / ${formatChars(compactAt)} (${usedRatio}%)`;
     const sepText = " · ";
     const sep = styleText(sepText, { fg: theme.dim });
     const metaBudget = this.width - dispWidth(statusPlain) - 2;

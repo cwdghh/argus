@@ -78,7 +78,7 @@ layout: header, scrollable transcript, a bottom **editor**, and a **footer**.
 │────────────────────────────────────────────────────────────────────────────────────────────────────│
 │❯ Describe a task…  (/help for commands)                                                            │
 │────────────────────────────────────────────────────────────────────────────────────────────────────│
-│last 12s · ↑1.6K ↓412  git main ~2 · deepseek-v4-flash-0731 · 2.0K · /Users/…/argus              │
+│last 12s · ↑1.6K ↓412  git main ~2 · deepseek-v4-flash-0731 · 2 / 300.0K (0%) · /Users/…/argus      │
 └────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -92,8 +92,10 @@ layout: header, scrollable transcript, a bottom **editor**, and a **footer**.
   in the transcript, and `/status` reports the last turn.
 - **Token usage travels with the turn**: the footer shows live tokens while
   working, and the last turn's usage (`↑ input / ↓ output`) is kept in the
-  timing row and reported by `/status`. The right side shows the total context
-  tokens from the last turn.
+  timing row and reported by `/status`. The right side shows the active
+  session's estimated history size against the compaction budget — e.g.
+  `12.3K / 300.0K (4%)` — using the same `estimateChars` measure compaction
+  itself applies.
 - **Auto light/dark theme** (detected via OSC 11; falls back to light).
 - **Scrollable history**: mouse wheel to scroll; PgUp/PgDn (pages), Home/End
   (top/bottom). The header shows when you are away from the latest output.
@@ -104,9 +106,10 @@ layout: header, scrollable transcript, a bottom **editor**, and a **footer**.
   to start/end, Ctrl-W deletes the previous word, and Ctrl-L redraws.
 - **Responsive footer** shows phase + elapsed time plus live token usage
   (`↑` input / `↓` output, plus `✶` reasoning and `≡` cached when the provider
-  reports them) on the left, and git status, model, context window usage (percent
-  of the compaction budget), and the current path on the right — lower-priority
-  details collapse cleanly on narrow terminals.
+  reports them) on the left, and git status, model, context-window usage
+  (estimated history size as a percent of the compaction budget), and the
+  current path on the right — lower-priority details collapse cleanly on
+  narrow terminals.
 - **Helpful empty state and editor hints** make commands, `@path` references,
   live suggestions, completion, and interruption discoverable without opening
   the manual first.

@@ -1,3 +1,18 @@
+#### 2026-08-16 — footer: context-window usage vs. compaction budget
+
+**Status: ✅ done**
+
+- The footer's right-side context field now reports the active session's
+  estimated history size against the compaction budget — e.g.
+  `12.3K / 300.0K (4%)` — instead of the last turn's token count. It uses the
+  same `estimateChars` / `ARGUS_COMPACT_AT` values the compaction path reads, so
+  the percentage marks exactly where the loop will start summarising old turns.
+- Updated README footer text, screenshot, and responsive-footer description in
+  the same change; added a TUI regression test that pins the
+  `chars / budget (percent)` rendering against a known history size.
+
+Verification: 87 tests pass, `node --check` clean.
+
 #### 2026-08-16 — footer: token usage on the left, context field shows tok
 
 **Status: ✅ done**

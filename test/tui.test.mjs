@@ -4,6 +4,8 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MinimalTui } from "../src/tui.mjs";
+import { COMPACT_DEFAULTS, estimateChars } from "../src/compact.mjs";
+import { formatChars } from "../src/tui/renderers.mjs";
 
 const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
 
@@ -80,6 +82,31 @@ test("footer puts token usage on the left of the status", () => {
   assert.ok(f.startsWith("last 2.7s · ↑1.1K ↓140 ✶77 ≡384"), "token usage follows the status on the left");
   assert.ok(f.includes("git main"), "git stays in the right-hand meta area");
   assert.ok(f.includes("/workspace/argus"), "working directory stays in the right-hand meta area");
+});
+
+test("footer shows context-window usage as its share of the compaction budget", () => {
+  const t = new MinimalTui({ model: "mock-model" });
+  t.width = 100;
+  t.height = 12;
+  t.git = { branch: "main", dirty: false, dirtyCount: 0 };
+  t.cwd = "/workspace/argus";
+  t.history = [{ role: "user", content: "a".repeat(10_000) }];
+  const original = process.env.ARGUS_COMPACT_AT;
+  process.env.ARGUS_COMPACT_AT = "20000";
+  try {
+    const used = estimateChars(t.history);
+    const budget = COMPACT_DEFAULTS.compactAtChars;
+    const ratio = Math.min(100, Math.max(0, Math.round((used / budget) * 100)));
+    const f = strip(t.footer());
+    assert.ok(
+      f.includes(`${formatChars(used)} / ${formatChars(budget)} (${ratio}%)`),
+      `context field shows chars / budget (percent): ${f}`,
+    );
+    assert.ok(f.includes("git main"), "git stays in the right-hand meta area");
+  } finally {
+    if (original === undefined) delete process.env.ARGUS_COMPACT_AT;
+    else process.env.ARGUS_COMPACT_AT = original;
+  }
 });
 
 test("header makes transcript scroll state visible", () => {
