@@ -31,7 +31,6 @@ import { readdirSync, realpathSync, statSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { promisify } from "node:util";
 import { runTurn } from "./agent.mjs";
-import { COMPACT_DEFAULTS, estimateChars } from "./compact.mjs";
 import { sessionConfig } from "./session.mjs";
 import { theme, setTheme } from "./theme.mjs";
 
@@ -514,9 +513,7 @@ export class MinimalTui {
       this.pushBlock({ kind: "assistant", text: KEY_HELP });
     } else if (command === "/status") {
       const turns = this.history.filter((message) => message.role === "user").length;
-      const contextChars = estimateChars(this.history);
-      const compactAt = COMPACT_DEFAULTS.compactAtChars;
-      const ratio = Math.round((contextChars / compactAt) * 100);
+      const contextTokens = this.lastTurnUsage?.total_tokens ?? 0;
       this.pushBlock({
         kind: "assistant",
         text:
@@ -524,7 +521,7 @@ export class MinimalTui {
           `- Model: \`${this.config.model}\`\n- Cwd: \`${this.cwd}\`\n` +
           `- Last turn: ${this.lastTurnDurationMs == null ? "none yet" : formatDuration(this.lastTurnDurationMs)}` +
           `${this.lastTurnUsage ? ` (${formatTokens(this.lastTurnUsage)})` : ""}\n` +
-          `- Context window: ${ratio}% used (${contextChars.toLocaleString()} / ${compactAt.toLocaleString()} chars, compacts at threshold)\n` +
+          `- Context tokens: ${contextTokens.toLocaleString()}\n` +
           `- Turns: ${turns}\n` +
           `- Limits: ${this.config.maxSteps ?? 100} model steps, ${this.config.maxRetries ?? 2} retries, ` +
           `${this.config.requestTimeoutMs ?? 300_000}ms/request, ` +
@@ -896,10 +893,8 @@ export class MinimalTui {
       this.git.branch != null
         ? `git ${this.git.branch}${this.git.dirty ? ` ~${this.git.dirtyCount}` : " ✓"}`
         : "git -";
-    const contextChars = estimateChars(this.history);
-    const compactAt = COMPACT_DEFAULTS.compactAtChars;
-    const ratio = Math.round((contextChars / compactAt) * 100);
-    const context = `${ratio}% ${formatChars(compactAt)} tok`;
+    const contextTokens = this.lastTurnUsage?.total_tokens ?? 0;
+    const context = contextTokens > 0 ? formatChars(contextTokens) : "0";
     const sepText = " · ";
     const sep = styleText(sepText, { fg: theme.dim });
     const metaBudget = this.width - dispWidth(statusPlain) - 2;

@@ -137,7 +137,7 @@ export function formatChars(n) {
 }
 
 /**
- * Compact token summary, e.g. "↑1.6K ↓120 tok". `↑` = prompt (input) tokens,
+ * Compact token summary, e.g. "↑1.6K ↓120". `↑` = prompt (input) tokens,
  * `↓` = completion (output) tokens; reasoning and cached tokens appear only
  * when the provider reported them.
  */
@@ -146,7 +146,7 @@ export function formatTokens(u) {
   const parts = [`↑${formatChars(u.prompt_tokens)}`, `↓${formatChars(u.completion_tokens)}`];
   if (u.reasoning_tokens > 0) parts.push(`✶${formatChars(u.reasoning_tokens)}`);
   if (u.cached_tokens > 0) parts.push(`≡${formatChars(u.cached_tokens)}`);
-  return parts.join(" ") + " tok";
+  return parts.join(" ");
 }
 
 export function summarize(result) {

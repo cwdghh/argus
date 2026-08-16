@@ -77,7 +77,7 @@ test("footer puts token usage on the left of the status", () => {
   t.lastTurnDurationMs = 2700;
   t.lastTurnUsage = { prompt_tokens: 1100, completion_tokens: 140, total_tokens: 1240, reasoning_tokens: 77, cached_tokens: 384 };
   const f = strip(t.footer());
-  assert.ok(f.startsWith("last 2.7s · ↑1.1K ↓140 ✶77 ≡384 tok"), "token usage follows the status on the left");
+  assert.ok(f.startsWith("last 2.7s · ↑1.1K ↓140 ✶77 ≡384"), "token usage follows the status on the left");
   assert.ok(f.includes("git main"), "git stays in the right-hand meta area");
   assert.ok(f.includes("/workspace/argus"), "working directory stays in the right-hand meta area");
 });
@@ -474,10 +474,10 @@ test("/status and timing rows show real token usage", async () => {
   t.lastTurnUsage = usage;
   t.pushBlock({ kind: "timing", summary: "completed in 2.5s", durationMs: 2500, usage });
   const lines = t.transcriptLines().map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
-  assert.ok(lines.some((l) => l.includes("2.5s") && l.includes("↑1.6K ↓412 tok")), "timing row shows usage");
+  assert.ok(lines.some((l) => l.includes("2.5s") && l.includes("↑1.6K ↓412")), "timing row shows usage");
 
   await t.runCommand("/status");
-  assert.ok(t.blocks.at(-1).text.includes("↑1.6K ↓412 tok"), "/status shows last-turn usage");
+  assert.ok(t.blocks.at(-1).text.includes("↑1.6K ↓412"), "/status shows last-turn usage");
 });
 
 test("Tab never completes plain text without an @ or / token", () => {

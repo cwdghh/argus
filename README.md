@@ -78,7 +78,7 @@ layout: header, scrollable transcript, a bottom **editor**, and a **footer**.
 │────────────────────────────────────────────────────────────────────────────────────────────────────│
 │❯ Describe a task…  (/help for commands)                                                            │
 │────────────────────────────────────────────────────────────────────────────────────────────────────│
-│last 12s · ↑1.6K ↓412 tok  git main ~2 · deepseek-v4-flash-0731 · 0% 300.0K tok · /User…rgus     │
+│last 12s · ↑1.6K ↓412  git main ~2 · deepseek-v4-flash-0731 · 2.0K · /Users/…/argus              │
 └────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -92,7 +92,8 @@ layout: header, scrollable transcript, a bottom **editor**, and a **footer**.
   in the transcript, and `/status` reports the last turn.
 - **Token usage travels with the turn**: the footer shows live tokens while
   working, and the last turn's usage (`↑ input / ↓ output`) is kept in the
-  timing row and reported by `/status`.
+  timing row and reported by `/status`. The right side shows the total context
+  tokens from the last turn.
 - **Auto light/dark theme** (detected via OSC 11; falls back to light).
 - **Scrollable history**: mouse wheel to scroll; PgUp/PgDn (pages), Home/End
   (top/bottom). The header shows when you are away from the latest output.
