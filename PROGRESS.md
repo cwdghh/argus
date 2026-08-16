@@ -1,3 +1,17 @@
+#### 2026-08-16 — footer: token usage on the left, context field shows tok
+
+**Status: ✅ done**
+
+- Moved token usage from the right-hand meta area to the left-hand status text
+  in the footer: idle now reads `last 2.7s · ↑1.1K ↓140 ✶77 ≡384 tok`, and the
+  working phase appends live usage as it arrives.
+- Context-window usage on the right now shows `0% 300.0K tok` instead of a bare
+  character count.
+- Updated README footer screenshot and responsive-footer description, plus a TUI
+  regression test verifying tokens sit on the left.
+
+Verification: 86 tests pass, `node --check` clean.
+
 #### 2026-08-16 — housekeeping: dedupe, dead code, single source of truth
 
 **Status: ✅ done** (branch `housekeeping`, merged to `main`)

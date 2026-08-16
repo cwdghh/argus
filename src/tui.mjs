@@ -875,9 +875,12 @@ export class MinimalTui {
       if (this.activityStartedAt == null) return this.mode;
       const elapsed = Math.max(0, this.now() - this.activityStartedAt);
       const spinner = SPINNER[Math.floor(elapsed / 100) % SPINNER.length];
-      return `${spinner} ${this.mode} ${formatDuration(elapsed)}`;
+      const tokens = formatTokens(this.turnUsage);
+      return `${spinner} ${this.mode} ${formatDuration(elapsed)}${tokens ? ` · ${tokens}` : ""}`;
     }
-    return this.lastTurnDurationMs == null ? "idle" : `idle · last ${formatDuration(this.lastTurnDurationMs)}`;
+    if (this.lastTurnDurationMs == null) return "idle";
+    const tokens = formatTokens(this.lastTurnUsage);
+    return `last ${formatDuration(this.lastTurnDurationMs)}${tokens ? ` · ${tokens}` : ""}`;
   }
 
   footer() {
@@ -896,20 +899,16 @@ export class MinimalTui {
     const contextChars = estimateChars(this.history);
     const compactAt = COMPACT_DEFAULTS.compactAtChars;
     const ratio = Math.round((contextChars / compactAt) * 100);
-    const context = `${ratio}% ${formatChars(compactAt)}`;
-    // Real provider token usage: live while working, the last turn's when idle.
-    const tokUsage = this.mode === "idle" ? this.lastTurnUsage : this.turnUsage;
-    const tokens = formatTokens(tokUsage);
+    const context = `${ratio}% ${formatChars(compactAt)} tok`;
     const sepText = " · ";
     const sep = styleText(sepText, { fg: theme.dim });
     const metaBudget = this.width - dispWidth(statusPlain) - 2;
     if (metaBudget < 6) return statusStr;
 
     // Build the candidate fields (some optional), then fit as many as the
-    // width allows, dropping the least important (tokens, context, model)
-    // first. Git status always comes first; the working directory fills
-    // whatever space is left.
-    const tokField = tokens ? [styleText(tokens, { fg: theme.dim })] : [];
+    // width allows, dropping the least important (context, model) first.
+    // Git status always comes first; the working directory fills whatever
+    // space is left. Token usage lives on the left with the status text.
     const ctxField = [styleText(context, { fg: theme.dim })];
     const gitField = [styleText(git, { fg: this.git.dirty ? theme.bad : theme.good })];
     const modelField = [styleText(model, { fg: theme.text })];
@@ -938,7 +937,6 @@ export class MinimalTui {
     } else {
       pushIfFits(modelField);
       pushIfFits(ctxField);
-      pushIfFits(tokField);
       const remaining = metaBudget - used - (fields.length ? sepText.length : 0);
       if (remaining > 0) {
         const path = truncateMiddle(this.cwd, remaining);

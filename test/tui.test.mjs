@@ -64,8 +64,22 @@ test("footer shows a live phase timer, remembers the last turn, and adapts to na
   t.lastTurnDurationMs = 65_000;
   t.width = 36;
   const narrow = strip(t.footer());
-  assert.ok(narrow.startsWith("idle · last 1m 05s"));
+  assert.ok(narrow.startsWith("last 1m 05s"));
   assert.ok(narrow.length <= 36, `narrow footer overflowed: ${narrow}`);
+});
+
+test("footer puts token usage on the left of the status", () => {
+  const t = new MinimalTui({ model: "mock-model" });
+  t.width = 100;
+  t.height = 12;
+  t.git = { branch: "main", dirty: false, dirtyCount: 0 };
+  t.cwd = "/workspace/argus";
+  t.lastTurnDurationMs = 2700;
+  t.lastTurnUsage = { prompt_tokens: 1100, completion_tokens: 140, total_tokens: 1240, reasoning_tokens: 77, cached_tokens: 384 };
+  const f = strip(t.footer());
+  assert.ok(f.startsWith("last 2.7s · ↑1.1K ↓140 ✶77 ≡384 tok"), "token usage follows the status on the left");
+  assert.ok(f.includes("git main"), "git stays in the right-hand meta area");
+  assert.ok(f.includes("/workspace/argus"), "working directory stays in the right-hand meta area");
 });
 
 test("header makes transcript scroll state visible", () => {

@@ -78,7 +78,7 @@ layout: header, scrollable transcript, a bottom **editor**, and a **footer**.
 │────────────────────────────────────────────────────────────────────────────────────────────────────│
 │❯ Describe a task…  (/help for commands)                                                            │
 │────────────────────────────────────────────────────────────────────────────────────────────────────│
-│idle · last 12s  git main ~2 · deepseek-v4-flash-0731 · 0% 300.0K · ↑1.6K ↓412 tok · /User…rgus     │
+│last 12s · ↑1.6K ↓412 tok  git main ~2 · deepseek-v4-flash-0731 · 0% 300.0K tok · /User…rgus     │
 └────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -101,11 +101,11 @@ layout: header, scrollable transcript, a bottom **editor**, and a **footer**.
   tracks double-width characters and wraps within the terminal width.
 - **Familiar terminal editing**: Ctrl-A/E moves to start/end, Ctrl-U/K deletes
   to start/end, Ctrl-W deletes the previous word, and Ctrl-L redraws.
-- **Responsive footer** shows phase + elapsed time, git status, model, context
-  window usage (percent of the compaction budget), live token usage (`↑` input /
-  `↓` output, plus `✶` reasoning and `≡` cached when the provider reports them),
-  and the current path — lower-priority details collapse cleanly on narrow
-  terminals.
+- **Responsive footer** shows phase + elapsed time plus live token usage
+  (`↑` input / `↓` output, plus `✶` reasoning and `≡` cached when the provider
+  reports them) on the left, and git status, model, context window usage (percent
+  of the compaction budget), and the current path on the right — lower-priority
+  details collapse cleanly on narrow terminals.
 - **Helpful empty state and editor hints** make commands, `@path` references,
   live suggestions, completion, and interruption discoverable without opening
   the manual first.
