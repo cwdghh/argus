@@ -192,9 +192,6 @@ export class MinimalTui {
       seen = true;
       lastKind = block.kind;
       out.push(...blockLines(block, this.width));
-      // After a timing block (end of a turn), add a blank line to
-      // separate the recorded time from the input editor below.
-      if (block.kind === "timing") out.push("");
     }
     return out;
   }
@@ -203,10 +200,10 @@ export class MinimalTui {
     return Math.max(0, this.transcriptLines().length - this.transcriptHeight());
   }
 
-  /** Rows available for the transcript after reserving header/footer/editor. */
+  /** Rows available for the transcript after reserving header/separator/footer/editor. */
   transcriptHeight() {
     const editorRows = this._editorHeight ?? 1;
-    return Math.max(1, this.height - 3 - (editorRows - 1));
+    return Math.max(1, this.height - 4 - (editorRows - 1));
   }
 
   // ---- input --------------------------------------------------------------
@@ -989,6 +986,8 @@ export class MinimalTui {
     for (let r = 0; r < transcriptHeight; r++) {
       frame[1 + r] = lines[start + r] ?? "";
     }
+    // Blank separator line between transcript and editor
+    frame[1 + transcriptHeight] = "";
 
     if (this.blocks.length === 0) {
       const hint =
