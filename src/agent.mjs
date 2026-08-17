@@ -48,29 +48,10 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
   onEvent({ type: "user", text: userMessage });
 
   // Cumulative token usage across all model calls in this turn. Providers
-  // return per-request usage (prompt + completion tokens); we sum them so the
-  // UI can show what the whole turn actually cost. `null` until first seen.
+  // return per-request usage (prompt + completion tokens); accumulateUsage
+  // sums them so the UI can show what the whole turn actually cost.
+  // `null` until the first model call reports usage.
   let usage = null;
-  const addUsage = (u) => {
-    if (!u || typeof u !== "object") return;
-    const n = (v) => (Number.isFinite(v) ? v : 0);
-    if (!usage) {
-      usage = {
-        prompt_tokens: n(u.prompt_tokens),
-        completion_tokens: n(u.completion_tokens),
-        total_tokens: n(u.total_tokens),
-        reasoning_tokens: n(u.completion_tokens_details?.reasoning_tokens),
-        cached_tokens: n(u.prompt_tokens_details?.cached_tokens),
-      };
-    } else {
-      usage.prompt_tokens += n(u.prompt_tokens);
-      usage.completion_tokens += n(u.completion_tokens);
-      usage.total_tokens += n(u.total_tokens);
-      usage.reasoning_tokens += n(u.completion_tokens_details?.reasoning_tokens);
-      usage.cached_tokens += n(u.prompt_tokens_details?.cached_tokens);
-    }
-    onEvent({ type: "usage", usage });
-  };
 
   // Keep the model context within the window: drop the oldest turns and replace
   // them with a compact summary when the history grows too large.
@@ -93,7 +74,8 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
         onEvent,
         signal
       );
-      addUsage(stepUsage);
+      usage = accumulateUsage(usage, stepUsage);
+      onEvent({ type: "usage", usage });
 
       // If the turn was aborted mid-stream, the assistant reply may be incomplete
       // (or contain partial tool_calls), so don't push it into the conversation.
@@ -118,44 +100,14 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
       // Execute each requested tool call and feed the result back as a
       // `tool` message. The model does not actually run anything itself.
       for (const call of toolCalls) {
-        const toolName = call?.function?.name ?? "";
-        const rawArguments = call?.function?.arguments;
-        const tool = findTool(toolName);
-        let args = {};
-        let argumentError = null;
-        try {
-          args = JSON.parse(rawArguments ?? "{}");
-        } catch {
-          argumentError = "tool arguments were not valid JSON";
-        }
-        onEvent({ type: "tool_call", name: toolName, args, raw: rawArguments });
-
-        let result;
-        if (!tool) {
-          result = { error: true, message: `unknown tool: ${toolName || "(missing name)"}` };
-        } else if (argumentError) {
-          result = { error: true, message: argumentError };
-        } else {
-          const validationError = validateToolArgs(tool, args);
-          if (validationError) {
-            result = { error: true, message: validationError };
-          } else {
-            try {
-              result = await tool.execute(args, { signal, cwd, confirm });
-            } catch (err) {
-              result = { error: true, message: `tool threw: ${err.message}` };
-            }
-          }
-        }
-
-        result = boundToolResult(result, maxToolResultChars);
-        onEvent({ type: "tool_result", name: toolName, ok: !result?.error, result });
-
-        if (result && typeof result.cwd === "string" && result.cwd !== cwd) {
-          cwd = result.cwd;
-          onEvent({ type: "cwd_change", cwd });
-        }
-
+        const { result, cwd: nextCwd } = await executeToolCall(call, {
+          cwd,
+          signal,
+          confirm,
+          maxToolResultChars,
+          onEvent,
+        });
+        cwd = nextCwd;
         turnMessages.push({
           role: "tool",
           tool_call_id: call.id,
@@ -177,6 +129,111 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
     err.usage = usage;
     throw err;
   }
+}
+
+
+/**
+ * Sum one model call's usage into the running turn total. Providers return
+ * per-request usage (prompt + completion tokens); members that don't apply to
+ * a given call (reasoning/cached) are simply added as zero, and a missing or
+ * malformed report is ignored.
+ *
+ * @returns {object|null} the accumulated usage object (null until a real one
+ *   has been seen)
+ */
+export function accumulateUsage(usage, stepUsage) {
+  if (!stepUsage || typeof stepUsage !== "object") return usage;
+  // A report with no numeric counts isn't a usage report; keep the running
+  // total untouched rather than recording a bogus zero-cost call.
+  if (
+    !Number.isFinite(stepUsage.prompt_tokens) &&
+    !Number.isFinite(stepUsage.completion_tokens) &&
+    !Number.isFinite(stepUsage.total_tokens)
+  ) {
+    return usage;
+  }
+  const n = (v) => (Number.isFinite(v) ? v : 0);
+  const add = (base, value) => (base ?? 0) + n(value);
+  const step = {
+    prompt: n(stepUsage.prompt_tokens),
+    completion: n(stepUsage.completion_tokens),
+    total: n(stepUsage.total_tokens),
+    reasoning: n(stepUsage.completion_tokens_details?.reasoning_tokens),
+    cached: n(stepUsage.prompt_tokens_details?.cached_tokens),
+  };
+  if (!usage) {
+    return {
+      prompt_tokens: step.prompt,
+      completion_tokens: step.completion,
+      total_tokens: step.total,
+      reasoning_tokens: step.reasoning,
+      cached_tokens: step.cached,
+    };
+  }
+  return {
+    ...usage,
+    prompt_tokens: add(usage.prompt_tokens, stepUsage.prompt_tokens),
+    completion_tokens: add(usage.completion_tokens, stepUsage.completion_tokens),
+    total_tokens: add(usage.total_tokens, stepUsage.total_tokens),
+    reasoning_tokens: add(usage.reasoning_tokens, stepUsage.completion_tokens_details?.reasoning_tokens),
+    cached_tokens: add(usage.cached_tokens, stepUsage.prompt_tokens_details?.cached_tokens),
+  };
+}
+
+/**
+ * Execute one model-requested tool call: parse its arguments, find and
+ * validate the tool, run it (or produce a clean error), bound the result so a
+ * rogue tool can't flood the context window, emit the tool_call / tool_result
+ * / cwd_change events, and track the tool's new working directory.
+ *
+ * Errors — unknown tool, invalid JSON arguments, failed validation, a thrown
+ * tool — are returned as `{ error: true, message }` results rather than
+ * thrown, so the loop can feed them back to the model and continue.
+ *
+ * @returns {Promise<{ result: object, cwd: string }>}
+ */
+export async function executeToolCall(call, { cwd, signal, confirm, maxToolResultChars, onEvent = () => {} }) {
+  const toolName = call?.function?.name ?? "";
+  const rawArguments = call?.function?.arguments;
+  const tool = findTool(toolName);
+
+  let args = {};
+  let argumentError = null;
+  try {
+    args = JSON.parse(rawArguments ?? "{}");
+  } catch {
+    argumentError = "tool arguments were not valid JSON";
+  }
+
+  onEvent({ type: "tool_call", name: toolName, args, raw: rawArguments });
+
+  let result;
+  if (!tool) {
+    result = { error: true, message: `unknown tool: ${toolName || "(missing name)"}` };
+  } else if (argumentError) {
+    result = { error: true, message: argumentError };
+  } else {
+    const validationError = validateToolArgs(tool, args);
+    if (validationError) {
+      result = { error: true, message: validationError };
+    } else {
+      try {
+        result = await tool.execute(args, { signal, cwd, confirm });
+      } catch (err) {
+        result = { error: true, message: `tool threw: ${err.message}` };
+      }
+    }
+  }
+
+  result = boundToolResult(result, maxToolResultChars);
+  onEvent({ type: "tool_result", name: toolName, ok: !result?.error, result });
+
+  let nextCwd = cwd;
+  if (result && typeof result.cwd === "string" && result.cwd !== cwd) {
+    nextCwd = result.cwd;
+    onEvent({ type: "cwd_change", cwd: nextCwd });
+  }
+  return { result, cwd: nextCwd };
 }
 
 /** Keep any tool—present or future—from flooding the next model request. */
