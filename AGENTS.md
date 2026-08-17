@@ -14,12 +14,17 @@ model. The default tool set is deliberately tiny: `read`, `write`, `edit`, `bash
 |------|---------|
 | `src/main.mjs` | Entry point / CLI |
 | `src/agent.mjs` | The agent loop (call model → run tools → repeat) |
-| `src/llm.mjs` | OpenAI-compatible chat client (streaming only) |
-| `src/tools.mjs` | Tool schemas + implementations |
+| `src/llm.mjs` | Streaming chat client: network, retries, timeouts |
+| `src/sse.mjs` | Pure SSE framing + chat-delta folding (protocol layer of `llm.mjs`) |
+| `src/tools.mjs` | Tool registry + fs/shell execution layer (`read`, `write`, `edit`, `bash`) |
+| `src/edit-engine.mjs` | Pure exact/fuzzy/range text-edit engine |
+| `src/read-bounds.mjs` | Read line/byte caps + truncation |
 | `src/compact.mjs` | Context compaction |
-| `src/session.mjs` | JSONL session persistence (also shared session helpers) |
+| `src/session/` | JSONL session persistence: `store.mjs` (fs + writable handle), `resume.mjs` (folder-scoped default), `data.mjs` (reconstruction) — import from `index.mjs` |
 | `src/headless.mjs` | One-shot CLI mode (no TUI) |
-| `src/tui.mjs` + `src/tui/*.mjs` | Terminal UI (controller + pure renderers / editor / keys / suggestions / frames / help) |
+| `src/tui.mjs` + `src/tui/*.mjs` | Terminal UI: controller + pure widgets (editor, keys, suggestions, frames, markdown, blocks, commands, layout, lifecycle) |
+| `src/format.mjs` | Neutral value formatting (durations, tokens, result summaries) |
+| `src/transcript.mjs` | Shared transcript block folding (used by TUI + headless) |
 | `src/theme.mjs` | Colors / styling tokens |
 | `src/config.mjs` | Env-driven config |
 | `docs/` | Architecture, tool contract, self-updating guide, refactor plan |
@@ -28,9 +33,13 @@ model. The default tool set is deliberately tiny: `read`, `write`, `edit`, `bash
 
 ## The one rule
 
-**Stay minimal.** Prefer a small, clear change over a clever or large one. If a
-change adds a tool, a dependency, or a new concept, the docs that describe it must
-be updated in the same change. See `docs/self-updating.md` for the workflow.
+**Clarity and quality over compactness.** Prefer code that is easy to read,
+well-named, and organised around clear boundaries — even when that means more
+files — over squeezing everything into the fewest possible files. Two
+constraints stay: the default tool set stays minimal (`read`, `write`, `edit`,
+`bash`), and the runtime stays dependency-free. If a change adds a tool, a
+dependency, or a new concept, the docs that describe it must be updated in the
+same change. See `docs/self-updating.md` for the workflow.
 
 ## How to run
 

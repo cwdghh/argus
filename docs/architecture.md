@@ -54,32 +54,45 @@ Key properties:
 
 ```
 src/main.mjs ──▶ src/tui.mjs ──▶ src/agent.mjs ──▶ src/llm.mjs ──▶ HTTP (OpenAI-compatible)
+                      │  ▲                    │          │
+                      ▼  │                    ▼          ▼
+                 src/tools.mjs        src/sse.mjs   (SSE framing +
+                 (registry + fs)          ▲        chat-delta fold)
+                 read / write / edit / bash
                       │  ▲
                       ▼  │
-                 src/tools.mjs (read / write / edit / bash)
+         src/read-bounds.mjs      src/edit-engine.mjs
+         (read caps)              (exact/fuzzy/range edits)
 ```
 
 `src/agent.mjs` emits events (`text_delta`, `tool_call`, `tool_result`, …) so any
 UI can render live without knowing how the loop works. `src/tui.mjs` is one such UI; you could swap it
 for a logging UI or a web UI without touching the loop.
 
-`src/tui.mjs` is the controller; the pure pieces live beside it in
-`src/tui/`: `renderers.mjs` (markdown incl. tables + layout, CJK/emoji-aware column widths), `editor.mjs` (the multiline
-prompt: buffer, caret, recall history), `keys.mjs` (terminal escape/CSI
-decoding), `suggestions.mjs` (`@path` + `/command` popups), `frames.mjs`
-(status/footer/header rendering), and `help.mjs` (the command table + `/help`
-text). Each is unit-testable without a terminal.
+`src/tui.mjs` is the controller — input parsing, event → block mapping, and
+session wiring. The pure pieces live beside it in `src/tui/`:
+`renderers.mjs` (ANSI/text + CJK/emoji-aware column widths), `markdown.mjs`
+(markdown incl. tables), `blocks.mjs` (transcript block → lines), `editor.mjs`
+(the multiline prompt: buffer, caret, recall history), `keys.mjs` (terminal
+escape/CSI decoding), `suggestions.mjs` (`@path` + `/command` popups),
+`frames.mjs` (status/footer/header text), `commands.mjs` (the local command
+table + `/help` text), `layout.mjs` (full-frame assembly), and `lifecycle.mjs`
+(raw-mode startup, render clock, git polling, theme detection, shutdown). Each
+is unit-testable without a terminal. Shared, frontend-neutral helpers live
+outside the TUI: `src/format.mjs` (durations/tokens/result summaries),
+`src/transcript.mjs` (block folding), and `src/session/` (persistence).
 
-The TUI handles its local command set (the `SLASH_COMMANDS` table in
-`src/tui/help.mjs` — `/help`, `/status`, `/model`, `/sessions`, `/resume`,
-`/new`, `/exit`) before invoking the loop. Session switches replace the transcript,
-model history, input history, cwd, and writable session handle together. Typing
-a bare `/` command or an `@path` token opens a live suggestion popup above the
-editor (Up/Down to highlight, Tab to accept, Esc to dismiss);
-`@path` is deliberately not a parser-side expansion — the path is completed
-locally, then the model sees it as a reference and uses `read` visibly.
-Elapsed phase/tool/turn timing is also TUI-owned; it needs no agent-protocol or
-tool changes, and completed turn timings persist as ordinary display blocks.
+The TUI handles its local command set (the `COMMANDS` table in
+`src/tui/commands.mjs` — `/help`, `/status`, `/model`, `/sessions`, `/resume`,
+`/name`, `/new`, `/exit`) before invoking the loop; adding a command touches
+just that table. Session switches replace the transcript, model history, input
+history, cwd, and writable session handle together. Typing a bare `/` command
+or an `@path` token opens a live suggestion popup above the editor (Up/Down to
+highlight, Tab to accept, Esc to dismiss); `@path` is deliberately not a
+parser-side expansion — the path is completed locally, then the model sees it
+as a reference and uses `read` visibly. Elapsed phase/tool/turn timing is also
+TUI-owned; it needs no agent-protocol or tool changes, and completed turn
+timings persist as ordinary display blocks.
 
 ## Message types
 
@@ -87,8 +100,12 @@ tool changes, and completed turn timings persist as ordinary display blocks.
 - `assistant` — model output (text and/or tool_calls)
 - `tool` — a tool result, tied to a tool call via `tool_call_id`
 
-## Why it's small
+## Why it's organised this way
 
-The loop stays small enough to read in one sitting. Everything else is support.
-Keeping it compact means a single person (or an agent) can hold the whole thing
-in their head — which is exactly what makes self-updating safe.
+The loop stays small enough to read in one sitting; everything else is
+support, split along clear boundaries (network vs. protocol, registry vs.
+engine, controller vs. widget vs. layout, store vs. data shape). Keeping each
+module cohesive means a single person (or an agent) can hold the whole thing in
+their head — which is exactly what makes self-updating safe. File count is a
+means to that end, not a goal: prefer a clear boundary and a descriptive name
+over one more crowded file.

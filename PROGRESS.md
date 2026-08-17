@@ -875,3 +875,32 @@ What was done:
 - ✅ Added a regression test that executes `--help` through a real symlink.
 - ✅ Verified the existing linked command directly: two consecutive
   `argus --new` launches showed empty transcripts and distinct session names.
+
+#### 2026-08-17 — full refactor executed (tiers 0–3 of docs/refactor-plan.md)
+
+**Status: ✅ done**
+
+Executed the entire proposed refactor. Behavior preserved throughout (194
+tests green after each step); every new pure module got direct unit tests.
+
+- Shared/neutral modules: `src/format.mjs` (durations, tokens, result
+  summaries — no longer reach into the TUI from headless), `src/transcript.mjs`
+  (one `appendBlock` fold for TUI + headless), `src/sse.mjs` (SSE framing +
+  chat-delta folding out of `llm.mjs`), `src/edit-engine.mjs` + `src/read-bounds.mjs`
+  (pure engines out of `tools.mjs`).
+- Agent seams: `executeToolCall` + `accumulateUsage` in `src/agent.mjs`, so
+  parallel tool execution (NEXT_STEPS #1) lands without editing the loop body.
+- Renderers split: `src/tui/renderers.mjs` keeps ANSI/text + width math;
+  `src/tui/markdown.mjs` (markdown + tables) and `src/tui/blocks.mjs`
+  (transcript blocks) split out.
+- TUI controller tamed (1,028 → 708 lines): `src/tui/commands.mjs`
+  (table-driven `/commands`, absorbed `help.mjs`), `src/tui/layout.mjs`
+  (frame assembly), `src/tui/lifecycle.mjs` (start/stop/input/git/theme).
+  The prompt `Editor` is now the single owner of input state (the
+  `inputBuffer`/`inputCursor` accessor facade is gone).
+- Session layer packaged: `src/session/` with `store.mjs`, `resume.mjs`,
+  `data.mjs`, and an `index.mjs` facade.
+- Rule change: `AGENTS.md`'s one rule is now *clarity and quality over
+  compactness* (the old "stay minimal" rule was removed; the default tool set
+  and dependency-free identity still hold). Docs updated in the same change
+  (architecture, self-updating, README, refactor-plan).

@@ -1,5 +1,5 @@
 /**
- * Public API of the session layer (src/session.mjs).
+ * Public API of the session layer (the former src/session.mjs).
  *
  * Everything outside this package imports from here:
  *   - store.mjs  — filesystem + JSONL store, naming, listing, renaming,

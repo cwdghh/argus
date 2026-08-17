@@ -1,13 +1,27 @@
-# Refactor plan — proposal (2026-08-17)
+# Refactor plan — executed (2026-08-17)
 
-**Status:** proposal for discussion — nothing here is committed work, and no
-tier is a mandate. The plan is grounded in a full read of `src/` and the test
-suite (170 tests, all green on `main`).
+**Status: ✅ done.** All tiers below landed as behavior-preserving refactors on
+2026-08-17 (194 tests green). This file now reads as the record of what was
+proposed and what shipped; the final implementation differs from the proposal
+only in names and one scope change:
 
-**Scope guardrail:** the repo's one rule is *stay minimal*. Every move below is
-behavior-preserving, adds no dependencies, keeps the dependency-free identity,
-and follows `docs/self-updating.md` (docs travel with the change, verify with
-`node --check src/*.mjs` + `npm test`, append to `PROGRESS.md`).
+- **The "stay minimal" rule was replaced.** Per discussion, `AGENTS.md`'s one
+  rule is now *clarity and quality over compactness*; the default tool set and
+  the dependency-free identity remain hard constraints.
+- **Naming.** The edit engine shipped as `src/edit-engine.mjs` (not
+  `src/edit.mjs`) and the read caps as `src/read-bounds.mjs` (not
+  `src/read.mjs`) so the module names read as *concepts*, not verbs shared
+  with the tools.
+- **T2.2 scope.** Terminal lifecycle moved to `src/tui/lifecycle.mjs` in
+  addition to the proposed frame assembly (`src/tui/layout.mjs`), and the
+  editor state facade (T0.3) was resolved by deleting the accessors — the
+  `Editor` widget is now the single owner of input state.
+- **T3.1 shipped.** `src/session.mjs` became a small `src/session/` package
+  (store / resume / data + `index.mjs` facade).
+
+Every step kept `node --check` + `npm test` green and added focused unit tests
+for the newly pure modules (`format`, `transcript`, `edit-engine`, `sse`,
+`agent` seams).
 
 ## Why refactor at all
 

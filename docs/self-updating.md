@@ -5,7 +5,9 @@ Any agent (argus itself, or a human) should be able to follow this workflow.
 
 ## Principles
 
-1. **Small, localised changes.** Prefer editing one file over rewiring several.
+1. **Localised, well-named changes.** Prefer one focused change per commit; a
+   change may restructure a module into clearer pieces when that improves
+   readability, not just add to it.
 2. **Docs travel with code.** A change that adds a tool, a dependency, or a
    concept updates the matching docs in the same change.
 3. **Verify before declaring done.** Run a real (or mock) end-to-end test.
@@ -32,5 +34,6 @@ Any agent (argus itself, or a human) should be able to follow this workflow.
 - **Never** commit secrets (`.env` is gitignored).
 - **Don't** copy code wholesale from `references/pi` — argus has its own
   character. Use pi only as a conceptual reference.
-- **Default tool set stays minimal** (`read`, `write`, `edit`, `bash`). New tools
-  must earn their place; document the reason.
+- **The default tool set stays minimal** (`read`, `write`, `edit`, `bash`). New
+  tools must earn their place; document the reason. (This constraint is about
+  the agent's tool surface, not about how the code is organised.)

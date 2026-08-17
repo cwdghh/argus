@@ -3,8 +3,7 @@
 A tiny, **dependency-free** terminal coding agent built to understand how agents
 work. Argus is a standalone project: a small tool-calling loop around a language
 model — call the model, run the tools it requests, repeat. No build step, no
-dependencies; the whole thing fits in a handful of files under `src/`, written
-to be read end to end.
+dependencies; every module under `src/` is small enough to be read end to end.
 
 ## Run it
 
@@ -214,19 +213,20 @@ Headless runs against a session honor the same override.
 
 ## What it teaches
 
-The whole agent lives in a few small files:
+The whole agent lives in a few focused modules:
 
 | File | What it does |
 |------|--------------|
 | `src/config.mjs` | Reads configuration from the environment / `.env` |
-| `src/llm.mjs` | OpenAI-compatible chat client, incl. **streaming** + thinking |
-| `src/tools.mjs` | Tool schemas + implementations (`read`, `write`, `edit`, `bash`) |
+| `src/llm.mjs` | OpenAI-compatible chat client, incl. **streaming** + thinking (`src/sse.mjs` holds the pure SSE framing) |
+| `src/tools.mjs` | Tool registry + fs/shell layer (`read`, `write`, `edit`, `bash`); engines in `src/edit-engine.mjs` + `src/read-bounds.mjs` |
 | `src/agent.mjs` | **The loop**: call LLM → run requested tools → repeat |
 | `src/compact.mjs` | Context compaction (auto-summarize old turns) |
-| `src/session.mjs` | Append-only JSONL session persistence |
+| `src/session/` | Append-only JSONL session persistence (store / resume / data) |
 | `src/headless.mjs` | One-shot CLI mode (no TUI) |
-| `src/tui.mjs` + `src/tui/*.mjs` | Dependency-free TUI (controller + pure renderers / editor / keys / suggestions / frames / help) |
+| `src/tui.mjs` + `src/tui/*.mjs` | Dependency-free TUI (controller + pure widgets: editor, keys, suggestions, frames, markdown, blocks, commands, layout, lifecycle) |
 | `src/theme.mjs` | Colors / styling tokens, auto light-dark detection |
+| `src/format.mjs` | Neutral value formatting (durations, tokens, result summaries) |
 | `src/main.mjs` | Entry point / CLI |
 | `package.json` | `start` / `test` scripts (loads `.env` if present) |
 | `docs/` | Architecture, tool contract, self-updating guide |
