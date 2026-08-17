@@ -7,7 +7,7 @@ import { join } from "node:path";
 // Keep all session fixtures out of the user's real ~/.argus directory.
 process.env.ARGUS_HOME = mkdtempSync(join(tmpdir(), "argus-sess-test-"));
 
-const { Session, listSessions, loadSession, latestSessionName, latestSessionForCwd, defaultSessionName, newSessionName, pruneSessions, renameSession, sanitizeName, sessionConfig, sessionData, sessionSummaries, sessionsDir } = await import("../src/session.mjs");
+const { Session, listSessions, loadSession, latestSessionName, latestSessionForCwd, defaultSessionName, newSessionName, pruneSessions, renameSession, sanitizeName, sessionConfig, sessionData, sessionSummaries, sessionsDir } = await import("../src/session/index.mjs");
 
 const config = { baseUrl: "http://x", model: "mock", systemPrompt: "s" };
 

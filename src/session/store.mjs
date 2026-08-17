@@ -14,11 +14,33 @@
  * transcript (incl. thinking) so a session resumes exactly as it looked.
  *
  * The API key is never written to disk.
+ *
+ * This module owns the filesystem layer. Sibling modules:
+ *   - ./resume.mjs — folder-scoped default-session resolution
+ *   - ./data.mjs   — turn/session reconstruction + persisted config shape
+ *   - ./index.mjs  — the public facade everything else imports
+ */
+/**
+ * Session persistence for argus.
+ *
+ * Sessions are stored as append-only JSONL files under ~/.argus/sessions
+ * (override the base dir with the ARGUS_HOME env var, e.g. for tests):
+ *
+ *   {"type":"meta","version":1,"tools":[...]}          <- written once
+ *   {"type":"turn","config":{...},"messages":[...],"blocks":[...]}  <- per turn
+ *
+ * Why JSONL: each turn is one line, so nothing is lost and requests can be
+ * reconstructed exactly. For a turn, `config` (baseUrl/model/systemPrompt) +
+ * `messages` (verbatim) + the meta `tools` schemas uniquely determine every
+ * request that turn made. `blocks` additionally preserves the on-screen
+ * transcript (incl. thinking) so a session resumes exactly as it looked.
+ *
+ * The API key is never written to disk.
  */
 import { mkdir, readdir, readFile, appendFile, stat, rm, access, rename } from "node:fs/promises";
 import { join, basename } from "node:path";
-import { argusHome } from "./config.mjs";
-import { tools } from "./tools.mjs";
+import { argusHome } from "../config.mjs";
+import { tools } from "../tools.mjs";
 
 export function sessionsDir() {
   // Resolve lazily so `.env` loaded by the standalone executable is honored.
@@ -71,45 +93,6 @@ export async function listSessions() {
 export async function latestSessionName() {
   const list = await listSessions();
   return list.length ? list[0].name : null;
-}
-
-// How many of the newest sessions the folder-matched default resume considers.
-// A recency-prioritized search stays fast on startup; older sessions remain
-// reachable via `/resume <tab>` or `--session`.
-const RESUME_SCAN_LIMIT = 20;
-
-/** Does `candidate` live inside (or equal) `folder`? Boundary-aware, so
- *  `/repo/src` matches `/repo` but `/repo-x` does not. */
-function withinFolder(candidate, folder) {
-  const norm = (p) => (p === "/" ? p : p.replace(/\/+$/, "").replace(/\\+$/, ""));
-  const c = norm(candidate);
-  const f = norm(folder);
-  if (f === "/") return true; // the filesystem root contains everything
-  return c === f || c.startsWith(f + "/") || c.startsWith(f + "\\");
-}
-
-/**
- * Newest saved session whose working directory is the given folder or one of
- * its subfolders (e.g. running in the repo root also matches sessions that
- * ended inside it), scanning the newest `limit` sessions. Returns null when
- * nothing recent relates to this folder.
- */
-export async function latestSessionForCwd(cwd, { limit = RESUME_SCAN_LIMIT } = {}) {
-  const listed = await listSessions();
-  const bounded = limit > 0 ? listed.slice(0, limit) : listed;
-  for (const item of bounded) {
-    const loaded = await loadSession(item.name);
-    const sessionCwd = loaded?.meta?.cwd;
-    if (typeof sessionCwd === "string" && withinFolder(sessionCwd, cwd)) return item.name;
-  }
-  return null;
-}
-
-/** Default session name when none is forced or named: the newest session for
- *  `cwd`, or a fresh name when nothing relates to it (so an unrelated folder's
- *  session is never auto-resumed). */
-export async function defaultSessionName(cwd) {
-  return (await latestSessionForCwd(cwd)) ?? newSessionName();
 }
 
 /** List concise session metadata for the TUI. */
@@ -182,33 +165,6 @@ export async function renameSession(oldName, nextName) {
  * what was visible, `history` is the exact message list the model needs, and
  * `cwd`/`model` are the session's persisted meta (null when unset).
  */
-export function sessionData(data) {
-  const blocks = [];
-  const history = [];
-  for (const turn of data?.turns ?? []) {
-    if (Array.isArray(turn.blocks)) blocks.push(...turn.blocks);
-    if (Array.isArray(turn.messages)) history.push(...turn.messages);
-  }
-  return { blocks, history, cwd: data?.meta?.cwd ?? null, model: data?.meta?.model ?? null };
-}
-
-/**
- * The config subset persisted alongside a turn. The API key and stream-only
- * knobs are intentionally excluded so sessions never leak credentials, and one
- * copy of the shape keeps the TUI and headless persistence consistent.
- */
-export function sessionConfig(config) {
-  return {
-    baseUrl: config.baseUrl,
-    model: config.model,
-    systemPrompt: config.systemPrompt,
-    requestTimeoutMs: config.requestTimeoutMs,
-    maxRetries: config.maxRetries,
-    maxSteps: config.maxSteps,
-    maxToolResultChars: config.maxToolResultChars,
-  };
-}
-
 /** Load a session: { meta, turns }. Returns null if it doesn't exist. */
 export async function loadSession(name) {
   let text;

@@ -13,7 +13,7 @@
  * the turn errors, so the error block is preserved.
  */
 import { runTurn } from "./agent.mjs";
-import { loadSession, sessionConfig, sessionData } from "./session.mjs";
+import { loadSession, sessionConfig, sessionData } from "./session/index.mjs";
 import { summarize } from "./format.mjs";
 import { appendBlock } from "./transcript.mjs";
 

@@ -19,7 +19,7 @@ import {
   sanitizeName,
   sessionData,
   sessionSummaries,
-} from "./session.mjs";
+} from "./session/index.mjs";
 
 const USAGE = `argus — minimal coding agent
 

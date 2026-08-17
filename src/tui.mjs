@@ -30,7 +30,7 @@ import { runTurn } from "./agent.mjs";
 import { formatDuration, summarize } from "./format.mjs";
 import { appendBlock } from "./transcript.mjs";
 import { theme } from "./theme.mjs";
-import { sessionConfig } from "./session.mjs";
+import { sessionConfig } from "./session/index.mjs";
 import { Editor } from "./tui/editor.mjs";
 import { COMMANDS } from "./tui/commands.mjs";
 import { footerText, headerText } from "./tui/frames.mjs";

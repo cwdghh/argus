@@ -7,7 +7,7 @@ import { join } from "node:path";
 process.env.ARGUS_HOME = mkdtempSync(join(tmpdir(), "argus-headless-test-"));
 
 const { runHeadless } = await import("../src/headless.mjs");
-const { Session, loadSession } = await import("../src/session.mjs");
+const { Session, loadSession } = await import("../src/session/index.mjs");
 const { createMockServer } = await import("./helpers/mock-llm.mjs");
 
 test("headless: text -> stdout, tool -> stderr, session + cwd saved", async (t) => {
