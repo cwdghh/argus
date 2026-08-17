@@ -183,10 +183,14 @@ Set `ARGUS_SESSION_KEEP` to a positive number to prune everything but the
 newest sessions on startup — the session you are opening is always preserved.
 `0` (the default) keeps everything.
 
-By default `npm start` resumes the most recent session:
+By default `npm start` resumes the newest session that was used in (or
+below) the current folder, so each project picks up its own work instead of
+whatever session happened to be most recent globally. When nothing recent
+relates to this folder, a fresh session starts (an unrelated project's
+session is never auto-resumed; use `/resume` or `--session` for those):
 
 ```bash
-npm start                 # resume latest session (or start fresh)
+npm start                 # resume the newest session for this folder, else fresh
 npm start -- --new        # start a brand-new session
 npm start -- --session X  # resume/create a session named X
 ```

@@ -96,6 +96,10 @@ questions are deliberately unresolved — we'll discuss them.
 > names a session at creation, and `/resume` completes saved-session names in
 > the editor popup, so a large session collection stays navigable. Manual
 > deletion (`/session delete`) remains open.
+> **2026-08-17:** the auto-resume default is now folder-scoped — starting
+> without `--session`/`--new` picks the newest session whose cwd is the
+> current folder or a subfolder (newest 20 considered), and falls back to a
+> fresh session rather than another repo's latest.
 
 - **Open questions for argus:**
   - Do we need `/session delete` / `/session rename` on top of retention?

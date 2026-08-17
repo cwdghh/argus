@@ -13,8 +13,10 @@ See `GAPS.md` for the broader design territory and open questions.
 > relaxed timeouts for long-reasoning models, a global `~/.argus/.env`
 > config file (process env > project `.env` > home `.env` > defaults), and
 > session naming: `/name <name>` rename, `/new <name>` at creation, and
-> `/resume` name completion. Item 2 below (read-before-edit freshness) is
-> the main direction that work deliberately deferred.
+> `/resume` name completion. Default startup also resumes the newest session
+> for the current folder (falling back to a fresh session) instead of the
+> global latest. Item 2 below (read-before-edit freshness) is the main
+> direction that work deliberately deferred.
 
 ---
 

@@ -7,7 +7,7 @@ import { join } from "node:path";
 // Keep all session fixtures out of the user's real ~/.argus directory.
 process.env.ARGUS_HOME = mkdtempSync(join(tmpdir(), "argus-sess-test-"));
 
-const { Session, listSessions, loadSession, latestSessionName, newSessionName, pruneSessions, renameSession, sanitizeName, sessionConfig, sessionData, sessionSummaries, sessionsDir } = await import("../src/session.mjs");
+const { Session, listSessions, loadSession, latestSessionName, latestSessionForCwd, defaultSessionName, newSessionName, pruneSessions, renameSession, sanitizeName, sessionConfig, sessionData, sessionSummaries, sessionsDir } = await import("../src/session.mjs");
 
 const config = { baseUrl: "http://x", model: "mock", systemPrompt: "s" };
 
@@ -230,4 +230,71 @@ test("Session#renameTo repoints the handle so later writes hit the new file", as
   assert.equal(loaded.turns[1].messages[0].content, "after rename");
   const dir = readdirSync(join(process.env.ARGUS_HOME, "sessions"));
   assert.ok(!dir.includes("handle-old.jsonl"), "the handle must not recreate the old file");
+});
+
+/** Run `fn` against a throwaway ARGUS_HOME so folder-matching tests never
+ *  see sessions left behind by earlier tests in this file. */
+async function withSessionHome(fn) {
+  const original = process.env.ARGUS_HOME;
+  const home = mkdtempSync(join(tmpdir(), "argus-sess-home-"));
+  process.env.ARGUS_HOME = home;
+  try {
+    await fn(join(home, "sessions"));
+  } finally {
+    process.env.ARGUS_HOME = original;
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+const mkSession = async (dir, name, cwd, mtime) => {
+  const s = new Session(name, config);
+  await s.setCwd(cwd);
+  utimesSync(join(dir, `${name}.jsonl`), new Date(mtime), new Date(mtime));
+};
+
+test("latestSessionForCwd prefers the newest session inside the folder", async () => {
+  await withSessionHome(async (dir) => {
+    // Newest overall is /elsewhere, so the folder-scoped default must differ
+    // from the plain "latest session" behavior.
+    await mkSession(dir, "elsewhere", "/elsewhere", 3000);
+    await mkSession(dir, "outside", "/other-repo", 2000);
+    await mkSession(dir, "in-root", "/repo", 1000);
+    await mkSession(dir, "in-sub", "/repo/src", 500);
+
+    assert.equal(await latestSessionForCwd("/repo"), "in-root");
+    assert.equal(await latestSessionForCwd("/repo/src"), "in-sub", "only sessions at/below the folder match");
+    assert.equal(await latestSessionForCwd("/elsewhere"), "elsewhere");
+    assert.equal(await latestSessionName(), "elsewhere", "the plain latest-session helper is unchanged");
+  });
+});
+
+test("latestSessionForCwd respects folder boundaries, trailing slashes, and the root", async () => {
+  await withSessionHome(async (dir) => {
+    await mkSession(dir, "sibling", "/repo-x", 4000);
+    await mkSession(dir, "nested", "/repo/sub", 3500);
+
+    assert.equal(await latestSessionForCwd("/repo"), "nested", "/repo-x is a sibling, not inside /repo");
+    assert.equal(await latestSessionForCwd("/repo/"), "nested", "a trailing slash is tolerated");
+    assert.equal(await latestSessionForCwd("/"), "sibling", "the filesystem root matches every session");
+    assert.equal(await latestSessionForCwd("/no-such-folder"), null);
+  });
+});
+
+test("latestSessionForCwd scans only the newest `limit` sessions", async () => {
+  await withSessionHome(async (dir) => {
+    await mkSession(dir, "limit-new-other", "/limit-elsewhere", 9000);
+    await mkSession(dir, "limit-old-repo", "/limit-repo", 100);
+
+    assert.equal(await latestSessionForCwd("/limit-repo", { limit: 1 }), null, "the folder session is beyond the window");
+    assert.equal(await latestSessionForCwd("/limit-repo"), "limit-old-repo", "without a limit it is found");
+  });
+});
+
+test("defaultSessionName falls back to a fresh name when nothing relates to the folder", async () => {
+  await withSessionHome(async (dir) => {
+    await mkSession(dir, "folder-work", "/d-repo", 1000);
+    assert.equal(await latestSessionForCwd("/no-such-folder-xyz"), null);
+    assert.match(await defaultSessionName("/no-such-folder-xyz"), /^argus-/, "a fresh session starts when no folder session exists");
+    assert.equal(await defaultSessionName("/d-repo"), "folder-work", "otherwise the newest session for the folder wins");
+  });
 });

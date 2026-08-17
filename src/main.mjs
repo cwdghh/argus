@@ -10,8 +10,8 @@ import { MinimalTui } from "./tui.mjs";
 import { runHeadless } from "./headless.mjs";
 import {
   Session,
+  defaultSessionName,
   loadSession,
-  latestSessionName,
   listSessions,
   newSessionName,
   pruneSessions,
@@ -91,7 +91,9 @@ async function main() {
   let sessionName;
   if (name) sessionName = name;
   else if (forceNew) sessionName = newSessionName();
-  else sessionName = (await latestSessionName()) ?? newSessionName();
+  // Default: resume the newest session used in (or below) this folder, so each
+  // project picks up its own work instead of another repo's latest session.
+  else sessionName = await defaultSessionName(process.cwd());
 
   // Optional housekeeping: keep only the newest ARGUS_SESSION_KEEP sessions,
   // always preserving the session we are about to open.

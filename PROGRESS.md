@@ -1,3 +1,29 @@
+#### 2026-08-17 — folder-scoped default resume
+
+**Status: ✅ done**
+
+Goal (from discussion): `npm start` resumed the globally-latest session, which
+could point at a different repo; the default should pick up the work related
+to the folder you launch argus in.
+
+What was done:
+- ✅ `latestSessionForCwd(cwd)` in `src/session.mjs` returns the newest saved
+  session whose persisted cwd is the given folder or one of its subfolders
+  (boundary-aware: `/repo/src` matches `/repo`, `/repo-x` does not; trailing
+  slashes tolerated; the filesystem root matches everything). Scans the newest
+  20 sessions by default so startup stays fast.
+- ✅ `defaultSessionName(cwd)` = folder match, else a **fresh** session name —
+  an unrelated project's session is never auto-resumed (still reachable via
+  `/resume <tab>` or `--session`).
+- ✅ `src/main.mjs` uses `defaultSessionName(process.cwd())` for the default
+  TUI start (`--session` and `--new` are unchanged).
+- ✅ Tests: 4 new, isolated in their own throwaway `ARGUS_HOME` — folder
+  preference vs global latest, subfolder/sibling/trailing-slash/root
+  boundaries, the scan `limit`, and the fresh-name fallback. Docs updated in
+  README, `GAPS.md` #5, and `NEXT_STEPS.md`.
+
+Verification: 170 tests pass (166 before + 4 new), `node --check` clean.
+
 #### 2026-08-17 — session naming & resume completion
 
 **Status: ✅ done**
