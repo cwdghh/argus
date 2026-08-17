@@ -15,7 +15,7 @@ test("TUI handles a turn error without crashing (ac scope fix)", async (t) => {
   const tui = new MinimalTui({ baseUrl: srv.url, apiKey: "", model: "m", systemPrompt: "s" });
   tui.width = 60;
   tui.height = 20;
-  tui.inputBuffer = "hi";
+  tui.editor.buffer = "hi";
   await tui.submit();
   assert.ok(tui.blocks.some((b) => b.kind === "error"), "error block should be shown");
   assert.equal(tui.mode, "idle", "mode should return to idle");
@@ -32,7 +32,7 @@ test("TUI persists failed turns, including the visible error", async (t) => {
     { baseUrl: srv.url, apiKey: "", model: "m", systemPrompt: "s" },
     { session }
   );
-  tui.inputBuffer = "remember me";
+  tui.editor.buffer = "remember me";
   await tui.submit();
   assert.equal(saved.messages[0].content, "remember me");
   assert.ok(saved.blocks.some((b) => b.kind === "error" && /boom/.test(b.text)));
@@ -47,7 +47,7 @@ test("TUI persists its cwd even when no command changes directory", async (t) =>
     { baseUrl: srv.url, apiKey: "", model: "m", systemPrompt: "s" },
     { session, initialCwd: "/project" }
   );
-  tui.inputBuffer = "hello";
+  tui.editor.buffer = "hello";
   await tui.submit();
   assert.equal(savedCwd, "/project");
 });
@@ -60,7 +60,7 @@ test("TUI records a completed turn's working time", async (t) => {
     { baseUrl: srv.url, apiKey: "", model: "m", systemPrompt: "s" },
     { now: () => times.shift() ?? 3_500 }
   );
-  tui.inputBuffer = "time this";
+  tui.editor.buffer = "time this";
   await tui.submit();
   assert.equal(tui.lastTurnDurationMs, 2_500);
   assert.deepEqual(tui.blocks.at(-1), { kind: "timing", summary: "completed in 2.5s", durationMs: 2_500, usage: null });
@@ -79,7 +79,7 @@ test("TUI records tool time separately from total turn time", async (t) => {
     { baseUrl: srv.url, apiKey: "", model: "m", systemPrompt: "s" },
     { now: () => times.shift() ?? 5_000 }
   );
-  tui.inputBuffer = "run it";
+  tui.editor.buffer = "run it";
   await tui.submit();
   const result = tui.blocks.find((block) => block.kind === "result" && block.durationMs != null);
   assert.equal(result.durationMs, 1_250);
@@ -133,8 +133,8 @@ test("CJK display width: cursor column tracks double-width chars", () => {
   const t = new MinimalTui({ model: "m" });
   t.width = 60;
   t.height = 20;
-  t.inputBuffer = "你好世界";
-  t.inputCursor = 4;
+  t.editor.buffer = "你好世界";
+  t.editor.cursor = 4;
   assert.equal(t.inputView().col, 2 + 8, "4 CJK chars should be 8 columns");
 });
 
@@ -156,23 +156,23 @@ test("CJK text wraps within the terminal width", () => {
 
 test("blank submit stays idle and Backspace at column zero is harmless", async () => {
   const t = new MinimalTui({ model: "m" });
-  t.inputBuffer = "   ";
+  t.editor.buffer = "   ";
   await t.submit();
   assert.equal(t.mode, "idle");
-  t.inputBuffer = "abc";
-  t.inputCursor = 0;
+  t.editor.buffer = "abc";
+  t.editor.cursor = 0;
   t.runAction({ type: "backspace" });
-  assert.equal(t.inputBuffer, "abc");
+  assert.equal(t.editor.buffer, "abc");
 });
 
 test("editor movement and deletion preserve emoji surrogate pairs", () => {
   const t = new MinimalTui({ model: "m" });
-  t.inputBuffer = "a😀b";
-  t.inputCursor = 3;
+  t.editor.buffer = "a😀b";
+  t.editor.cursor = 3;
   t.runAction({ type: "left" });
-  assert.equal(t.inputCursor, 1);
+  assert.equal(t.editor.cursor, 1);
   t.runAction({ type: "right" });
-  assert.equal(t.inputCursor, 3);
+  assert.equal(t.editor.cursor, 3);
   t.runAction({ type: "backspace" });
-  assert.equal(t.inputBuffer, "ab");
+  assert.equal(t.editor.buffer, "ab");
 });

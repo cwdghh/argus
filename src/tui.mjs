@@ -26,37 +26,28 @@
  *   /help             show local commands
  *   @ / slash        live suggestions; Up/Down + Tab to pick, Esc to dismiss
  */
-import { exec } from "node:child_process";
-import { promisify } from "node:util";
 import { runTurn } from "./agent.mjs";
-import { Editor } from "./tui/editor.mjs";
-import { footerText, headerText, statusText } from "./tui/frames.mjs";
-import { COMMANDS } from "./tui/commands.mjs";
-import { decodeEscape } from "./tui/keys.mjs";
-import { acceptSuggestion, computeSuggestion, suggestionLines } from "./tui/suggestions.mjs";
-import { sessionConfig } from "./session.mjs";
-import { theme, setTheme } from "./theme.mjs";
-
-const execAsync = promisify(exec);
-const ESC = "\x1b";
+import { formatDuration, summarize } from "./format.mjs";
 import { appendBlock } from "./transcript.mjs";
-import {
-  formatChars,
-  formatDuration,
-  formatTokens,
-  summarize,
-} from "./format.mjs";
+import { theme } from "./theme.mjs";
+import { sessionConfig } from "./session.mjs";
+import { Editor } from "./tui/editor.mjs";
+import { COMMANDS } from "./tui/commands.mjs";
+import { footerText, headerText } from "./tui/frames.mjs";
+import { decodeEscape } from "./tui/keys.mjs";
+import { buildFrame } from "./tui/layout.mjs";
+import { attachInput, queryBackground, refreshGitStatus, startTui, stopTui } from "./tui/lifecycle.mjs";
+import { acceptSuggestion, computeSuggestion } from "./tui/suggestions.mjs";
 import {
   styleText,
   stripAnsi,
-  dispWidth,
-  truncateMiddle,
-  truncateEnd,
   previousCharIndex,
   nextCharIndex,
   previousWordIndex,
 } from "./tui/renderers.mjs";
 import { blockLines } from "./tui/blocks.mjs";
+
+const ESC = "\x1b";
 
 export class MinimalTui {
   constructor(config, opts = {}) {
@@ -78,17 +69,15 @@ export class MinimalTui {
     this.sessionNames = opts.sessionNames ?? [];
     this.listSessionNames = opts.listSessionNames ?? (async () => []);
     this.cwd = opts.initialCwd ?? process.cwd();
-    // The multiline prompt editor is a separate pure widget (src/tui/editor.mjs);
-    // the accessors below expose its state as plain inputBuffer/inputCursor/
-    // inputHistory/historyIndex fields for the rest of the class and the tests.
+    // The multiline prompt editor is a separate pure widget (src/tui/editor.mjs)
+    // and is the single owner of all input state: buffer, caret, recall
+    // history, and the history walk index. The TUI reads and writes
+    // `this.editor.*` directly — there is no second API surface.
     this.editor = new Editor();
-    this.inputBuffer = "";
-    this.inputCursor = 0;
-    this.inputHistory = this.history
+    this.editor.history = this.history
       .filter((message) => message.role === "user" && typeof message.content === "string")
       .map((message) => message.content);
-    this.historyIndex = -1;
-    this.mode = "idle"; // idle | working | thinking
+    this.mode = "idle"; // idle | working | thinking | aborting | confirm
     this.scrollOffset = 0;
     this.width = process.stdout.columns || 80;
     this.height = process.stdout.rows || 24;
@@ -108,8 +97,8 @@ export class MinimalTui {
     // Live suggestion state for @path and /command completions, recomputed by
     // refreshSuggestions() after every input mutation. Null when no popup is
     // shown. Otherwise: { kind: "path"|"slash", items, selected, start, end,
-    // ... } where items is the filtered list and start/end are the token bounds
-    // in inputBuffer that accepting a suggestion replaces.
+    // ... } where items is the filtered list and start/end are the token
+    // bounds in the editor buffer that accepting a suggestion replaces.
     this.suggestion = null;
     this.now = opts.now ?? Date.now;
     this.activityStartedAt = null;
@@ -120,6 +109,9 @@ export class MinimalTui {
     // Cumulative token usage for the active turn (real provider counts, not a
     // char estimate). Reset at the start of each turn in submit().
     this.turnUsage = null;
+    // Editor row count from the last rendered frame, used by scrolling
+    // helpers between frames (the layout pass computes the exact value).
+    this.editorHeight = 1;
   }
 
   transcriptLines() {
@@ -164,23 +156,11 @@ export class MinimalTui {
 
   /** Rows available for the transcript after reserving header/separator/footer/editor. */
   transcriptHeight() {
-    const editorRows = this._editorHeight ?? 1;
+    const editorRows = this.editorHeight ?? 1;
     return Math.max(1, this.height - 4 - (editorRows - 1));
   }
 
   // ---- prompt editor (pure widget in src/tui/editor.mjs) ------------------
-
-  // The editor's state lives in `this.editor`; the accessors below expose it as
-  // plain fields so the rest of the class (and the tests) can keep talking in
-  // terms of inputBuffer/inputCursor/inputHistory/historyIndex.
-  get inputBuffer() { return this.editor.buffer; }
-  set inputBuffer(value) { this.editor.buffer = value; }
-  get inputCursor() { return this.editor.cursor; }
-  set inputCursor(value) { this.editor.cursor = value; }
-  get inputHistory() { return this.editor.history; }
-  set inputHistory(value) { this.editor.history = value; }
-  get historyIndex() { return this.editor.historyIndex; }
-  set historyIndex(value) { this.editor.historyIndex = value; }
 
   /** Wrapped logical editor lines (see Editor.rows). */
   editorRows() {
@@ -234,18 +214,16 @@ export class MinimalTui {
   }
 
   append(kind, delta) {
-    const last = this.blocks[this.blocks.length - 1];
-    if (last && last.kind === kind) last.text += delta;
-    else this.blocks.push({ kind, text: delta });
+    appendBlock(this.blocks, kind, delta);
     this.dirtyRendered = true;
   }
 
   async submit() {
     if (this.mode !== "idle") return;
-    const text = this.inputBuffer.trim();
+    const text = this.editor.buffer.trim();
     if (!text) return;
-    this.inputBuffer = "";
-    this.inputCursor = 0;
+    this.editor.buffer = "";
+    this.editor.cursor = 0;
     this.suggestion = null;
     if (text.startsWith("/")) {
       await this.runCommand(text);
@@ -257,8 +235,8 @@ export class MinimalTui {
     this.turnUsage = null;
     this.dirtyRendered = true;
 
-    if (this.inputHistory[this.inputHistory.length - 1] !== text) this.inputHistory.push(text);
-    this.historyIndex = -1;
+    if (this.editor.history[this.editor.history.length - 1] !== text) this.editor.history.push(text);
+    this.editor.historyIndex = -1;
     const turnStart = this.blocks.length;
     this.pushBlock({ kind: "user", text });
 
@@ -375,10 +353,10 @@ export class MinimalTui {
     this.blocks = [...(next.blocks ?? []), { kind: "result", ok: true, summary }];
     this.lastTurnDurationMs = [...(next.blocks ?? [])].reverse().find((block) => block.kind === "timing")?.durationMs ?? null;
     this.lastTurnUsage = [...(next.blocks ?? [])].reverse().find((block) => block.kind === "timing")?.usage ?? null;
-    this.inputHistory = this.history
+    this.editor.history = this.history
       .filter((message) => message.role === "user" && typeof message.content === "string")
       .map((message) => message.content);
-    this.historyIndex = -1;
+    this.editor.historyIndex = -1;
     this.scrollOffset = 0;
     this.suggestion = null;
     this.refreshGitStatus();
@@ -391,8 +369,8 @@ export class MinimalTui {
   /** Recompute the live popup from the current buffer and caret. */
   refreshSuggestions() {
     this.suggestion = computeSuggestion({
-      buffer: this.inputBuffer,
-      cursor: this.inputCursor,
+      buffer: this.editor.buffer,
+      cursor: this.editor.cursor,
       mode: this.mode,
       cwd: this.cwd,
       sessions: this.sessionNames,
@@ -422,9 +400,9 @@ export class MinimalTui {
   /** Accept the highlighted suggestion into the editor. */
   acceptSuggestion(s = this.suggestion) {
     if (!s) return;
-    const next = acceptSuggestion(s, this.inputBuffer, this.inputCursor);
-    this.inputBuffer = next.buffer;
-    this.inputCursor = next.cursor;
+    const next = acceptSuggestion(s, this.editor.buffer, this.editor.cursor);
+    this.editor.buffer = next.buffer;
+    this.editor.cursor = next.cursor;
   }
 
   /**
@@ -438,117 +416,18 @@ export class MinimalTui {
     this.refreshSuggestions();
   }
 
-  /** Styled rows for the suggestion popup, ready to paste into a frame. */
-  suggestionLines() {
-    return suggestionLines(this.suggestion, {
-      width: this.width,
-      height: this.height,
-      editorHeight: this._editorHeight,
-      cwd: this.cwd,
-    });
-  }
-
   // ---- frame building -----------------------------------------------------
 
-  statusText() { return statusText(this); }
+  /** Pure footer/header fragments (see frames.mjs). */
   footer() { return footerText(this); }
   header() { return headerText(this); }
+
+  /**
+   * Assemble one full frame (see layout.mjs). Returns the terminal rows; the
+   * layout pass also computes caret geometry for render().
+   */
   buildFrame() {
-    const frame = new Array(this.height).fill("");
-    const width = this.width;
-
-    frame[0] = this.header();
-
-    const view = this.inputView();
-    this._editorHeight = view.height;
-
-    const lines = this.transcriptLines();
-    const transcriptHeight = this.transcriptHeight();
-    this.scrollOffset = Math.min(this.scrollOffset, this.maxScroll());
-    const start = Math.max(0, lines.length - transcriptHeight - this.scrollOffset);
-    for (let r = 0; r < transcriptHeight; r++) {
-      frame[1 + r] = lines[start + r] ?? "";
-    }
-    // Blank separator line between transcript and editor
-    frame[1 + transcriptHeight] = "";
-
-    if (this.blocks.length === 0) {
-      const hint =
-        width >= 55
-          ? [
-              "What would you like to build?",
-              "Type a task, or reference a file with @path.",
-              "/help for commands  ·  Tab completes @paths & /commands  ·  Esc aborts",
-            ]
-          : width >= 40
-            ? ["What would you like to build?", "Type a task or use @path.", "/help commands  ·  Tab @ or /  ·  Esc aborts"]
-            : width >= 30
-              ? ["What would you like to build?", "Type a task or use @path.", "/help  ·  Tab @ or /  ·  Esc aborts"]
-              : ["What will you build?", "Type a task or @path.", "/help  ·  Tab  ·  Esc"];
-      const startRow = Math.max(0, Math.floor((transcriptHeight - hint.length) / 2));
-      hint.forEach((line, i) => {
-        const l = truncateEnd(line, width);
-        const centered = " ".repeat(Math.max(0, Math.floor((width - dispWidth(l)) / 2))) + l;
-        frame[1 + startRow + i] = styleText(centered, { fg: theme.dim });
-      });
-    }
-
-    if (this.pendingConfirm) {
-      frame[this.height - 2] = styleText(
-        `⚠ ${truncateMiddle(this.pendingConfirm.command, Math.max(12, this.width - 12))}  (y/n)`,
-        { fg: theme.bad }
-      );
-      this.inputCol = 0;
-      this._inputRow = this.height - 2;
-    } else {
-      const placeholder =
-        this.mode === "idle"
-          ? width >= 45
-            ? "Describe a task…  (/help for commands)"
-            : width >= 25
-              ? "Describe a task…  (/help)"
-              : "Describe a task…"
-          : width >= 45
-            ? "Argus is working…  (Esc to interrupt)"
-            : width >= 25
-              ? "Working…  (Esc to stop)"
-              : "Working… Esc stops";
-      // Editor grows upward: its rows occupy the rows directly above the footer.
-      const firstEditorRow = this.height - 1 - view.height;
-
-      // Live suggestion popup sits directly above the editor, overlaying the
-      // bottom of the transcript while it is open.
-      const suggestionRows = this.suggestion ? this.suggestionLines() : [];
-      if (suggestionRows.length) {
-        const maxPopupRows = Math.max(1, firstEditorRow - 1);
-        const visible = suggestionRows.slice(0, maxPopupRows);
-        const popupStart = firstEditorRow - visible.length;
-        visible.forEach((line, i) => {
-          frame[popupStart + i] = line;
-        });
-      }
-
-      view.rows.forEach((rowText, i) => {
-        const row = firstEditorRow + i;
-        const isCaretRow = i === view.caretRow;
-        const marker = i === 0 ? "❯" : "│";
-        const markerStyle = i === 0 ? { fg: theme.accent, bold: true } : { fg: theme.rail, dim: true };
-        if (rowText) {
-          frame[row] = `${styleText(marker, markerStyle)} ${rowText}`;
-        } else if (isCaretRow) {
-          frame[row] = `${styleText("❯", { fg: theme.accent, bold: true })} ${
-            styleText(truncateEnd(placeholder, Math.max(1, this.width - 3)), { fg: theme.dim, italic: true })
-          }`;
-        } else {
-          frame[row] = styleText("│", { fg: theme.rail, dim: true }) + " "; // empty continuation rail
-        }
-      });
-      this.inputCol = view.col;
-      this._inputRow = firstEditorRow + view.caretRow;
-    }
-
-    frame[this.height - 1] = this.footer();
-    return frame;
+    return buildFrame(this).rows;
   }
 
   // ---- raw input parsing --------------------------------------------------
@@ -628,20 +507,20 @@ export class MinimalTui {
     for (const ch of text) {
       const cp = ch.codePointAt(0);
       if (cp < 32 || cp === 127) {
-        if (cp === 1) this.inputCursor = 0; // Ctrl-A
+        if (cp === 1) this.editor.cursor = 0; // Ctrl-A
         else if (cp === 9) this.completePath(); // Tab
         else if (cp === 3) this.handleCtrlC();
         else if (cp === 4) {
-          if (!this.inputBuffer) this.stop();
+          if (!this.editor.buffer) this.stop();
           else this.deleteAtCursor();
-        } else if (cp === 5) this.inputCursor = this.inputBuffer.length; // Ctrl-E
+        } else if (cp === 5) this.editor.cursor = this.editor.buffer.length; // Ctrl-E
         else if (cp === 11) this.deleteToLineEnd(); // Ctrl-K
         else if (cp === 12) this.redraw(); // Ctrl-L
         else if (cp === 21) this.deleteToLineStart(); // Ctrl-U
         else if (cp === 23) { // Ctrl-W
-          const previous = previousWordIndex(this.inputBuffer, this.inputCursor);
-          this.inputBuffer = this.inputBuffer.slice(0, previous) + this.inputBuffer.slice(this.inputCursor);
-          this.inputCursor = previous;
+          const previous = previousWordIndex(this.editor.buffer, this.editor.cursor);
+          this.editor.buffer = this.editor.buffer.slice(0, previous) + this.editor.buffer.slice(this.editor.cursor);
+          this.editor.cursor = previous;
         } else if (cp === 13 || cp === 10) {
           this.submit();
         } else if (cp === 127 || cp === 8) {
@@ -689,11 +568,11 @@ export class MinimalTui {
         this.deleteAtCursor();
         break;
       case "left":
-        this.inputCursor = previousCharIndex(this.inputBuffer, this.inputCursor);
+        this.editor.cursor = previousCharIndex(this.editor.buffer, this.editor.cursor);
         this.refreshSuggestions();
         break;
       case "right":
-        this.inputCursor = nextCharIndex(this.inputBuffer, this.inputCursor);
+        this.editor.cursor = nextCharIndex(this.editor.buffer, this.editor.cursor);
         this.refreshSuggestions();
         break;
       case "up":
@@ -701,7 +580,7 @@ export class MinimalTui {
           this.suggestionMove(-1);
           break;
         }
-        if (this.inputBuffer.includes("\n")) {
+        if (this.editor.buffer.includes("\n")) {
           if (this.moveCaretVertical(-1)) break;
         }
         this.historyUp();
@@ -711,7 +590,7 @@ export class MinimalTui {
           this.suggestionMove(1);
           break;
         }
-        if (this.inputBuffer.includes("\n")) {
+        if (this.editor.buffer.includes("\n")) {
           if (this.moveCaretVertical(1)) break;
         }
         this.historyDown();
@@ -733,10 +612,10 @@ export class MinimalTui {
         else if (this.mode !== "idle") this.abortTurn();
         else if (this.suggestion) {
           this.suggestion = null;
-        } else if (this.inputBuffer.includes("\n")) {
+        } else if (this.editor.buffer.includes("\n")) {
           // Esc closes a multiline buffer back to a single line.
-          this.inputBuffer = this.inputBuffer.replace(/\n/g, " ");
-          this.inputCursor = this.inputBuffer.length;
+          this.editor.buffer = this.editor.buffer.replace(/\n/g, " ");
+          this.editor.cursor = this.editor.buffer.length;
           this.refreshSuggestions();
         }
         break;
@@ -792,94 +671,18 @@ export class MinimalTui {
     resolve(ok);
   }
 
-  // ---- startup / lifecycle ------------------------------------------------
-
-  async refreshGitStatus() {
-    const cwd = this.cwd;
-    try {
-      const { stdout: branch } = await execAsync("git rev-parse --abbrev-ref HEAD", { cwd });
-      const { stdout: porcelain } = await execAsync("git status --porcelain", { cwd });
-      const count = porcelain.split("\n").filter((l) => l.trim()).length;
-      this.git = { branch: branch.trim() || "?", dirty: count > 0, dirtyCount: count };
-    } catch {
-      this.git = { branch: null, dirty: false, dirtyCount: 0 };
-    }
-    this.dirtyRendered = true;
-  }
-
-  /** Query terminal background via OSC 11; resolve { light } or { light: null }. */
-  queryBackground() {
-    return new Promise((resolve) => {
-      let buf = "";
-      let done = false;
-      const finish = (light) => {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        process.stdin.removeListener("data", onData);
-        resolve({ light });
-      };
-      const onData = (chunk) => {
-        buf += chunk.toString("utf8");
-        const st = buf.indexOf("\x1b\\");
-        const bel = buf.indexOf("\x07");
-        let end = -1;
-        if (st !== -1) end = st;
-        else if (bel !== -1) end = bel;
-        if (end === -1) return;
-        const m = /rgb:([0-9a-fA-F]{4})\/([0-9a-fA-F]{4})\/([0-9a-fA-F]{4})/.exec(buf.slice(0, end));
-        if (!m) return finish(null);
-        const r = parseInt(m[1].slice(0, 2), 16);
-        const g = parseInt(m[2].slice(0, 2), 16);
-        const b = parseInt(m[3].slice(0, 2), 16);
-        finish((r * 299 + g * 587 + b * 114) / 1000 > 127);
-      };
-      const timer = setTimeout(() => finish(null), 400);
-      process.stdin.on("data", onData);
-      process.stdout.write("\x1b]11;?\x1b\\");
-    });
-  }
+  // ---- startup / lifecycle (implementation in src/tui/lifecycle.mjs) -------
 
   start() {
-    process.stdin.setRawMode(true);
-    process.stdin.resume();
-    // Clear the whole screen up front so we start from a clean slate rather
-    // than relying on per-row clearing of whatever was on screen before.
-    process.stdout.write(`${ESC}[2J${ESC}[H`);
-    process.stdout.on("resize", () => {
-      this.width = process.stdout.columns || 80;
-      this.height = process.stdout.rows || 24;
-      this.dirtyRendered = true;
-    });
-
-    this.timer = setInterval(() => {
-      if (this.activityStartedAt != null) {
-        const tick = Math.floor((this.now() - this.activityStartedAt) / 100);
-        if (tick !== this.lastClockTick) {
-          this.lastClockTick = tick;
-          this.dirtyRendered = true;
-        }
-      }
-      this.render();
-    }, 40);
-    this.gitTimer = setInterval(() => this.refreshGitStatus(), 3000);
-    this.refreshGitStatus();
-    this.dirtyRendered = true;
-    this.render();
-
-    // Attach input immediately so keystrokes typed during theme detection are
-    // not lost. The parser already ignores OSC responses.
-    this.attachInput();
-    this.queryBackground().then((bg) => {
-      if (bg.light != null) setTheme(bg.light ? "light" : "dark");
-      this.dirtyRendered = true;
-      this.render();
-    });
+    startTui(this);
   }
 
-  attachInput() {
-    process.stdout.write("\x1b[?1000h\x1b[?1006h\x1b[?2004h"); // mouse + bracketed paste
-    process.stdin.on("data", (chunk) => this.onData(chunk));
+  stop() {
+    stopTui(this);
+  }
+
+  refreshGitStatus() {
+    return refreshGitStatus(this);
   }
 
   render() {
@@ -888,31 +691,18 @@ export class MinimalTui {
     this.width = process.stdout.columns || 80;
     this.height = process.stdout.rows || 24;
 
-    const frame = this.buildFrame();
+    const { rows, editorHeight, inputCol, inputRow } = buildFrame(this);
+    this.editorHeight = editorHeight;
     process.stdout.write(`${ESC}[?25l`);
     for (let r = 0; r < this.height; r++) {
-      if (frame[r] !== this.lastFrame[r]) {
+      if (rows[r] !== this.lastFrame[r]) {
         process.stdout.cursorTo(0, r);
         process.stdout.write(`${ESC}[2K`);
-        process.stdout.write(frame[r]);
-        this.lastFrame[r] = frame[r];
+        process.stdout.write(rows[r]);
+        this.lastFrame[r] = rows[r];
       }
     }
-    process.stdout.cursorTo(Math.min(this.inputCol, this.width - 1), this._inputRow ?? this.height - 2);
+    process.stdout.cursorTo(Math.min(inputCol, this.width - 1), inputRow ?? this.height - 2);
     process.stdout.write(`${ESC}[?25h`);
-  }
-
-  stop() {
-    if (this.stopped) return;
-    this.stopped = true;
-    clearInterval(this.timer);
-    clearInterval(this.gitTimer);
-    this.clearEscTimeout();
-    process.stdout.write("\x1b[?1000l\x1b[?1006l\x1b[?2004l"); // restore terminal modes
-    process.stdin.setRawMode(false);
-    process.stdin.pause();
-    this.decoder.decode();
-    process.stdout.write(`${ESC}[?25h\n`);
-    process.exit(0);
   }
 }

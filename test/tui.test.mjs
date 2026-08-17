@@ -7,6 +7,7 @@ import { MinimalTui } from "../src/tui.mjs";
 import { COMPACT_DEFAULTS, estimateChars } from "../src/compact.mjs";
 import { formatChars } from "../src/format.mjs";
 import { SLASH_COMMANDS } from "../src/tui/commands.mjs";
+import { suggestionLines } from "../src/tui/suggestions.mjs";
 
 const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
 
@@ -126,14 +127,14 @@ test("header makes transcript scroll state visible", () => {
 
 test("input history navigation", () => {
   const t = new MinimalTui({ model: "m" });
-  t.inputHistory = ["first", "second"];
+  t.editor.history = ["first", "second"];
   t.historyUp();
-  assert.equal(t.inputBuffer, "second");
+  assert.equal(t.editor.buffer, "second");
   t.historyUp();
-  assert.equal(t.inputBuffer, "first");
+  assert.equal(t.editor.buffer, "first");
   t.historyDown();
   t.historyDown();
-  assert.equal(t.inputBuffer, "");
+  assert.equal(t.editor.buffer, "");
 });
 
 test("abortTurn aborts controller and sets aborting mode", () => {
@@ -195,7 +196,7 @@ test("local slash commands do not enter model history", async () => {
   assert.equal(t.sessionName, "saved");
   assert.equal(t.cwd, "/saved");
   assert.equal(t.lastTurnDurationMs, 1_200);
-  assert.deepEqual(t.inputHistory, ["saved prompt"]);
+  assert.deepEqual(t.editor.history, ["saved prompt"]);
   await t.runCommand("/new");
   assert.equal(t.sessionName, "fresh");
   assert.equal(t.cwd, "/fresh");
@@ -256,29 +257,29 @@ test("Tab completes only @path tokens and preserves surrounding input", () => {
   writeFileSync(join(dir, "space dir", "file name.txt"), "");
   const t = new MinimalTui({ model: "m" }, { initialCwd: dir });
 
-  t.inputBuffer = "Review @src/ag";
-  t.inputCursor = t.inputBuffer.length;
+  t.editor.buffer = "Review @src/ag";
+  t.editor.cursor = t.editor.buffer.length;
   t.completePath();
-  assert.equal(t.inputBuffer, "Review @src/agent.mjs ");
+  assert.equal(t.editor.buffer, "Review @src/agent.mjs ");
 
-  t.inputBuffer = "Review src/ag";
-  t.inputCursor = t.inputBuffer.length;
+  t.editor.buffer = "Review src/ag";
+  t.editor.cursor = t.editor.buffer.length;
   t.completePath();
-  assert.equal(t.inputBuffer, "Review src/ag", "plain paths are not implicitly completed");
+  assert.equal(t.editor.buffer, "Review src/ag", "plain paths are not implicitly completed");
 
-  t.inputBuffer = "Review @sr";
-  t.inputCursor = t.inputBuffer.length;
+  t.editor.buffer = "Review @sr";
+  t.editor.cursor = t.editor.buffer.length;
   t.completePath();
-  assert.equal(t.inputBuffer, "Review @src/");
+  assert.equal(t.editor.buffer, "Review @src/");
 
-  t.inputBuffer = "Review @sp";
-  t.inputCursor = t.inputBuffer.length;
+  t.editor.buffer = "Review @sp";
+  t.editor.cursor = t.editor.buffer.length;
   t.completePath();
-  assert.equal(t.inputBuffer, 'Review @"space dir/');
-  t.inputBuffer += "fi";
-  t.inputCursor = t.inputBuffer.length;
+  assert.equal(t.editor.buffer, 'Review @"space dir/');
+  t.editor.buffer += "fi";
+  t.editor.cursor = t.editor.buffer.length;
   t.completePath();
-  assert.equal(t.inputBuffer, 'Review @"space dir/file name.txt" ');
+  assert.equal(t.editor.buffer, 'Review @"space dir/file name.txt" ');
 });
 
 test("live suggestions: /commands filter, navigate, Tab accepts, Esc dismisses", () => {
@@ -290,22 +291,22 @@ test("live suggestions: /commands filter, navigate, Tab accepts, Esc dismisses",
   assert.deepEqual(t.suggestion.items.map((i) => i.label), ["/resume"]);
 
   t.insertText("\t"); // Tab accepts the highlighted command
-  assert.equal(t.inputBuffer, "/resume ");
+  assert.equal(t.editor.buffer, "/resume ");
   assert.equal(t.suggestion, null, "a completed command leaves no popup");
 
-  t.inputBuffer = "/";
-  t.inputCursor = 1;
+  t.editor.buffer = "/";
+  t.editor.cursor = 1;
   t.refreshSuggestions();
   assert.equal(t.suggestion.items.length, SLASH_COMMANDS.length, "one entry per SLASH_COMMANDS command");
   t.runAction({ type: "down" });
   t.runAction({ type: "down" });
   assert.equal(t.suggestion.selected, 2, "arrow keys move the highlight");
   t.insertText("\t");
-  assert.equal(t.inputBuffer, "/status ", "Tab accepts the moved highlight");
+  assert.equal(t.editor.buffer, "/status ", "Tab accepts the moved highlight");
 
   // Typing more shrinks the list but keeps the highlighted command.
-  t.inputBuffer = "/";
-  t.inputCursor = 1;
+  t.editor.buffer = "/";
+  t.editor.cursor = 1;
   t.refreshSuggestions();
   t.runAction({ type: "down" });
   t.runAction({ type: "down" });
@@ -316,19 +317,19 @@ test("live suggestions: /commands filter, navigate, Tab accepts, Esc dismisses",
   assert.deepEqual(t.suggestion.items.map((i) => i.label), ["/sessions"]);
 
   // A space ends the bare-command token, so the popup hides.
-  t.inputBuffer = "/re";
-  t.inputCursor = 3;
+  t.editor.buffer = "/re";
+  t.editor.cursor = 3;
   t.insertText(" ");
   assert.equal(t.suggestion, null);
-  assert.equal(t.inputBuffer, "/re ");
+  assert.equal(t.editor.buffer, "/re ");
 
   // Esc dismisses the popup without touching the input.
-  t.inputBuffer = "/";
-  t.inputCursor = 1;
+  t.editor.buffer = "/";
+  t.editor.cursor = 1;
   t.refreshSuggestions();
   t.runAction({ type: "escape" });
   assert.equal(t.suggestion, null);
-  assert.equal(t.inputBuffer, "/");
+  assert.equal(t.editor.buffer, "/");
 });
 
 test("live suggestions: @path list follows the caret and Tab accepts entries", () => {
@@ -348,14 +349,14 @@ test("live suggestions: @path list follows the caret and Tab accepts entries", (
   assert.deepEqual(t.suggestion.items.map((i) => i.label), ["src/"], "dirs sort first and filter by prefix");
 
   t.insertText("\t"); // accept src/ so the token points into the real dir
-  assert.equal(t.inputBuffer, "read @src/", "Tab fills the directory");
+  assert.equal(t.editor.buffer, "read @src/", "Tab fills the directory");
   t.insertText("ag");
   assert.deepEqual(t.suggestion.items.map((i) => i.label), ["agent.mjs"]);
   t.insertText("\t");
-  assert.equal(t.inputBuffer, "read @src/agent.mjs ", "Tab fills the file and closes the token");
+  assert.equal(t.editor.buffer, "read @src/agent.mjs ", "Tab fills the file and closes the token");
 
-  t.inputBuffer = "read @li";
-  t.inputCursor = t.inputBuffer.length;
+  t.editor.buffer = "read @li";
+  t.editor.cursor = t.editor.buffer.length;
   t.refreshSuggestions();
   assert.deepEqual(t.suggestion.items.map((i) => i.label), ["lib/"]);
   t.insertText("\t"); // accept the directory, opening it for descent
@@ -365,8 +366,8 @@ test("live suggestions: @path list follows the caret and Tab accepts entries", (
   assert.equal(t.suggestion, null);
 
   // No popup for a plain slash or an @token that is not at the caret end.
-  t.inputBuffer = "read @src/agent.mjs and keep typing";
-  t.inputCursor = t.inputBuffer.length;
+  t.editor.buffer = "read @src/agent.mjs and keep typing";
+  t.editor.cursor = t.editor.buffer.length;
   t.refreshSuggestions();
   assert.equal(t.suggestion, null);
 });
@@ -375,8 +376,8 @@ test("suggestion popup renders above the editor and hides while working", () => 
   const t = new MinimalTui({ model: "mock-model" });
   t.width = 60;
   t.height = 24;
-  t.inputBuffer = "/";
-  t.inputCursor = 1;
+  t.editor.buffer = "/";
+  t.editor.cursor = 1;
   t.refreshSuggestions();
 
   const frame = t.buildFrame();
@@ -399,8 +400,8 @@ test("suggestion popup scrolls when Up/Down move past the visible limit", () => 
   const t = new MinimalTui({ model: "m" }, { initialCwd: dir });
   t.width = 60;
   t.height = 24;
-  t.inputBuffer = "@";
-  t.inputCursor = 1;
+  t.editor.buffer = "@";
+  t.editor.cursor = 1;
   t.refreshSuggestions();
   const plain = () => t.buildFrame().map((r) => r.replace(/\x1b\[[0-9;]*m/g, ""));
 
@@ -437,13 +438,15 @@ test("suggestion popup keeps a constant height while scrolling", () => {
   const t = new MinimalTui({ model: "m" }, { initialCwd: dir });
   t.width = 60;
   t.height = 24;
-  t.inputBuffer = "@";
-  t.inputCursor = 1;
+  t.editor.buffer = "@";
+  t.editor.cursor = 1;
   t.refreshSuggestions();
 
   const heights = [];
   for (let i = 0; i < t.suggestion.items.length; i++) {
-    heights.push(t.suggestionLines().length);
+    heights.push(
+    suggestionLines(t.suggestion, { width: t.width, height: t.height, editorHeight: t.editorHeight, cwd: t.cwd }).length
+  );
     t.runAction({ type: "down" });
   }
   assert.ok(heights.length > 1, "the list is long enough to scroll");
@@ -459,8 +462,8 @@ test("suggestion popup keeps the highlight visible on short terminals", () => {
   const t = new MinimalTui({ model: "m" }, { initialCwd: dir });
   t.width = 60;
   t.height = 8;
-  t.inputBuffer = "@";
-  t.inputCursor = 1;
+  t.editor.buffer = "@";
+  t.editor.cursor = 1;
   t.refreshSuggestions();
 
   for (let i = 0; i < 14; i++) t.runAction({ type: "down" });
@@ -478,10 +481,10 @@ test("suggestion popup marks directories and symlinks", () => {
   symlinkSync(join(dir, "file.txt"), join(dir, "link-to-file"));
   const t = new MinimalTui({ model: "m" }, { initialCwd: dir });
   t.width = 80;
-  t.inputBuffer = "@";
-  t.inputCursor = 1;
+  t.editor.buffer = "@";
+  t.editor.cursor = 1;
   t.refreshSuggestions();
-  const plain = t.suggestionLines().map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
+  const plain = suggestionLines(t.suggestion, { width: t.width, height: t.height, editorHeight: t.editorHeight, cwd: t.cwd }).map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
 
   // Directories (real and via symlink) sort first and keep a trailing slash.
   assert.deepEqual(t.suggestion.items.map((i) => i.label), [
@@ -510,10 +513,10 @@ test("/status and timing rows show real token usage", async () => {
 
 test("Tab never completes plain text without an @ or / token", () => {
   const t = new MinimalTui({ model: "m" });
-  t.inputBuffer = "Review src/ag";
-  t.inputCursor = t.inputBuffer.length;
+  t.editor.buffer = "Review src/ag";
+  t.editor.cursor = t.editor.buffer.length;
   t.insertText("\t");
-  assert.equal(t.inputBuffer, "Review src/ag");
+  assert.equal(t.editor.buffer, "Review src/ag");
   assert.equal(t.suggestion, null);
 });
 
@@ -522,27 +525,27 @@ test("bracketed multiline paste becomes one editor input", () => {
   let submits = 0;
   t.submit = () => submits++;
   t.onData(Buffer.from("\x1b[200~first\nsecond\r\nthird\x1b[201~"));
-  assert.equal(t.inputBuffer, "first second third");
+  assert.equal(t.editor.buffer, "first second third");
   assert.equal(submits, 0);
 });
 
 test("terminal editing hotkeys manipulate input predictably", () => {
   const t = new MinimalTui({ model: "m" });
-  t.inputBuffer = "one two";
-  t.inputCursor = t.inputBuffer.length;
+  t.editor.buffer = "one two";
+  t.editor.cursor = t.editor.buffer.length;
   t.insertText("\x17"); // Ctrl-W
-  assert.equal(t.inputBuffer, "one ");
+  assert.equal(t.editor.buffer, "one ");
   t.insertText("two");
   t.insertText("\x01"); // Ctrl-A
   t.insertText("X");
-  assert.equal(t.inputBuffer, "Xone two");
+  assert.equal(t.editor.buffer, "Xone two");
   t.insertText("\x05"); // Ctrl-E
   t.insertText("\x15"); // Ctrl-U
-  assert.equal(t.inputBuffer, "");
-  t.inputBuffer = "abc";
-  t.inputCursor = 1;
+  assert.equal(t.editor.buffer, "");
+  t.editor.buffer = "abc";
+  t.editor.cursor = 1;
   t.insertText("\x04"); // Ctrl-D
-  assert.equal(t.inputBuffer, "ac");
+  assert.equal(t.editor.buffer, "ac");
 });
 
 test("multiline cursor positioning: caret stays aligned across logical lines", () => {
@@ -551,34 +554,34 @@ test("multiline cursor positioning: caret stays aligned across logical lines", (
   
   // Test case 1: Two short lines (no wrapping)
   // "line1\nline2" = 5+1+5 = 11 chars total
-  t.inputBuffer = "line1\nline2";
-  t.inputCursor = 11; // at end of "line2"
+  t.editor.buffer = "line1\nline2";
+  t.editor.cursor = 11; // at end of "line2"
   let pos = t.caretPos();
   assert.equal(pos.row, 1, "cursor should be on row 1");
   assert.equal(pos.col, 5, "cursor should be at column 5 in line2");
   
   // Test case 2: Three lines with cursor at start of third line
   // "line1\nline2\nline3" = 5+1+5+1+5 = 17 chars total
-  t.inputBuffer = "line1\nline2\nline3";
-  t.inputCursor = 12; // at start of "line3" (after "line1\nline2\n")
+  t.editor.buffer = "line1\nline2\nline3";
+  t.editor.cursor = 12; // at start of "line3" (after "line1\nline2\n")
   pos = t.caretPos();
   assert.equal(pos.row, 2, "cursor should be on row 2");
   assert.equal(pos.col, 0, "cursor should be at column 0 in line3");
   
   // Test case 3: Cursor at end of first line
-  t.inputCursor = 5; // after "line1", before \n
+  t.editor.cursor = 5; // after "line1", before \n
   pos = t.caretPos();
   assert.equal(pos.row, 0, "cursor should be on row 0");
   assert.equal(pos.col, 5, "cursor should be at column 5 in line1");
   
   // Test case 4: Cursor just after \n (start of second line)
-  t.inputCursor = 6; // after \n, at start of "line2"
+  t.editor.cursor = 6; // after \n, at start of "line2"
   pos = t.caretPos();
   assert.equal(pos.row, 1, "cursor should be on row 1");
   assert.equal(pos.col, 0, "cursor should be at column 0 in line2");
   
   // Test case 5: Cursor in middle of second line
-  t.inputCursor = 8; // at 'n' in "line2" (6+2=8)
+  t.editor.cursor = 8; // at 'n' in "line2" (6+2=8)
   pos = t.caretPos();
   assert.equal(pos.row, 1, "cursor should be on row 1");
   assert.equal(pos.col, 2, "cursor should be at column 2 in line2");
@@ -589,28 +592,28 @@ test("multiline vertical cursor movement preserves column position", () => {
   t.width = 80;
   
   // Set up three lines
-  t.inputBuffer = "abcdef\nghijk\nlmnop";
-  t.inputCursor = 4; // at 'e' in first line (col 4)
+  t.editor.buffer = "abcdef\nghijk\nlmnop";
+  t.editor.cursor = 4; // at 'e' in first line (col 4)
   
   // Move down to second line
   let moved = t.moveCaretVertical(1);
   assert.ok(moved, "should move down");
-  assert.equal(t.inputCursor, 11, "cursor should be at col 4 in second line (7+4=11)");
+  assert.equal(t.editor.cursor, 11, "cursor should be at col 4 in second line (7+4=11)");
   
   // Move down to third line
   moved = t.moveCaretVertical(1);
   assert.ok(moved, "should move down");
-  assert.equal(t.inputCursor, 17, "cursor should be at col 4 in third line (13+4=17)");
+  assert.equal(t.editor.cursor, 17, "cursor should be at col 4 in third line (13+4=17)");
   
   // Move back up to second line
   moved = t.moveCaretVertical(-1);
   assert.ok(moved, "should move up");
-  assert.equal(t.inputCursor, 11, "cursor should be back at col 4 in second line");
+  assert.equal(t.editor.cursor, 11, "cursor should be back at col 4 in second line");
   
   // Move back up to first line
   moved = t.moveCaretVertical(-1);
   assert.ok(moved, "should move up");
-  assert.equal(t.inputCursor, 4, "cursor should be back at col 4 in first line");
+  assert.equal(t.editor.cursor, 4, "cursor should be back at col 4 in first line");
 });
 
 test("/name renames the current session and repoints the handle", async () => {
@@ -704,19 +707,19 @@ test("live suggestions: saved-session names complete /resume tokens", () => {
   const t = new MinimalTui({ model: "m" }, { sessionNames: ["work-1", "work-2", "ai-lab"] });
   t.width = 80;
 
-  t.inputBuffer = "/resume wo";
-  t.inputCursor = "/resume wo".length;
+  t.editor.buffer = "/resume wo";
+  t.editor.cursor = "/resume wo".length;
   t.refreshSuggestions();
   assert.equal(t.suggestion?.kind, "session");
   assert.deepEqual(t.suggestion.items.map((i) => i.label), ["work-1", "work-2"]);
 
   t.insertText("\t"); // Tab accepts the highlighted name
-  assert.equal(t.inputBuffer, "/resume work-1 ");
+  assert.equal(t.editor.buffer, "/resume work-1 ");
   assert.equal(t.suggestion, null, "a completed name leaves no popup");
 
   // An empty token after /resume lists everything.
-  t.inputBuffer = "/resume ";
-  t.inputCursor = 8;
+  t.editor.buffer = "/resume ";
+  t.editor.cursor = 8;
   t.refreshSuggestions();
   assert.equal(t.suggestion.items.length, 3);
 });
