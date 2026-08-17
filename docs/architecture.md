@@ -36,7 +36,14 @@ Key properties:
 - **Bounded requests.** Transient model errors are retried with short backoff;
   each request has an overall timeout.
 - **Bounded tool results.** Every tool result passes through one centralized
-  size cap before it is added to model history.
+  size cap before it is added to model history. The `read` tool also truncates
+  itself (2000 lines / 50KB) and pages with `offset`/`limit`, so a large file
+  never floods the context window in a single call.
+- **Forgiving edits.** `edit` matches exactly first, then falls back to
+  normalised matching (trailing whitespace, smart quotes, unicode dashes, CRLF)
+  and overlays changed lines back onto the file so untouched bytes are
+  preserved — the model can make precise edits without a perfect byte-level
+  copy of the old text.
 
 ## Data flow
 
@@ -52,7 +59,7 @@ UI can render live without knowing how the loop works. `src/tui.mjs` is one such
 for a logging UI or a web UI without touching the loop.
 
 `src/tui.mjs` is the controller; the pure pieces live beside it in
-`src/tui/`: `renderers.mjs` (markdown + layout), `editor.mjs` (the multiline
+`src/tui/`: `renderers.mjs` (markdown incl. tables + layout, CJK/emoji-aware column widths), `editor.mjs` (the multiline
 prompt: buffer, caret, recall history), `keys.mjs` (terminal escape/CSI
 decoding), `suggestions.mjs` (`@path` + `/command` popups), `frames.mjs`
 (status/footer/header rendering), and `help.mjs` (the command table + `/help`

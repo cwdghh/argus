@@ -96,10 +96,10 @@ test("read/write/edit resolve relative to the session cwd", async () => {
     assert.equal(w.path, join(dir, "a.txt"));
     const protectedWrite = await write.execute({ path: "a.txt", content: "lost" }, { cwd: dir });
     assert.equal(protectedWrite.error, true, "write should protect existing files by default");
-    assert.equal((await read.execute({ path: "a.txt" }, { cwd: dir })).content, "hello");
+    assert.equal((await read.execute({ path: "a.txt" }, { cwd: dir })).content, "1 │ hello");
     const e = await edit.execute({ path: "a.txt", old: "hello", new: "bye" }, { cwd: dir });
     assert.equal(e.ok, true);
-    assert.equal((await read.execute({ path: "a.txt" }, { cwd: dir })).content, "bye");
+    assert.equal((await read.execute({ path: "a.txt" }, { cwd: dir })).content, "1 │ bye");
     const bad = await edit.execute({ path: "a.txt", old: "zzz", new: "x" }, { cwd: dir });
     assert.match(bad.message, /a\.txt/, "edit error should name the file");
   } finally {

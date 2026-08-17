@@ -38,8 +38,8 @@ exists). `.env` is gitignored; `.env.example` is the committed template.
 | `ARGUS_BASE_URL` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | Base URL of the chat endpoint |
 | `ARGUS_MODEL` | `deepseek-v4-flash-0731` | Model identifier |
 | `ARGUS_SYSTEM_PROMPT` | built-in coding-agent prompt | System prompt |
-| `ARGUS_REQUEST_TIMEOUT_MS` | `300000` | Overall timeout per model request (long default helps reasoning models) |
-| `ARGUS_STREAM_IDLE_TIMEOUT_MS` | `60000` | Streaming idle timeout; resets on each chunk |
+| `ARGUS_REQUEST_TIMEOUT_MS` | `600000` | Time before a model request is abandoned (generous for long reasoning/thinking) |
+| `ARGUS_STREAM_IDLE_TIMEOUT_MS` | `300000` | Streaming idle timeout between chunks; resets on each chunk |
 | `ARGUS_MAX_RETRIES` | `2` | Retries for 408/429/5xx/network failures |
 | `ARGUS_MAX_STEPS` | `100` | Maximum model calls in one turn |
 | `ARGUS_MAX_TOOL_RESULT_CHARS` | `50000` | Maximum characters returned by one tool |
@@ -82,8 +82,12 @@ layout: header, scrollable transcript, a bottom **editor**, and a **footer**.
 └────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Markdown rendering** for assistant replies: headings, bold/italic, inline +
-  fenced code, lists, quotes.
+- **Markdown rendering** for assistant replies: headings, tables, bold/italic,
+  inline + fenced code, lists, quotes.
+- **Numbered, bounded reads**: every line of a `read` result carries its
+  absolute line number, and `edit` accepts line ranges (`startLine`/`endLine`)
+  for whole-block rewrites, insertions, and deletions without reproducing
+  large old code verbatim.
 - **Block rails and separators** make the transcript scannable: thinking, tool
   calls, and tool results are visually grouped, and each turn gets a divider.
 - **Thinking / reasoning** is shown (muted, italic) while the model emits it.
@@ -253,9 +257,12 @@ messages stay in the session file, so the original requests remain
 reconstructable. The footer shows how much of that budget the active session
 is using.
 
-Individual tool results are capped at `ARGUS_MAX_TOOL_RESULT_CHARS`; oversized
-results include a marked preview so the model can retry with a narrower read or
-command instead of overflowing the active turn.
+Individual tool results are capped at `ARGUS_MAX_TOOL_RESULT_CHARS`. The `read`
+tool also truncates itself (2000 lines / 50KB), numbers every line, and
+reports `offset`/`limit` continuation hints, so a big file never floods the
+context window in one call and the model can reference exact lines.
+Oversized results include a marked preview so the model can retry with a
+narrower read or command instead of overflowing the active turn.
 
 ## Self-updating
 

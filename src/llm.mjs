@@ -9,6 +9,12 @@
  * This is intentionally minimal, but it is the only place that talks to the
  * network, and all turns stream so token usage can be captured.
  */
+// Timeout defaults (also the .env.example template). Reasoning models can
+// spend a long time "thinking" before the first byte or between chunks, so
+// both are generous; mirror the values in src/config.mjs.
+const DEFAULT_REQUEST_TIMEOUT_MS = 600_000;
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000;
+
 const CHAT_PATH = "/chat/completions";
 
 function buildBody({ model, systemPrompt, messages, tools }) {
@@ -30,7 +36,7 @@ function buildBody({ model, systemPrompt, messages, tools }) {
 }
 
 async function request({ baseUrl, apiKey, body, signal, requestTimeoutMs, maxRetries: configuredRetries }) {
-  const timeoutMs = requestTimeoutMs ?? 300_000;
+  const timeoutMs = requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   const maxRetries = configuredRetries ?? 0;
   const url = `${baseUrl.replace(/\/+$/, "")}${CHAT_PATH}`;
 
@@ -142,9 +148,9 @@ async function readWithIdleTimeout(reader, idleTimeoutMs, signal) {
  * If `signal` aborts at any point (even during the initial request), we stop
  * and yield a final `{ type: "done", aborted: true, message }`.
  *
- * The initial request uses `requestTimeoutMs` (default 300s) to cover slow
+ * The initial request uses `requestTimeoutMs` (default 600s) to cover slow
  * reasoning models. Once streaming begins, an idle timeout
- * (`streamIdleTimeoutMs`, default 60s) resets on each chunk so we only abort
+ * (`streamIdleTimeoutMs`, default 300s) resets on each chunk so we only abort
  * if the server stops sending data.
  */
 export async function* streamChat({
@@ -165,7 +171,7 @@ export async function* streamChat({
   let usage = null;
   const toolCalls = new Map(); // index -> { id, name, arguments }
   let timeoutSignal = null;
-  const idleTimeoutMs = streamIdleTimeoutMs ?? 60_000;
+  const idleTimeoutMs = streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS;
 
   try {
     const requested = await request({ baseUrl, apiKey, body, signal, requestTimeoutMs, maxRetries });
@@ -243,7 +249,7 @@ export async function* streamChat({
     };
   } catch (err) {
     if (timeoutSignal?.aborted && !signal?.aborted) {
-      throw new Error(`LLM request timed out after ${requestTimeoutMs ?? 300_000}ms`);
+      throw new Error(`LLM request timed out after ${requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS}ms`);
     }
     if (/LLM stream idle timeout after/.test(err?.message ?? "")) {
       throw err;

@@ -322,28 +322,127 @@ function segsFromInline(text, base) {
   return out;
 }
 
-/** Approximate terminal column width of one char (East Asian wide = 2). */
+/**
+ * Terminal display column width of a single code point:
+ * 0 for combining/format marks (accents, variation selectors, ZWJ, skin-tone
+ *   modifiers, bidi controls, ...),
+ * 2 for East Asian wide characters and presentation-width emoji,
+ * 1 otherwise (halfwidth forms, regional indicators, ASCII, ...).
+ *
+ * This is what keeps table borders aligned: a CJK char or an emoji takes two
+ * terminal columns, while ZWJ/VS16/skin-tone joiners take none.
+ */
 export function charWidth(ch) {
   const cp = ch.codePointAt(0);
-  if (
-    cp >= 0x1100 &&
-    (cp <= 0x115f || // Hangul Jamo init. consonants
-      cp === 0x2329 || cp === 0x232a || // angle brackets
-      (0x2e80 <= cp && cp <= 0xa4cf && cp !== 0x303f) || // CJK ... Yi
-      (0xac00 <= cp && cp <= 0xd7a3) || // Hangul Syllables
-      (0xf900 <= cp && cp <= 0xfaff) || // CJK Compatibility Ideographs
-      (0xfe10 <= cp && cp <= 0xfe19) || // Vertical forms
-      (0xfe30 <= cp && cp <= 0xfe6f) || // CJK Compatibility Forms
-      (0xff00 <= cp && cp <= 0xff60) || // Fullwidth Forms
-      (0xffe0 <= cp && cp <= 0xffe6) || // Fullwidth Signs
-      (0x1f300 <= cp && cp <= 0x1f64f) || // Emoji
-      (0x1f900 <= cp && cp <= 0x1f9ff) || // Supplemental Emoji
-      (0x20000 <= cp && cp <= 0x2fffd) || // CJK Ext B
-      (0x30000 <= cp && cp <= 0x3fffd))
-  ) {
-    return 2;
-  }
-  return 1;
+  return isZeroWidthCp(cp) ? 0 : isWideCp(cp) ? 2 : 1;
+}
+
+/** Zero-width code points: never occupy a terminal column. */
+function isZeroWidthCp(cp) {
+  return (
+    /[\p{Mn}\p{Me}\p{Cf}]/u.test(String.fromCodePoint(cp)) ||
+    (0x1160 <= cp && cp <= 0x11ff) || // Hangul Jungseong/Jongseong jamo (compose)
+    (0x1f3fb <= cp && cp <= 0x1f3ff) // emoji skin tone modifiers
+  );
+}
+
+/** Code points rendered two columns wide (East Asian wide + emoji). */
+function isWideCp(cp) {
+  return (
+    (0x1100 <= cp && cp <= 0x115f) || // Hangul Jamo init. consonants
+    cp === 0x2329 || cp === 0x232a || // CJK angle brackets
+    (0x2e80 <= cp && cp <= 0x303e) || // CJK Radicals .. CJK Symbols
+    (0x3041 <= cp && cp <= 0x33ff) || // Hiragana .. CJK Compatibility
+    (0x3400 <= cp && cp <= 0x4dbf) || // CJK Ext A
+    (0x4e00 <= cp && cp <= 0x9fff) || // CJK Unified Ideographs
+    (0xa000 <= cp && cp <= 0xa4cf) || // Yi Syllables
+    (0xac00 <= cp && cp <= 0xd7a3) || // Hangul Syllables
+    (0xf900 <= cp && cp <= 0xfaff) || // CJK Compatibility Ideographs
+    (0xfe10 <= cp && cp <= 0xfe19) || // Vertical Forms
+    (0xfe30 <= cp && cp <= 0xfe6f) || // CJK Compatibility Forms
+    (0xff00 <= cp && cp <= 0xff60) || // Fullwidth Forms
+    (0xffe0 <= cp && cp <= 0xffe6) || // Fullwidth Signs
+    (0x20000 <= cp && cp <= 0x2fffd) || // CJK Ext B+
+    (0x30000 <= cp && cp <= 0x3fffd) || // CJK Ext G+
+    isBmpEmojiCp(cp) ||
+    isAstralEmojiCp(cp)
+  );
+}
+
+/** BMP emoji that render wide even without VS16. */
+function isBmpEmojiCp(cp) {
+  return (
+    cp === 0x231a || cp === 0x231b || // watch, hourglass
+    (0x23e9 <= cp && cp <= 0x23ec) || // fast-forward/rewind arrows
+    cp === 0x23f0 || cp === 0x23f3 || // alarm clock, hourglass done
+    (0x25fd <= cp && cp <= 0x25fe) || // ◽ ◾
+    (0x2614 <= cp && cp <= 0x2615) || // umbrella with rain, hot beverage
+    (0x2648 <= cp && cp <= 0x2653) || // zodiac signs
+    cp === 0x267f || // wheelchair symbol
+    cp === 0x2693 || // anchor
+    cp === 0x26a1 || // high voltage
+    (0x26aa <= cp && cp <= 0x26ab) || // ⚪ ⚫
+    (0x26bd <= cp && cp <= 0x26be) || // soccer, baseball
+    (0x26c4 <= cp && cp <= 0x26c5) || // snowman, sun behind cloud
+    cp === 0x26ce || cp === 0x26d4 || // ophiuchus, no entry
+    cp === 0x26ea || // church
+    (0x26f2 <= cp && cp <= 0x26f3) || // fountain, flag in hole
+    cp === 0x26f5 || cp === 0x26fa || cp === 0x26fd || // sailboat, tent, fuel pump
+    cp === 0x2705 || // white heavy check mark
+    (0x270a <= cp && cp <= 0x270b) || // raised fist, raised hand
+    cp === 0x2728 || // sparkles
+    cp === 0x274c || cp === 0x274e || // cross mark, cross button
+    (0x2753 <= cp && cp <= 0x2755) || // question/ exclamation marks
+    cp === 0x2757 || // heavy exclamation mark
+    (0x2795 <= cp && cp <= 0x2797) || // heavy plus/minus/division
+    cp === 0x27b0 || cp === 0x27bf // curly loop, double curly loop
+  );
+}
+
+/** Astral-plane emoji (U+1F000+). Skin tones are zero-width, checked first. */
+function isAstralEmojiCp(cp) {
+  return (
+    cp === 0x1f004 || // mahjong red dragon
+    cp === 0x1f0cf || // joker
+    cp === 0x1f18e || // AB button
+    (0x1f191 <= cp && cp <= 0x1f19a) || // squared Latin letters
+    (0x1f200 <= cp && cp <= 0x1f320) || // squared CJK .. shooting star
+    (0x1f32d <= cp && cp <= 0x1f335) || // hot dog .. cactus
+    (0x1f337 <= cp && cp <= 0x1f37c) || // tulip .. baby bottle
+    (0x1f37e <= cp && cp <= 0x1f393) || // champagne .. graduation cap
+    (0x1f3a0 <= cp && cp <= 0x1f3ca) || // carousel .. swimmer
+    (0x1f3cf <= cp && cp <= 0x1f3d3) || // cricket .. ping pong
+    (0x1f3e0 <= cp && cp <= 0x1f3f0) || // houses .. castle
+    cp === 0x1f3f4 || // black flag
+    (0x1f3f8 <= cp && cp <= 0x1f43e) || // badminton .. paw prints
+    cp === 0x1f440 || // eyes
+    (0x1f442 <= cp && cp <= 0x1f4fc) || // ear .. videocassette
+    (0x1f4ff <= cp && cp <= 0x1f53d) || // prayer beads .. down button
+    (0x1f54b <= cp && cp <= 0x1f54e) || // kaaba .. menorah
+    (0x1f550 <= cp && cp <= 0x1f567) || // clocks
+    cp === 0x1f57a || // man dancing
+    (0x1f595 <= cp && cp <= 0x1f596) || // middle finger, vulcan salute
+    cp === 0x1f5a4 || // black heart
+    (0x1f5fb <= cp && cp <= 0x1f64f) || // mount fuji .. person with folded hands
+    (0x1f680 <= cp && cp <= 0x1f6c5) || // rocket .. left luggage
+    cp === 0x1f6cc || // person in bed
+    (0x1f6d0 <= cp && cp <= 0x1f6d2) || // synagogue, mosque, hindu temple
+    (0x1f6d5 <= cp && cp <= 0x1f6d7) || // hut .. elevator
+    (0x1f6eb <= cp && cp <= 0x1f6ec) || // airplane departure/arrival
+    (0x1f6f4 <= cp && cp <= 0x1f6fc) || // scooter .. roller skate
+    (0x1f7e0 <= cp && cp <= 0x1f7eb) || // colored circles/squares
+    cp === 0x1f7f0 || // heavy equals sign
+    (0x1f90c <= cp && cp <= 0x1f93a) || // pinched fingers .. fencer
+    (0x1f93c <= cp && cp <= 0x1f945) || // wrestlers .. goal net
+    (0x1f947 <= cp && cp <= 0x1f9ff) || // medals .. nazar amulet
+    (0x1fa70 <= cp && cp <= 0x1fa7c) || // ballet shoes .. crutch
+    (0x1fa80 <= cp && cp <= 0x1fa88) || // yo-yo .. flute
+    (0x1fa90 <= cp && cp <= 0x1fabe) || // ringed planet .. labrador
+    (0x1fabf <= cp && cp <= 0x1fac5) || // mouse .. pregnant person
+    cp === 0x1face || // moose
+    (0x1fae0 <= cp && cp <= 0x1fae8) || // melting face .. shaking face
+    (0x1faf0 <= cp && cp <= 0x1faf8) // handshake .. heart hands
+  );
 }
 
 /** Approximate terminal display width of a string. */
@@ -393,6 +492,172 @@ function renderSimple(text, base, width) {
   return wrapSegments(segsFromInline(text, base), width);
 }
 
+// ---------------------------------------------------------------------------
+// Markdown tables
+// ---------------------------------------------------------------------------
+
+/*
+ * GFM-style tables are rendered as aligned box-drawing tables. Like the rest
+ * of the parser this is streaming-tolerant: a table only appears once its
+ * delimiter row has arrived, and any line that doesn't fit the strict shape is
+ * rendered as ordinary text instead.
+ *
+ * A table is: a header row containing `|`, immediately followed by a delimiter
+ * row (`| --- | :---: |` etc.), then zero or more `|`-separated body rows.
+ * Leading/trailing pipes on each row are optional; `\|` escapes a literal pipe.
+ */
+
+const TABLE_MAX_WORD_WIDTH = 30; // cap for unbroken words inside cells
+
+function isTableDelimiter(line) {
+  const t = line.trim();
+  return t.includes("|") && t.includes("-") && /^\|?[\s:|-]+\|?$/.test(t);
+}
+
+function isTableRow(line) {
+  return line.trim().includes("|");
+}
+
+function splitTableRow(line) {
+  const t = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  return t.split(/(?<!\\)\|/).map((cell) => cell.trim().replace(/\\\|/g, "|"));
+}
+
+function tableAlignments(delimiter) {
+  return splitTableRow(delimiter).map((seg) => {
+    const left = seg.startsWith(":");
+    const right = seg.endsWith(":");
+    return left && right ? "center" : right ? "right" : "left";
+  });
+}
+
+function longestWordWidth(text) {
+  let max = 0;
+  for (const word of text.split(/\s+/)) max = Math.max(max, dispWidth(word));
+  return max;
+}
+
+/**
+ * Width per column. Returns null when the terminal is too narrow to keep even
+ * the longest word of each column on its own line.
+ */
+function tableColumnWidths(cellsByColumn, width) {
+  const numCols = cellsByColumn.length;
+  const borderOverhead = 3 * numCols + 1;
+  const available = width - borderOverhead;
+  if (available < numCols) return null;
+
+  const natural = cellsByColumn.map((col) =>
+    Math.max(1, ...col.map((cell) => dispWidth(cell)))
+  );
+  const min = cellsByColumn.map((col) =>
+    Math.max(1, ...col.map((cell) => Math.min(TABLE_MAX_WORD_WIDTH, longestWordWidth(cell))))
+  );
+  const minTotal = min.reduce((a, b) => a + b, 0);
+  if (minTotal > available) return null;
+
+  if (natural.reduce((a, b) => a + b, 0) <= available) return natural;
+
+  const growPotential = natural.map((n, i) => Math.max(0, n - min[i]));
+  const growTotal = growPotential.reduce((a, b) => a + b, 0);
+  const extra = available - minTotal;
+  const widths = min.map((w, i) =>
+    growTotal > 0 ? w + Math.floor((growPotential[i] / growTotal) * extra) : w
+  );
+  if (growTotal > 0) {
+    const allocated = widths.reduce((a, b) => a + b, 0);
+    let leftover = available - allocated;
+    let i = 0;
+    while (leftover > 0 && i < numCols * (extra + 1)) {
+      const idx = i % numCols;
+      if (growPotential[idx] > 0 && widths[idx] < natural[idx]) {
+        widths[idx]++;
+        leftover--;
+      }
+      i++;
+    }
+  }
+  return widths;
+}
+
+/** Pad each wrapped cell line to `width`, honouring `align` (left/center/right). */
+function padCellLines(lines, width, align) {
+  return lines.map((line) => {
+    const extra = Math.max(0, width - dispWidth(stripAnsi(line)));
+    if (extra === 0) return line;
+    if (align === "right") return " ".repeat(extra) + line;
+    if (align === "center") {
+      const left = Math.floor(extra / 2);
+      return " ".repeat(left) + line + " ".repeat(extra - left);
+    }
+    return line + " ".repeat(extra);
+  });
+}
+
+/** Render one table row (header or body); cells wrap to multiple lines. */
+function renderTableRow(cells, widths, aligns, bold) {
+  const style = { fg: theme.text, ...(bold ? { bold: true } : {}) };
+  const wrapped = cells.map((cell, i) =>
+    padCellLines(wrapSegments(segsFromInline(cell, style), Math.max(1, widths[i])), widths[i], aligns[i])
+  );
+  const height = Math.max(1, ...wrapped.map((w) => w.length));
+  const out = [];
+  for (let r = 0; r < height; r++) {
+    out.push(`│ ${wrapped.map((lines, i) => lines[r] ?? " ".repeat(widths[i])).join(" │ ")} │`);
+  }
+  return out;
+}
+
+function tableBorder(widths, left, mid, right) {
+  return left + widths.map((w) => "─".repeat(w)).join(mid) + right;
+}
+
+/**
+ * Render a scanned table, or return null when the terminal is too narrow to do
+ * it justice (the caller then falls back to plain lines).
+ */
+function renderTable(table, width) {
+  const numCols = table.header.length;
+  const cellsByColumn = [];
+  for (let c = 0; c < numCols; c++) {
+    cellsByColumn.push([table.header[c], ...table.rows.map((row) => row[c] ?? "")]);
+  }
+  const widths = tableColumnWidths(cellsByColumn, width);
+  if (!widths) return null;
+  const aligns = Array.from({ length: numCols }, (_, i) => table.alignments[i] ?? "left");
+
+  const out = [];
+  out.push(tableBorder(widths, "┌─", "─┬─", "─┐"));
+  out.push(...renderTableRow(table.header, widths, aligns, true));
+  out.push(tableBorder(widths, "├─", "─┼─", "─┤"));
+  table.rows.forEach((row, i) => {
+    out.push(...renderTableRow(row, widths, aligns, false));
+    if (i < table.rows.length - 1) out.push(tableBorder(widths, "├─", "─┼─", "─┤"));
+  });
+  out.push(tableBorder(widths, "└─", "─┴─", "─┘"));
+  return out;
+}
+
+/** Scan a table starting at `start`, or null when the lines aren't a table. */
+function scanTable(src, start) {
+  if (
+    start + 1 >= src.length ||
+    !isTableRow(src[start]) ||
+    !isTableDelimiter(src[start + 1])
+  ) {
+    return null;
+  }
+  const header = splitTableRow(src[start]);
+  const alignments = tableAlignments(src[start + 1]);
+  const rows = [];
+  let i = start + 2;
+  while (i < src.length && isTableRow(src[i])) {
+    rows.push(splitTableRow(src[i]));
+    i++;
+  }
+  return { end: i, header, alignments, rows };
+}
+
 /** Render markdown (block-level) to wrapped, styled lines. */
 export function markdownLines(text, width) {
   const lines = [];
@@ -426,6 +691,18 @@ export function markdownLines(text, width) {
       lines.push("");
       i++;
       continue;
+    }
+
+    if (!fence) {
+      const table = scanTable(src, i);
+      if (table) {
+        const rendered = renderTable(table, width);
+        if (rendered) {
+          lines.push(...rendered);
+          i = table.end;
+          continue;
+        }
+      }
     }
 
     const heading = trimmed.match(/^(#{1,6})\s+(.*)/);

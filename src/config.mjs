@@ -34,11 +34,12 @@ export function getConfig() {
       "",
     // Model identifier understood by the endpoint.
     model: process.env.ARGUS_MODEL ?? "deepseek-v4-flash-0731",
-    // Bound network stalls and runaway tool-call loops.
-    // Non-stream requests get a longer default timeout for reasoning models.
-    requestTimeoutMs: positiveInt(process.env.ARGUS_REQUEST_TIMEOUT_MS, 300_000, 100),
+    // Bound network stalls and runaway tool-call loops. Reasoning models can
+    // think for a long time before the first byte arrives and between chunks,
+    // so both defaults are deliberately generous; tune down for local models.
+    requestTimeoutMs: positiveInt(process.env.ARGUS_REQUEST_TIMEOUT_MS, 600_000, 100),
     // For streaming, the idle timeout resets on each chunk received.
-    streamIdleTimeoutMs: positiveInt(process.env.ARGUS_STREAM_IDLE_TIMEOUT_MS, 60_000, 100),
+    streamIdleTimeoutMs: positiveInt(process.env.ARGUS_STREAM_IDLE_TIMEOUT_MS, 300_000, 100),
     maxRetries: nonNegativeInt(process.env.ARGUS_MAX_RETRIES, 2),
     maxSteps: positiveInt(process.env.ARGUS_MAX_STEPS, 100),
     maxToolResultChars: positiveInt(process.env.ARGUS_MAX_TOOL_RESULT_CHARS, 50_000, 500),
@@ -50,7 +51,10 @@ export function getConfig() {
       process.env.ARGUS_SYSTEM_PROMPT ??
       "You are a careful coding agent. You can read files, write files, edit files, " +
         "and run shell commands to help the user. Before changing a repository, read and follow " +
-        "its instruction files (for example AGENTS.md). Inspect relevant files before editing. " +
+        "its instruction files (for example AGENTS.md). Inspect relevant files before editing; " +
+        "copy line numbers from read output for startLine/endLine edits. Use edit with old/new " +
+        "for small changes and startLine/endLine for whole-block rewrites, insertions, or " +
+        "deletions; keep write for whole files. bash keeps its working directory across calls. " +
         "Treat @path mentions as file references: read them before relying on their contents. " +
         "Make small focused changes, preserve unrelated user work, run relevant checks, " +
         "and report results honestly. Prefer tools over guessing. Keep answers concise.",

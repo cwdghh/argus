@@ -57,6 +57,26 @@ test("ARGUS_SESSION_KEEP defaults to 0 and parses a non-negative limit", () => {
   }
 });
 
+test("default timeouts are generous for reasoning models", () => {
+  const savedRequest = process.env.ARGUS_REQUEST_TIMEOUT_MS;
+  const savedIdle = process.env.ARGUS_STREAM_IDLE_TIMEOUT_MS;
+  try {
+    delete process.env.ARGUS_REQUEST_TIMEOUT_MS;
+    delete process.env.ARGUS_STREAM_IDLE_TIMEOUT_MS;
+    assert.equal(getConfig().requestTimeoutMs, 600_000, "10 min before first byte");
+    assert.equal(getConfig().streamIdleTimeoutMs, 300_000, "5 min idle between chunks");
+    process.env.ARGUS_REQUEST_TIMEOUT_MS = "120000";
+    process.env.ARGUS_STREAM_IDLE_TIMEOUT_MS = "45000";
+    assert.equal(getConfig().requestTimeoutMs, 120_000);
+    assert.equal(getConfig().streamIdleTimeoutMs, 45_000);
+  } finally {
+    for (const [key, saved] of [["ARGUS_REQUEST_TIMEOUT_MS", savedRequest], ["ARGUS_STREAM_IDLE_TIMEOUT_MS", savedIdle]]) {
+      if (saved === undefined) delete process.env[key];
+      else process.env[key] = saved;
+    }
+  }
+});
+
 test("config rejects missing DashScope credentials and invalid URLs", () => {
   assert.throws(
     () => validateConfig({ baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "m", apiKey: "" }),
@@ -157,7 +177,7 @@ test("edit refuses ambiguous replacements unless all=true", async () => {
   assert.equal(ambiguous.error, true);
   assert.match(ambiguous.message, /occurs 2 times/);
   await edit.execute({ path: "a.txt", old: "x", new: "y", all: true }, { cwd: dir });
-  assert.equal((await read.execute({ path: "a.txt" }, { cwd: dir })).content, "y y");
+  assert.equal((await read.execute({ path: "a.txt" }, { cwd: dir })).content, "1 │ y y");
 });
 
 test("write requires an explicit opt-in to overwrite an existing file", async () => {
@@ -167,9 +187,9 @@ test("write requires an explicit opt-in to overwrite an existing file", async ()
   await write.execute({ path: "a.txt", content: "original" }, { cwd: dir });
   const protectedWrite = await write.execute({ path: "a.txt", content: "replacement" }, { cwd: dir });
   assert.equal(protectedWrite.error, true);
-  assert.equal((await read.execute({ path: "a.txt" }, { cwd: dir })).content, "original");
+  assert.equal((await read.execute({ path: "a.txt" }, { cwd: dir })).content, "1 │ original");
   await write.execute({ path: "a.txt", content: "replacement", overwrite: true }, { cwd: dir });
-  assert.equal((await read.execute({ path: "a.txt" }, { cwd: dir })).content, "replacement");
+  assert.equal((await read.execute({ path: "a.txt" }, { cwd: dir })).content, "1 │ replacement");
 });
 
 test("bash persists the shell's real cwd for quoted and compound cd commands", async () => {

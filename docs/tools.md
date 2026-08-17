@@ -23,16 +23,37 @@ The model only ever sees `name`, `description`, and `parameters`. It never sees
 
 | Tool | Purpose |
 |------|---------|
-| `read`    | Read a file's contents as text |
+| `read`    | Read a file as text, bounded (2000 lines / 50KB) with `offset`/`limit` paging |
 | `write`   | Create a file, with explicit opt-in for overwrite |
-| `edit`    | Replace an exact string in a file |
+| `edit`    | Replace a string (or several, atomically) with fuzzy fallback |
 | `bash`    | Run a shell command, return stdout/stderr |
 
 ### read
 
 ```js
-{ name: "read", parameters: { path: string } }
+{ name: "read", parameters: { path: string, offset?: int, limit?: int } }
 ```
+
+Returns the file's contents as text with **absolute line numbers** on every
+line, so the model never has to count lines itself:
+
+```
+  1 │ const a = 1;
+  2 │ const b = 2;
+```
+
+Reads are **bounded** so a big file never floods the context window: at most
+2000 lines or 50KB (whichever hits first) are returned, and the result ends
+with a notice such as
+
+```
+[Showing lines 1-2000 of 12000. Use offset=2001 to continue.]
+```
+
+Pass `offset` (1-indexed) and `limit` to page through large files (line
+numbers are always absolute, across pages). A line that alone exceeds the
+byte limit is not returned; the result suggests a `bash` one-liner
+(`sed -n 'Np' path | head -c 50000`) to read it in chunks.
 
 ### write
 
@@ -46,13 +67,41 @@ passed explicitly. Prefer `edit` for focused changes to an existing file.
 ### edit
 
 ```js
-{ name: "edit", parameters: { path: string, old: string, new: string, all?: boolean } }
+{ name: "edit", parameters: {
+    path: string,
+    edits?: [                 // mix and match in one atomic call
+        { old?: string, new?: string },            // content form
+        { startLine?: int, endLine?: int, new?: string },  // range form
+    ],
+    old?: string, new?: string,      // legacy content form
+    startLine?: int, endLine?: int,  // legacy range form
+    all?: boolean,
+} }
 ```
 
-Replaces one occurrence of the exact string `old` with `new`. It errors if
-`old` is missing or occurs more than once, preventing an unexpectedly broad
-edit. Pass `{ all: true }` only when every occurrence should change. Use this
-for precise, small changes; use `write` for full files.
+**Content mode** (`old`/`new`) replaces one or more targeted strings, matched
+exactly first, then tolerant of the small differences that make edits "fail
+with no old strings": trailing whitespace, line-number gutters, smart quotes,
+unicode dashes, and CRLF line endings are normalised before matching (NFKC +
+ASCII folding). Edited lines are rebuilt from the normalised text and overlaid
+back onto the file, so untouched lines keep their exact bytes; the file's CRLF
+style and UTF-8 BOM are preserved. The result includes `fuzzy: true` when a
+relaxed match was used.
+
+**Range mode** (`startLine`/`endLine`/`new`) replaces the inclusive 1-indexed
+line range `[startLine, endLine]` with `new` — copy the numbers from a `read`,
+don't count them. `endLine` defaults to `startLine`; `endLine = startLine - 1`
+inserts `new` before `startLine`; `new = ""` deletes the range. Range mode is
+line-oriented (like `sed`): the block occupies whole lines and never merges
+with its neighbours, and CRLF is preserved. Use it for whole-function rewrites,
+insertions, or deletions where reproducing the old content byte-for-byte would
+be wasteful.
+
+Both modes may be mixed in one `edits[]` call; every replacement is resolved
+against the original file and applied bottom-up, and the whole call is
+rejected if any replacements overlap. In content mode each `old` must be
+unique; an ambiguous match errors unless `all: true` is passed explicitly.
+Use content mode for small, precise changes; use `write` for full files.
 
 ### bash
 

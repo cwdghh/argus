@@ -1,3 +1,121 @@
+#### 2026-08-17 — planning docs: reflect the reliability work in GAPS.md / NEXT_STEPS.md
+
+**Status: ✅ done**
+
+- `GAPS.md`:
+  - Dated status notes on the work shipped this week: `read` self-bounding in
+    #4 (context management), relaxed 600s/300s timeouts in #7 (robustness),
+    markdown tables + CJK/emoji-aware widths in #8 (terminal UX), and the
+    prompt-vs-docs split decision in #10 (model catalog).
+  - New section **#11 "File editing reliability & freshness"** recording the
+    design territory: the two edit failure modes (byte mismatch vs stale
+    "where"), how content mode (exact→fuzzy + gutter-strip + byte-preserving
+    overlay) and range mode (sed-like line semantics, mixed atomic batches)
+    each resolve one, pi's conceptual approach, and the open questions —
+    read-before-edit freshness guard, partial-read freshness, verification
+    anchors (`expect`), and a raw read mode.
+  - New open questions in #8 (grapheme-cluster width edge cases) and #9 (an
+    eval that exercises edit-mode choice and line-number usage).
+- `NEXT_STEPS.md`:
+  - "Recently completed" pointer block so the planning list doesn't drift from
+    PROGRESS.md.
+  - New high-impact candidate **#2 "Read-before-edit freshness guard
+    (stale-line protection)"** with the sequence-stamp bookkeeping, bash
+    invalidation trade-off, partial-read question, `force` escape hatch, and
+    why `expect` anchors were rejected — the main direction the edit work
+    deliberately deferred; items renumbered 2–8 → 3–9.
+  - #5 Behavioral evals gained a concrete high-value task suggestion (does the
+    model pick content vs range edits and copy line numbers correctly).
+
+Verification: docs-only change; 147 tests still pass.
+
+#### 2026-08-17 — polish: CJK/emoji-aware table widths + tool rules in the system prompt
+
+**Status: ✅ done**
+
+- `charWidth` (`src/tui/renderers.mjs`) now measures terminal columns correctly
+  so table borders stay aligned with CJK and emoji cells:
+  - zero width for combining/format marks (`\p{Mn}`, `\p{Me}`, `\p{Cf}`),
+    ZWJ/ZWSP, variation selectors (VS16), skin-tone modifiers, and Hangul
+    V/T jamo — so "👨‍👩‍👧" = 6, "👍🏽" = 2, "1️⃣"-style joins are no longer
+    over-counted;
+  - two columns for East Asian wide ranges (Hangul, CJK radicals/ideographs,
+    Hiragana/Katakana, fullwidth forms, CJK Ext) and presentation-width emoji
+    — including the previously missing transport block (🚀 was 1, now 2),
+    BMP emoji (⌚⏰✅), and Emoji 12–14 blocks (1FA70+);
+  - one column otherwise (regional indicators stay 1 so flags measure 2).
+- Added a compact tool-usage sentence to the **default system prompt**
+  (`src/config.mjs`): read before editing, copy line numbers for
+  `startLine`/`endLine`, content vs range edit split, `write` for whole files,
+  persistent `bash` cwd. This is the "usage rules in the prompt, schemas in
+  the request, long docs in docs/" split — the JSON schemas still travel with
+  every request via the tools payload, and nothing is duplicated.
+- Tests: 3 new renderer tests (CJK/fullwidth widths, emoji/zero-width
+  sequences, and a mixed CJK+emoji table where every rendered line has
+  exactly the same display width). Docs: `docs/architecture.md` notes the
+  width-aware layout.
+
+Verification: 147 tests pass (144 before + 3 new), `node --check` clean.
+
+#### 2026-08-17 — line-aware reads and edits: numbered reads + range-mode edit
+
+**Status: ✅ done**
+
+- `read` now prefixes every returned line with its absolute 1-indexed line
+  number (`  87 │ const x = 1;`), so the model copies numbers instead of
+  counting them. Numbers stay absolute across `offset`/`limit` pages.
+- `edit` matching now tolerates line-number gutters copied from a read: the
+  fuzzy normaliser strips a `^\s*\d{1,6}\s*[|│]\s*` prefix per line, so
+  content mode keeps working even when the model pastes a numbered read back.
+- New **range mode** for `edit`: `startLine`/`endLine`/`new` replaces the
+  inclusive 1-indexed line range (inserts before `startLine` when
+  `endLine = startLine - 1`, deletes with `new = ""`). Range mode is
+  line-oriented like `sed` — the block occupies whole lines, never merges
+  with neighbours, and preserves CRLF — so whole-function rewrites and
+  insertions work without reproducing large old code byte-for-byte.
+- Content and range edits mix freely in one `edits[]` call; every replacement
+  is resolved against the original file and applied bottom-up, with bounds
+  and overlap validation (error messages name the current line count).
+- Deliberately out of scope (considered and cut to keep the model's burden
+  and the loop's state minimal): optional verification anchors on range
+  edits, and a loop-level read-before-edit guard.
+- Tests: 9 new cases (numbered reads/paging, gutter tolerance, range
+  replace/insert/delete/bounds/mixed/CRLF/empty file). Docs updated in
+  `docs/tools.md` and README.
+
+Verification: 144 tests pass (135 before + 9 new), `node --check` clean.
+
+#### 2026-08-17 — reliability: table rendering, forgiving edits, bounded reads
+
+**Status: ✅ done**
+
+- Rendered GFM markdown tables in the TUI as aligned box-drawing tables
+  (`src/tui/renderers.mjs`), with width-aware cell wrapping, optional
+  alignment, inline styles in cells, and a plain-text fallback on narrow
+  terminals. Streaming-tolerant: a table appears once its delimiter row
+  arrives, so mid-stream renders are never corrupted.
+- Stopped `edit` failing on "old string not found" by porting pi's edit-diff
+  machinery (`src/tools.mjs`): exact match first, then a normalised fuzzy match
+  (NFKC + ASCII folding of quotes/dashes/spaces, trailing whitespace, CRLF).
+  Changed lines are overlaid back onto the original so untouched bytes keep
+  their exact form; CRLF and a UTF-8 BOM survive. `edit` also accepts an
+  `edits[]` array for atomic multi-edit and returns `fuzzy: true` when a
+  relaxed match was used, with actionable not-found messages.
+- Bounded `read` (pi-style): at most 2000 lines / 50KB per call, plus
+  `offset`/`limit` paging and an explicit
+  `[Showing lines X-Y of Z. Use offset=N to continue.]` hint, so large files
+  stop flooding the context window.
+- Relaxed timeouts for reasoning models that think a long time before the
+  first byte or between chunks: `ARGUS_REQUEST_TIMEOUT_MS` default 300s → 600s,
+  `ARGUS_STREAM_IDLE_TIMEOUT_MS` default 60s → 300s (pi's idle default).
+  `.env.example`, README config table, and `docs` updated alongside.
+- New unit tests: `test/renderers.test.mjs` (tables) and `test/tools.test.mjs`
+  (read truncation/paging, fuzzy edits, multi-edit, CRLF/BOM preservation);
+  a config default-timeout test in `test/reliability.test.mjs`. Updated
+  `docs/tools.md` and `docs/architecture.md` in the same change.
+
+Verification: 135 tests pass (118 before + 17 new), `node --check` clean.
+
 #### 2026-08-17 — quality: restructure the TUI into suggestions/frames/help modules
 
 **Status: ✅ done**

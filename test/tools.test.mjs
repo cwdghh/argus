@@ -1,0 +1,211 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  mkdtempSync, writeFileSync, readFileSync, rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { findTool } from "../src/tools.mjs";
+
+const read = findTool("read");
+const edit = findTool("edit");
+
+function withDir(fn) {
+  return async () => {
+    const dir = mkdtempSync(join(tmpdir(), "argus-tools-test-"));
+    const tmp = (name) => join(dir, name);
+    const write = (name, content) => writeFileSync(tmp(name), content);
+    const content = (name) => readFileSync(tmp(name), "utf8");
+    try {
+      await fn({ dir, tmp, write, content });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+}
+
+test("read numbers every line with its absolute 1-indexed line number", withDir(async ({ tmp, write }) => {
+  write("small.txt", "a\nb\nc\n");
+  const r = await read.execute({ path: "small.txt" }, { cwd: tmp("") });
+  assert.equal(r.error, undefined);
+  assert.equal(r.content, "1 │ a\n2 │ b\n3 │ c\n");
+  assert.equal(r.truncated, undefined);
+
+  // paging keeps absolute numbers, so the model never has to count
+  const p = await read.execute({ path: "small.txt", offset: 2 }, { cwd: tmp("") });
+  assert.equal(p.content, "2 │ b\n3 │ c\n");
+}));
+
+test("read truncates huge files and tells the model how to continue", withDir(async ({ tmp, write }) => {
+  const lines = Array.from({ length: 3000 }, (_, i) => `line ${i}`);
+  write("big.txt", lines.join("\n") + "\n");
+  const r = await read.execute({ path: "big.txt" }, { cwd: tmp("") });
+  assert.equal(r.truncated, true);
+  assert.equal(r.nextOffset, 2001);
+  assert.equal(r.content.split("\n").length, 2002); // 2000 numbered lines + blank + notice
+  assert.match(r.content, /\[Showing lines 1-2000 of 3000\. Use offset=2001 to continue\.\]/);
+  assert.ok(r.content.includes("   1 │ line 0"), "head of the file is present");
+  assert.ok(!r.content.includes("line 2999"), "tail is not present");
+}));
+
+test("read pages with offset/limit", withDir(async ({ tmp, write }) => {
+  const lines = Array.from({ length: 200 }, (_, i) => `n${i}`);
+  write("paged.txt", lines.join("\n") + "\n");
+  const r = await read.execute({ path: "paged.txt", offset: 95, limit: 10 }, { cwd: tmp("") });
+  assert.ok(r.content.startsWith(" 95 │ n94"), "absolute line 95 at 1-indexed offset 95");
+  assert.ok(r.content.includes("104 │ n103"), "includes the whole window");
+  assert.match(r.content, /96 more lines in the file\. Use offset=105 to continue/);
+  const tail = await read.execute({ path: "paged.txt", offset: 200 }, { cwd: tmp("") });
+  assert.ok(tail.content.endsWith("│ n199\n"), "reproduces the file's final newline");
+}));
+
+test("read refuses an offset beyond the end of the file", withDir(async ({ tmp, write }) => {
+  write("short.txt", "only one line");
+  const r = await read.execute({ path: "short.txt", offset: 3 }, { cwd: tmp("") });
+  assert.equal(r.error, true);
+  assert.match(r.message, /offset 3 is beyond/);
+}));
+
+test("read handles empty files and single huge lines", withDir(async ({ tmp, write }) => {
+  write("empty.txt", "");
+  const e = await read.execute({ path: "empty.txt" }, { cwd: tmp("") });
+  assert.deepEqual(e, { path: e.path, content: "" });
+
+  write("huge.txt", "y".repeat(200_000) + "\n");
+  const h = await read.execute({ path: "huge.txt" }, { cwd: tmp("") });
+  assert.match(h.content, /over the 50KB read limit/);
+  assert.match(h.content, /head -c 50000/);
+}));
+
+test("edit legacy old/new still works", withDir(async ({ tmp, write, content }) => {
+  write("a.txt", "hello");
+  const r = await edit.execute({ path: "a.txt", old: "hello", new: "bye" }, { cwd: tmp("") });
+  assert.equal(r.ok, true);
+  assert.equal(r.replacements, 1);
+  assert.equal(content("a.txt"), "bye");
+}));
+
+test("edit matches despite trailing whitespace differences (fuzzy)", withDir(async ({ tmp, write, content }) => {
+  // the model copied the line without its trailing spaces, so the old text
+  // (ending in the newline) does not match exactly and fuzzy matching kicks in
+  write("b.txt", "const a = 1;  \nconst b = 2;\n");
+  const r = await edit.execute({ path: "b.txt", old: "const a = 1;\n", new: "const a = 1; // ok\n" }, { cwd: tmp("") });
+  assert.equal(r.ok, true);
+  assert.equal(r.fuzzy, true, "reports the relaxed match");
+  // the untouched line keeps its exact bytes
+  assert.equal(content("b.txt"), "const a = 1; // ok\nconst b = 2;\n");
+}));
+
+test("edit tolerates line-number gutters copied from a read", withDir(async ({ tmp, write, content }) => {
+  write("g.txt", "const a = 1;\nconst b = 2;\n");
+  const r = await edit.execute({ path: "g.txt", old: "  2 │ const b = 2;\n", new: "const c = 3;\n" }, { cwd: tmp("") });
+  assert.equal(r.ok, true);
+  assert.equal(r.fuzzy, true, "relaxed matching strips the gutter");
+  assert.equal(content("g.txt"), "const a = 1;\nconst c = 3;\n");
+}));
+
+test("edit matches smart quotes and preserves CRLF + BOM", withDir(async ({ tmp, write, content }) => {
+  write("c.txt", "\uFEFFHe said \u201Chello\u201D\r\nSecond\r\n");
+  const r = await edit.execute({ path: "c.txt", old: 'He said "hello"', new: "She said hi" }, { cwd: tmp("") });
+  assert.equal(r.ok, true);
+  assert.equal(r.fuzzy, true);
+  assert.equal(content("c.txt"), "\uFEFFShe said hi\r\nSecond\r\n");
+}));
+
+test("edit applies several content replacements atomically via edits[]", withDir(async ({ tmp, write, content }) => {
+  write("d.txt", "a1\nb2\nc3\n");
+  const r = await edit.execute(
+    { path: "d.txt", edits: [{ old: "a1", new: "A1" }, { old: "c3", new: "C3" }] },
+    { cwd: tmp("") }
+  );
+  assert.equal(r.ok, true);
+  assert.equal(r.replacements, 2);
+  assert.equal(content("d.txt"), "A1\nb2\nC3\n");
+}));
+
+test("edit still refuses ambiguous matches unless all=true", withDir(async ({ tmp, write, content }) => {
+  write("e.txt", "x x");
+  const r = await edit.execute({ path: "e.txt", old: "x", new: "y" }, { cwd: tmp("") });
+  assert.equal(r.error, true);
+  assert.match(r.message, /occurs 2 times/);
+  const all = await edit.execute({ path: "e.txt", old: "x", new: "y", all: true }, { cwd: tmp("") });
+  assert.equal(all.ok, true);
+  assert.equal(content("e.txt"), "y y");
+}));
+
+test("edit not-found error is actionable", withDir(async ({ tmp, write }) => {
+  write("f.txt", "some content");
+  const r = await edit.execute({ path: "f.txt", old: "zzz", new: "x" }, { cwd: tmp("") });
+  assert.equal(r.error, true);
+  assert.match(r.message, /old string not found/);
+  assert.match(r.message, /fresh read/);
+}));
+
+test("edit range mode replaces an inclusive line range", withDir(async ({ tmp, write, content }) => {
+  write("r.txt", "a\nb\nc\nd\n");
+  const r = await edit.execute({ path: "r.txt", startLine: 2, endLine: 3, new: "X\nY" }, { cwd: tmp("") });
+  assert.equal(r.ok, true);
+  assert.equal(r.replacements, 1);
+  assert.equal(content("r.txt"), "a\nX\nY\nd\n");
+}));
+
+test("edit range mode is line-oriented and never merges lines", withDir(async ({ tmp, write, content }) => {
+  write("m.txt", "a\nb\nc\n");
+  await edit.execute({ path: "m.txt", startLine: 2, new: "B" }, { cwd: tmp("") });
+  assert.equal(content("m.txt"), "a\nB\nc\n");
+}));
+
+test("edit range mode inserts before a line and appends at EOF", withDir(async ({ tmp, write, content }) => {
+  write("i.txt", "a\nb\nc\n");
+  await edit.execute({ path: "i.txt", startLine: 2, endLine: 1, new: "X" }, { cwd: tmp("") });
+  assert.equal(content("i.txt"), "a\nX\nb\nc\n");
+
+  await edit.execute({ path: "i.txt", startLine: 5, endLine: 4, new: "z" }, { cwd: tmp("") });
+  assert.equal(content("i.txt"), "a\nX\nb\nc\nz\n");
+
+  write("one.txt", "solo");
+  await edit.execute({ path: "one.txt", startLine: 2, endLine: 1, new: "second" }, { cwd: tmp("") });
+  assert.equal(content("one.txt"), "solo\nsecond", "separates the inserted line");
+}));
+
+test("edit range mode deletes lines", withDir(async ({ tmp, write, content }) => {
+  write("d.txt", "a\nb\nc\nd\n");
+  await edit.execute({ path: "d.txt", startLine: 2, endLine: 3, new: "" }, { cwd: tmp("") });
+  assert.equal(content("d.txt"), "a\nd\n");
+}));
+
+test("edit range mode validates bounds and meaning of endLine", withDir(async ({ tmp, write }) => {
+  write("b.txt", "a\nb\nc\n");
+  const oob = await edit.execute({ path: "b.txt", startLine: 99, new: "x" }, { cwd: tmp("") });
+  assert.equal(oob.error, true);
+  assert.match(oob.message, /out of bounds: the file has 3 lines/);
+  const bad = await edit.execute({ path: "b.txt", startLine: 3, endLine: 5, new: "x" }, { cwd: tmp("") });
+  assert.equal(bad.error, true);
+  assert.match(bad.message, /out of bounds/);
+  const weird = await edit.execute({ path: "b.txt", startLine: 3, endLine: 1, new: "x" }, { cwd: tmp("") });
+  assert.equal(weird.error, true);
+  assert.match(weird.message, /endLine must be startLine - 1/);
+}));
+
+test("edit mixes content and range edits atomically against the original", withDir(async ({ tmp, write, content }) => {
+  write("x.txt", "a1\nb2\nc3\nd4\n");
+  const r = await edit.execute(
+    { path: "x.txt", edits: [{ old: "a1", new: "A1" }, { startLine: 3, endLine: 3, new: "C3!" }] },
+    { cwd: tmp("") }
+  );
+  assert.equal(r.ok, true);
+  assert.equal(r.replacements, 2);
+  assert.equal(content("x.txt"), "A1\nb2\nC3!\nd4\n");
+}));
+
+test("edit range mode preserves CRLF line endings", withDir(async ({ tmp, write, content }) => {
+  write("crlf.txt", "a\r\nb\r\nc\r\n");
+  await edit.execute({ path: "crlf.txt", startLine: 2, new: "B" }, { cwd: tmp("") });
+  assert.equal(content("crlf.txt"), "a\r\nB\r\nc\r\n");
+}));
+
+test("edit range mode can fill an empty file", withDir(async ({ tmp, write, content }) => {
+  write("empty.txt", "");
+  await edit.execute({ path: "empty.txt", startLine: 1, endLine: 0, new: "hello" }, { cwd: tmp("") });
+  assert.equal(content("empty.txt"), "hello");
+}));
