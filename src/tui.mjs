@@ -36,7 +36,7 @@ import { COMMANDS } from "./tui/commands.mjs";
 import { footerText, headerText } from "./tui/frames.mjs";
 import { decodeEscape } from "./tui/keys.mjs";
 import { buildFrame } from "./tui/layout.mjs";
-import { attachInput, queryBackground, refreshGitStatus, startTui, stopTui } from "./tui/lifecycle.mjs";
+import { refreshGitStatus, startTui, stopTui } from "./tui/lifecycle.mjs";
 import { acceptSuggestion, computeSuggestion } from "./tui/suggestions.mjs";
 import {
   styleText,
