@@ -69,6 +69,11 @@ export class MinimalTui {
     this.newSession = opts.newSession ?? null;
     this.listSessions = opts.listSessions ?? null;
     this.resumeSession = opts.resumeSession ?? null;
+    this.renameSession = opts.renameSession ?? null;
+    // Saved-session names for `/resume` completion. Refresh after any session
+    // change (rename, new, resume) via refreshSessionNames().
+    this.sessionNames = opts.sessionNames ?? [];
+    this.listSessionNames = opts.listSessionNames ?? (async () => []);
     this.cwd = opts.initialCwd ?? process.cwd();
     // The multiline prompt editor is a separate pure widget (src/tui/editor.mjs);
     // the accessors below expose its state as plain inputBuffer/inputCursor/
@@ -414,16 +419,37 @@ export class MinimalTui {
         await this.withLocalTask(async () => {
           const next = await this.resumeSession(args[0]);
           this.applySession(next, `resumed session ${next.sessionName}`);
+          this.refreshSessionNames();
+        });
+      }
+    } else if (command === "/name") {
+      if (args.length !== 1) {
+        this.pushBlock({ kind: "error", text: "usage: /name <name> — rename the current session" });
+      } else if (!this.renameSession) {
+        this.pushBlock({ kind: "error", text: "session renaming is unavailable in this frontend" });
+      } else if (args[0] === this.sessionName) {
+        this.pushBlock({ kind: "result", ok: true, summary: `already named ${this.sessionName}` });
+      } else {
+        await this.withLocalTask(async () => {
+          const safe = await this.renameSession(this.sessionName, args[0]);
+          if (this.session && typeof this.session.renameTo === "function") this.session.renameTo(safe);
+          this.sessionName = safe;
+          this.pushBlock({ kind: "result", ok: true, summary: `session renamed to ${safe}` });
+          this.refreshSessionNames();
         });
       }
     } else if (command === "/new") {
-      if (args.length) {
-        this.pushBlock({ kind: "error", text: "/new does not take arguments" });
-      } else if (!this.newSession) {
+      if (!this.newSession) {
         this.pushBlock({ kind: "error", text: "starting a new session is unavailable in this frontend" });
       } else {
-        const next = await this.newSession();
-        this.applySession({ ...next, blocks: [], history: [] }, `started session ${next.sessionName}`);
+        const name = args.length ? args.join(" ") : undefined;
+        try {
+          const next = await this.newSession(name);
+          this.applySession({ ...next, blocks: [], history: [] }, `started session ${next.sessionName}`);
+          this.refreshSessionNames();
+        } catch (err) {
+          this.pushBlock({ kind: "error", text: err.message });
+        }
       }
     } else if (command === "/exit" || command === "/quit") {
       this.stop();
@@ -479,8 +505,19 @@ export class MinimalTui {
       cursor: this.inputCursor,
       mode: this.mode,
       cwd: this.cwd,
+      sessions: this.sessionNames,
       prev: this.suggestion,
     });
+  }
+
+  /** Re-fetch the saved-session name list (used by `/resume` completion). */
+  async refreshSessionNames() {
+    try {
+      this.sessionNames = await this.listSessionNames();
+      this.dirtyRendered = true;
+    } catch {
+      // keep the last known list; completion degrades gracefully
+    }
   }
 
   /** Move the highlighted row; false when no popup is open. */

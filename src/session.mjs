@@ -15,7 +15,7 @@
  *
  * The API key is never written to disk.
  */
-import { mkdir, readdir, readFile, appendFile, stat, rm } from "node:fs/promises";
+import { mkdir, readdir, readFile, appendFile, stat, rm, access, rename } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { argusHome } from "./config.mjs";
 import { tools } from "./tools.mjs";
@@ -115,6 +115,28 @@ export async function pruneSessions(keep, { exclude } = {}) {
 }
 
 /**
+ * Rename a saved session file. The session name lives only in the filename
+ * (never inside the JSONL), so this is a validated file move: the new name
+ * must be valid and unused, and renaming to the current name is a no-op.
+ * Returns the accepted name. The caller updates any live Session handle.
+ */
+export async function renameSession(oldName, nextName) {
+  const safe = sanitizeName(nextName);
+  if (!safe) throw new Error(`invalid session name: ${nextName}`);
+  if (safe === oldName) return safe;
+  const oldFile = sessionFilePath(oldName);
+  const nextFile = sessionFilePath(safe);
+  try {
+    await access(nextFile);
+    throw new Error(`session already exists: ${safe}`);
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+  }
+  await rename(oldFile, nextFile);
+  return safe;
+}
+
+/**
  * Rebuild the on-screen transcript and model history from a session's raw
  * turns. Both the TUI (restore a session) and headless mode (resume history)
  * use this so the reconstruction logic has exactly one home. `blocks` mirrors
@@ -187,6 +209,14 @@ export class Session {
     this.lastCwd = opts.initialCwd ?? null;
     this.lastModel = opts.initialModel ?? null;
     this.writeQueue = Promise.resolve();
+  }
+
+  /** Point this handle at a renamed file (the file was already moved). */
+  renameTo(name) {
+    const safe = sanitizeName(name);
+    if (!safe) throw new Error(`invalid session name: ${name}`);
+    this.name = safe;
+    this.file = sessionFilePath(safe);
   }
 
   enqueue(write) {

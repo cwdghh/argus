@@ -9,17 +9,18 @@ export const SLASH_COMMANDS = [
   { name: "/help", description: "show commands and keyboard shortcuts" },
   { name: "/keys", description: "show keyboard shortcuts" },
   { name: "/status", description: "show the active session, model, cwd, context, and limits" },
-  { name: "/model", description: "show or switch the model (e.g. /model gpt-4o-mini)" },
+  { name: "/model", args: "<name>", description: "show or switch the model (e.g. /model gpt-4o-mini)" },
   { name: "/sessions", description: "list recent saved sessions" },
-  { name: "/resume", description: "switch to a saved session" },
-  { name: "/new", description: "start a fresh session without restarting Argus" },
+  { name: "/resume", args: "<name>", description: "switch to a saved session" },
+  { name: "/name", args: "<name>", description: "rename the current session" },
+  { name: "/new", args: "[<name>]", description: "start a fresh session (optionally named)" },
   { name: "/exit", description: "quit Argus" },
   { name: "/quit", description: "quit Argus (same as /exit)" },
 ];
 
 export const COMMAND_HELP = `## Local commands
 
-${SLASH_COMMANDS.map((c) => `- ${c.name}${c.name === "/resume" ? " <name>" : ""} — ${c.description}`).join("\n")}`;
+${SLASH_COMMANDS.map((c) => `- ${c.name}${c.args ? ` ${c.args}` : ""} — ${c.description}`).join("\n")}`;
 
 export const KEY_HELP = `## Keyboard shortcuts
 
@@ -31,7 +32,7 @@ export const KEY_HELP = `## Keyboard shortcuts
 - Ctrl-U / Ctrl-K — delete to the start / end
 - Ctrl-W — delete the previous word
 - Up / Down — move through the suggestion popup; recall earlier prompts otherwise
-- Tab — accept the suggested @path or /command
+- Tab — accept the suggested @path, /command, or /resume session name
 - Shift+Enter — insert a newline
 - Enter — submit
 

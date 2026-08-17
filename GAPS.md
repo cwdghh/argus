@@ -91,6 +91,11 @@ questions are deliberately unresolved — we'll discuss them.
 > on TUI startup, newest-first by mtime, active session always preserved), and
 > `/sessions` now reports file sizes. Manual deletion/renaming commands remain
 > an open question.
+> **2026-08-17:** naming is resolved — `/name <name>` renames the current
+> session (a pure file move: the name lives only in the filename), `/new <name>`
+> names a session at creation, and `/resume` completes saved-session names in
+> the editor popup, so a large session collection stays navigable. Manual
+> deletion (`/session delete`) remains open.
 
 - **Open questions for argus:**
   - Do we need `/session delete` / `/session rename` on top of retention?

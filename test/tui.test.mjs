@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { MinimalTui } from "../src/tui.mjs";
 import { COMPACT_DEFAULTS, estimateChars } from "../src/compact.mjs";
 import { formatChars } from "../src/tui/renderers.mjs";
+import { SLASH_COMMANDS } from "../src/tui/help.mjs";
 
 const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
 
@@ -295,7 +296,7 @@ test("live suggestions: /commands filter, navigate, Tab accepts, Esc dismisses",
   t.inputBuffer = "/";
   t.inputCursor = 1;
   t.refreshSuggestions();
-  assert.equal(t.suggestion.items.length, 9, "one entry per SLASH_COMMANDS command");
+  assert.equal(t.suggestion.items.length, SLASH_COMMANDS.length, "one entry per SLASH_COMMANDS command");
   t.runAction({ type: "down" });
   t.runAction({ type: "down" });
   assert.equal(t.suggestion.selected, 2, "arrow keys move the highlight");
@@ -610,4 +611,119 @@ test("multiline vertical cursor movement preserves column position", () => {
   moved = t.moveCaretVertical(-1);
   assert.ok(moved, "should move up");
   assert.equal(t.inputCursor, 4, "cursor should be back at col 4 in first line");
+});
+
+test("/name renames the current session and repoints the handle", async () => {
+  const handle = {
+    name: "old",
+    renamedTo: null,
+    renameTo(name) {
+      this.renamedTo = name;
+      this.name = name;
+    },
+  };
+  let moved = null;
+  const t = new MinimalTui(
+    { model: "m" },
+    {
+      sessionName: "old",
+      session: handle,
+      renameSession: async (from, to) => {
+        moved = `${from}->${to}`;
+        return to;
+      },
+      listSessionNames: async () => ["new", "old"],
+    }
+  );
+  await t.runCommand("/name new");
+  assert.equal(moved, "old->new");
+  assert.equal(t.sessionName, "new");
+  assert.equal(handle.renamedTo, "new");
+  assert.equal(t.blocks.at(-1).summary, "session renamed to new");
+  await t.refreshSessionNames();
+  assert.deepEqual(t.sessionNames, ["new", "old"], "the completion cache refreshes after a rename");
+});
+
+test("/name validates usage, collisions, and same-name no-ops", async () => {
+  const t = new MinimalTui(
+    { model: "m" },
+    {
+      sessionName: "old",
+      renameSession: async () => {
+        throw new Error("session already exists: taken");
+      },
+    }
+  );
+  await t.runCommand("/name");
+  assert.equal(t.blocks.at(-1).kind, "error");
+  assert.match(t.blocks.at(-1).text, /usage: \/name/);
+  await t.runCommand("/name one two");
+  assert.equal(t.blocks.at(-1).kind, "error");
+  await t.runCommand("/name taken");
+  assert.equal(t.blocks.at(-1).kind, "error");
+  assert.match(t.blocks.at(-1).text, /session already exists/);
+
+  const noop = new MinimalTui({ model: "m" }, { sessionName: "same", renameSession: async () => { throw new Error("should not be called"); } });
+  await noop.runCommand("/name same");
+  assert.equal(noop.blocks.at(-1).kind, "result");
+  assert.equal(noop.blocks.at(-1).summary, "already named same");
+});
+
+test("/new <name> starts a named fresh session; invalid names error", async () => {
+  let received = "unset";
+  const t = new MinimalTui(
+    { model: "m" },
+    {
+      sessionName: "old",
+      newSession: (name) => {
+        received = name;
+        return { sessionName: name, session: {}, cwd: "/fresh" };
+      },
+      listSessionNames: async () => ["my-work"],
+    }
+  );
+  await t.runCommand("/new my-work");
+  assert.equal(received, "my-work");
+  assert.equal(t.sessionName, "my-work");
+  assert.equal(t.cwd, "/fresh");
+  assert.deepEqual(t.history, []);
+  await t.refreshSessionNames();
+  assert.deepEqual(t.sessionNames, ["my-work"]);
+
+  const bad = new MinimalTui({ model: "m" }, {
+    newSession: (name) => {
+      throw new Error(`invalid session name: ${name}`);
+    },
+  });
+  await bad.runCommand("/new bad name!");
+  assert.equal(bad.blocks.at(-1).kind, "error");
+  assert.match(bad.blocks.at(-1).text, /invalid session name/);
+});
+
+test("live suggestions: saved-session names complete /resume tokens", () => {
+  const t = new MinimalTui({ model: "m" }, { sessionNames: ["work-1", "work-2", "ai-lab"] });
+  t.width = 80;
+
+  t.inputBuffer = "/resume wo";
+  t.inputCursor = "/resume wo".length;
+  t.refreshSuggestions();
+  assert.equal(t.suggestion?.kind, "session");
+  assert.deepEqual(t.suggestion.items.map((i) => i.label), ["work-1", "work-2"]);
+
+  t.insertText("\t"); // Tab accepts the highlighted name
+  assert.equal(t.inputBuffer, "/resume work-1 ");
+  assert.equal(t.suggestion, null, "a completed name leaves no popup");
+
+  // An empty token after /resume lists everything.
+  t.inputBuffer = "/resume ";
+  t.inputCursor = 8;
+  t.refreshSuggestions();
+  assert.equal(t.suggestion.items.length, 3);
+});
+
+test("/help documents /name and /new <name>", async () => {
+  const t = new MinimalTui({ model: "m" });
+  await t.runCommand("/help");
+  assert.ok(t.blocks.at(-1).text.includes("/name <name>"));
+  assert.ok(t.blocks.at(-1).text.includes("/new [<name>]"));
 });

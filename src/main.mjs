@@ -12,8 +12,10 @@ import {
   Session,
   loadSession,
   latestSessionName,
+  listSessions,
   newSessionName,
   pruneSessions,
+  renameSession,
   sanitizeName,
   sessionData,
   sessionSummaries,
@@ -98,6 +100,7 @@ async function main() {
   }
 
   const initial = await sessionState(sessionName, config);
+  const sessionNames = (await listSessions()).map((s) => s.name);
 
   const tui = new MinimalTui(initial.model ? { ...config, model: initial.model } : config, {
     defaultModel: config.model,
@@ -106,8 +109,19 @@ async function main() {
     initialBlocks: initial.blocks,
     initialHistory: initial.history,
     initialCwd: initial.cwd,
-    newSession: () => {
-      const nextName = newSessionName();
+    // `sessionNames` drives /resume completion; `newSession(name)` names a
+    // fresh session, and `renameSession` renames the current one (pure file
+    // move + handle update in the TUI).
+    sessionNames,
+    listSessionNames: async () => (await listSessions()).map((s) => s.name),
+    renameSession,
+    newSession: (name) => {
+      let nextName = newSessionName();
+      if (name) {
+        const safe = sanitizeName(name);
+        if (!safe) throw new Error(`invalid session name: ${name}`);
+        nextName = safe;
+      }
       return {
         sessionName: nextName,
         session: new Session(nextName, config),

@@ -1,7 +1,7 @@
 /**
  * Live suggestions for the prompt editor: slash commands while the input is a
- * bare `/...`, and `@path` entries while the caret sits right after an
- * `@token`.
+ * bare `/...`, saved-session names after `/resume `, and `@path` entries while
+ * the caret sits right after an `@token`.
  *
  * Pure functions over plain input state: the TUI recomputes its `suggestion`
  * field with `computeSuggestion` after every edit, applies accepted
@@ -24,7 +24,7 @@ export const SUGGESTION_ROWS = 8;
  * list): the same label is kept when it still matches, otherwise the old index
  * is clamped; it resets only when the token kind changes or no popup was open.
  */
-export function computeSuggestion({ buffer, cursor, mode, cwd, prev }) {
+export function computeSuggestion({ buffer, cursor, mode, cwd, sessions, prev }) {
   if (mode !== "idle") return null;
   const before = buffer.slice(0, cursor);
   const selectedFor = (kind, items) => {
@@ -44,6 +44,22 @@ export function computeSuggestion({ buffer, cursor, mode, cwd, prev }) {
     return items.length
       ? { kind: "slash", items, start: 0, end: buffer.length, selected: selectedFor("slash", items) }
       : null;
+  }
+
+  // Session names after "/resume ", e.g. "/resume work-". The token is the
+  // text between the space and the caret; an empty token lists every session.
+  const resume = /^\/resume\s+([^\s]*)$/.exec(before);
+  if (resume && Array.isArray(sessions)) {
+    const typed = resume[1];
+    const items = sessions.filter((name) => name.startsWith(typed)).map((name) => ({ label: name }));
+    if (!items.length) return null;
+    return {
+      kind: "session",
+      items,
+      start: before.length - typed.length,
+      end: cursor,
+      selected: selectedFor("session", items),
+    };
   }
 
   // @path token ending exactly at the caret, e.g. "Review @src/ag".
@@ -114,6 +130,12 @@ export function acceptSuggestion(s, buffer, cursor) {
     buffer = item.label + " ";
     return { buffer, cursor: buffer.length };
   }
+  if (s.kind === "session") {
+    const item = s.items[s.selected] ?? s.items[0];
+    const replacement = item.label + " ";
+    buffer = buffer.slice(0, s.start) + replacement + buffer.slice(s.end);
+    return { buffer, cursor: s.start + replacement.length };
+  }
   const item = s.items[s.selected] ?? s.items[0];
   const path = `${s.dirPart}${item.label}`;
   const needsQuotes = s.quoted || /\s/.test(path);
@@ -154,7 +176,9 @@ export function suggestionLines(s, { width, height, editorHeight, cwd }) {
   const header =
     s.kind === "slash"
       ? styleText("commands", { fg: theme.dim, italic: true })
-      : styleText(`files in ${s.dirPart.replace(/\/$/, "") || "."}`, { fg: theme.dim, italic: true });
+      : s.kind === "session"
+        ? styleText("sessions", { fg: theme.dim, italic: true })
+        : styleText(`files in ${s.dirPart.replace(/\/$/, "") || "."}`, { fg: theme.dim, italic: true });
   const lines = [header];
   const maxLabel = Math.max(...w.shown.map((item) => dispWidth(item.label)));
   for (const [index, item] of w.shown.entries()) {

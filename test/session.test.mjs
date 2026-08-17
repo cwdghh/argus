@@ -1,13 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, readFileSync, utimesSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, readdirSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // Keep all session fixtures out of the user's real ~/.argus directory.
 process.env.ARGUS_HOME = mkdtempSync(join(tmpdir(), "argus-sess-test-"));
 
-const { Session, listSessions, loadSession, latestSessionName, newSessionName, pruneSessions, sanitizeName, sessionConfig, sessionData, sessionSummaries, sessionsDir } = await import("../src/session.mjs");
+const { Session, listSessions, loadSession, latestSessionName, newSessionName, pruneSessions, renameSession, sanitizeName, sessionConfig, sessionData, sessionSummaries, sessionsDir } = await import("../src/session.mjs");
 
 const config = { baseUrl: "http://x", model: "mock", systemPrompt: "s" };
 
@@ -192,4 +192,42 @@ test("ARGUS_HOME is resolved lazily after module import", () => {
   } finally {
     process.env.ARGUS_HOME = original;
   }
+});
+
+test("renameSession moves the file and preserves its contents", async () => {
+  const s = new Session("keep-old", config);
+  await s.appendTurn({ config, messages: [{ role: "user", content: "keep me" }], blocks: [] });
+
+  assert.equal(await renameSession("keep-old", "keep-new"), "keep-new");
+  const moved = readFileSync(join(process.env.ARGUS_HOME, "sessions", "keep-new.jsonl"), "utf8");
+  assert.ok(moved.includes("keep me"), "contents survive the rename");
+  const dir = readdirSync(join(process.env.ARGUS_HOME, "sessions"));
+  assert.ok(!dir.includes("keep-old.jsonl"), "old file is gone");
+  assert.ok(dir.includes("keep-new.jsonl"), "new file exists");
+  assert.equal((await loadSession("keep-new")).turns.length, 1);
+  assert.equal(await loadSession("keep-old"), null);
+});
+
+test("renameSession rejects invalid names and collisions, no-ops on itself", async () => {
+  const s = new Session("r-a", config);
+  await s.appendTurn({ config, messages: [], blocks: [] });
+  await assert.rejects(() => renameSession("r-a", "bad name!"), /invalid session name/);
+  const other = new Session("r-b", config);
+  await other.appendTurn({ config, messages: [], blocks: [] });
+  await assert.rejects(() => renameSession("r-a", "r-b"), /session already exists/);
+  assert.equal(await renameSession("r-a", "r-a"), "r-a", "renaming to the same name is a no-op");
+});
+
+test("Session#renameTo repoints the handle so later writes hit the new file", async () => {
+  const s = new Session("handle-old", config);
+  await s.appendTurn({ config, messages: [], blocks: [] });
+  await renameSession("handle-old", "handle-new");
+  s.renameTo("handle-new");
+  await s.appendTurn({ config, messages: [{ role: "user", content: "after rename" }], blocks: [] });
+
+  const loaded = await loadSession("handle-new");
+  assert.equal(loaded.turns.length, 2);
+  assert.equal(loaded.turns[1].messages[0].content, "after rename");
+  const dir = readdirSync(join(process.env.ARGUS_HOME, "sessions"));
+  assert.ok(!dir.includes("handle-old.jsonl"), "the handle must not recreate the old file");
 });

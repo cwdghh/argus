@@ -193,6 +193,14 @@ npm start -- --session X  # resume/create a session named X
 
 The active session name is shown in the header.
 Use `/sessions` and `/resume <name>` to move between saved sessions from the TUI.
+Typing `/resume` followed by a space completes saved-session names in the
+editor popup — keep typing to filter, Tab accepts, and the list reflects
+renames and new sessions.
+
+Give sessions meaningful names: `/name <name>` renames the current session
+(later turns keep writing to it), and `/new <name>` starts a named session
+(`/new` alone still uses a timestamp). Sessions are discovered by their
+names, not position in the list, so a large collection stays navigable.
 
 `/model <name>` switches the model for the current session only. The override
 is saved with the session (in its JSONL file) and restored when you resume it;

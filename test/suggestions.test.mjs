@@ -86,3 +86,57 @@ test("suggestions: popup rows keep a constant height with a status row", () => {
   assert.match(plain[0], /files in \./);
   assert.match(plain.at(-1), /more|matches/);
 });
+
+test("suggestions: saved-session names complete /resume tokens", () => {
+  const sessions = ["work-edit-1", "work-edit-2", "ai-lab"];
+  const s = computeSuggestion({ buffer: "/resume wo", cursor: 10, mode: "idle", cwd: "/", sessions, prev: null });
+  assert.equal(s.kind, "session");
+  assert.deepEqual(s.items.map((i) => i.label), ["work-edit-1", "work-edit-2"]);
+  assert.equal(s.start, 8, "the token starts after '/resume '");
+  assert.equal(s.end, 10);
+
+  // An empty token lists every session, in the caller's (newest-first) order.
+  const all = computeSuggestion({ buffer: "/resume ", cursor: 8, mode: "idle", cwd: "/", sessions, prev: null });
+  assert.equal(all.kind, "session");
+  assert.equal(all.items.length, 3);
+
+  // Mid-token completion works like @path.
+  const mid = computeSuggestion({ buffer: "/resume work-ed", cursor: 15, mode: "idle", cwd: "/", sessions, prev: null });
+  assert.deepEqual(mid.items.map((i) => i.label), ["work-edit-1", "work-edit-2"]);
+
+  // Only /resume gets session names; other commands and missing lists do not.
+  assert.equal(computeSuggestion({ buffer: "/model gpt", cursor: 10, mode: "idle", cwd: "/", sessions, prev: null }), null);
+  assert.equal(computeSuggestion({ buffer: "/resume wo", cursor: 10, mode: "idle", cwd: "/", prev: null }), null);
+  assert.equal(computeSuggestion({ buffer: "/resume wo x", cursor: 12, mode: "idle", cwd: "/", sessions, prev: null }), null);
+  assert.equal(computeSuggestion({ buffer: "/resume wo", cursor: 10, mode: "working", cwd: "/", sessions, prev: null }), null);
+});
+
+test("suggestions: accepting a session name replaces only the token", () => {
+  const s = computeSuggestion({ buffer: "/resume wo", cursor: 10, mode: "idle", cwd: "/", sessions: ["work-1", "work-2"], prev: null });
+  s.selected = 1;
+  const next = acceptSuggestion(s, "/resume wo", 10);
+  assert.equal(next.buffer, "/resume work-2 ");
+  assert.equal(next.cursor, "/resume work-2 ".length);
+});
+
+test("suggestions: the highlight survives when typing narrows the session list", () => {
+  const prev = {
+    kind: "session",
+    items: [
+      { label: "work-edit-1" },
+      { label: "work-edit-2" },
+    ],
+    selected: 1,
+  };
+  const s = computeSuggestion({ buffer: "/resume work-edit-2", cursor: 19, mode: "idle", cwd: "/", sessions: ["work-edit-1", "work-edit-2"], prev });
+  assert.equal(s.kind, "session");
+  assert.deepEqual(s.items.map((i) => i.label), ["work-edit-2"]);
+  assert.equal(s.selected, 0, "clamps into the narrowed list");
+});
+
+test("suggestions: session popup header labels the list", () => {
+  const s = computeSuggestion({ buffer: "/resume ", cursor: 8, mode: "idle", cwd: "/", sessions: ["a1", "b2"], prev: null });
+  const lines = suggestionLines(s, { width: 60, height: 12, editorHeight: 1, cwd: "/" });
+  assert.ok(lines.length > 1);
+  assert.ok(strip(lines[0]).includes("sessions"));
+});

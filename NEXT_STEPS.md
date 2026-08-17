@@ -10,10 +10,11 @@ See `GAPS.md` for the broader design territory and open questions.
 > numbered reads (2000 lines / 50KB, `offset`/`limit` paging), exact→fuzzy
 > edits with atomic `edits[]` batches, line-range edit mode for whole-block
 > rewrites/inserts, markdown table rendering with CJK/emoji-aware widths,
-> relaxed timeouts for long-reasoning models, and a global `~/.argus/.env`
-> config file (process env > project `.env` > home `.env` > defaults). Item 2
-> below (read-before-edit freshness) is the main direction that work
-> deliberately deferred.
+> relaxed timeouts for long-reasoning models, a global `~/.argus/.env`
+> config file (process env > project `.env` > home `.env` > defaults), and
+> session naming: `/name <name>` rename, `/new <name>` at creation, and
+> `/resume` name completion. Item 2 below (read-before-edit freshness) is
+> the main direction that work deliberately deferred.
 
 ---
 
@@ -67,12 +68,13 @@ See `GAPS.md` for the broader design territory and open questions.
 
 ## Practical improvements
 
-### 4. Session management commands
+### 4. Session deletion
 
-- **What:** `/session delete <name>` and `/session rename <old> <new>` for
-  housekeeping.
-- **Why:** `/sessions` already lists sessions, but there's no way to clean up
-  old ones without manually deleting files.
+- **What:** `/session delete <name>` for housekeeping. Naming is already
+  done: `/name <name>` renames the current session, `/new <name>` names a
+  session at creation, and `/resume` completes saved-session names.
+- **Why:** `/sessions` already lists sessions, but there's no way to clean
+  up old ones without manually deleting files.
 - **Considerations:**
   - Confirmation before delete?
   - Should delete accept multiple names or a glob?

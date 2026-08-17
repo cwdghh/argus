@@ -1,3 +1,34 @@
+#### 2026-08-17 — session naming & resume completion
+
+**Status: ✅ done**
+
+Goal (from discussion): sessions were hard to find and name — `/sessions`
+only listed the latest 20, `/resume` demanded exact auto-timestamp names, and
+there was no way to give a session a meaningful name.
+
+What was done:
+- ✅ `/resume <partial>` completion: typing `/resume ` opens the editor popup
+  on saved-session names (newest-first from `listSessions()`); an empty token
+  lists everything, typing filters, Tab accepts and replaces just the token.
+  New "session" suggestion kind in `src/tui/suggestions.mjs` beside slash and
+  `@path`; the TUI caches session names and refreshes after any session change.
+- ✅ `/name <name>` renames the current session: `renameSession()` in
+  `src/session.mjs` validates the new name, rejects collisions, and moves the
+  file (the name lives only in the filename, never inside the JSONL);
+  `Session#renameTo()` repoints the live handle so later turns append to the
+  renamed file.
+- ✅ `/new <name>` starts a named fresh session (bare `/new` keeps the
+  timestamp name).
+- ✅ `SLASH_COMMANDS` gained an `args` field, so `/help` renders
+  `/resume <name>`, `/name <name>`, and `/new [<name>]` without per-command
+  special cases; the `/keys` Tab line now mentions session names.
+- ✅ Tests: 12 new — session rename/collision/no-op/handle repointing,
+  suggestion trigger/filter/accept/header/highlight, and TUI `/name`,
+  `/new <name>`, `/resume` completion, and `/help` rendering. Docs updated in
+  README, `GAPS.md` #5, and `NEXT_STEPS.md` (rename resolved; delete remains).
+
+Verification: 166 tests pass (154 before + 12 new), `node --check` clean.
+
 #### 2026-08-17 — global config file under ~/.argus
 
 **Status: ✅ done**
