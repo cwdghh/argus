@@ -9,9 +9,11 @@ See `GAPS.md` for the broader design territory and open questions.
 > **Recently completed (2026-08-17, details in `PROGRESS.md`):** bounded
 > numbered reads (2000 lines / 50KB, `offset`/`limit` paging), exact→fuzzy
 > edits with atomic `edits[]` batches, line-range edit mode for whole-block
-> rewrites/inserts, markdown table rendering with CJK/emoji-aware widths, and
-> relaxed timeouts for long-reasoning models. Item 2 below (read-before-edit
-> freshness) is the main direction that work deliberately deferred.
+> rewrites/inserts, markdown table rendering with CJK/emoji-aware widths,
+> relaxed timeouts for long-reasoning models, and a global `~/.argus/.env`
+> config file (process env > project `.env` > home `.env` > defaults). Item 2
+> below (read-before-edit freshness) is the main direction that work
+> deliberately deferred.
 
 ---
 

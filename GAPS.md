@@ -182,6 +182,11 @@ questions are deliberately unresolved — we'll discuss them.
 > (read-before-edit, content vs range edits) live in the default system
 > prompt, and long usage documentation stays in `docs/`. The prompt is still
 > plain text from env/fallback, not a versioned artifact.
+> **2026-08-17:** config gained a third source — global defaults in
+> `~/.argus/.env` (same variables/format as the project `.env`, loaded last
+> so it only fills gaps). Precedence is process env > project `.env` >
+> home `.env` > built-in defaults; `ARGUS_HOME` relocates both the file and
+> the session store.
 
 - **What:** one model + one system prompt, read from env.
 - **Why it matters:** model choice and prompt are the user-facing "knobs."

@@ -5,6 +5,32 @@
  * model), but anything that speaks the OpenAI "chat completions" protocol
  * works (e.g. Ollama, LM Studio, vLLM, LiteLLM).
  */
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+/**
+ * Root directory for argus state (sessions, the home config file). Resolved
+ * lazily so an `ARGUS_HOME` set by an earlier-loaded `.env` is honored.
+ */
+export function argusHome() {
+  return process.env.ARGUS_HOME || join(homedir(), ".argus");
+}
+
+/**
+ * Load global defaults from $ARGUS_HOME/.env (or ~/.argus/.env) if present —
+ * the same variables and format as the project `.env`. Node's env-file loader
+ * never overrides a variable that is already set, so calling this AFTER the
+ * project `.env` yields the precedence: process env > project `.env` >
+ * home `.env` > built-in defaults.
+ */
+export function loadHomeEnv() {
+  try {
+    process.loadEnvFile(join(argusHome(), ".env"));
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+  }
+}
+
 function positiveInt(value, fallback, minimum = 1) {
   const n = Number(value);
   return Number.isInteger(n) && n >= minimum ? n : fallback;

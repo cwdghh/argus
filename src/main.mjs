@@ -5,7 +5,7 @@
  */
 import { realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { getConfig, validateConfig } from "./config.mjs";
+import { getConfig, validateConfig, loadHomeEnv } from "./config.mjs";
 import { MinimalTui } from "./tui.mjs";
 import { runHeadless } from "./headless.mjs";
 import {
@@ -69,6 +69,10 @@ async function main() {
   } catch (err) {
     if (err.code !== "ENOENT") throw err;
   }
+  // Global defaults after the project .env: Node's loader never overrides an
+  // already-set variable, so precedence is env > project .env > ~/.argus/.env
+  // > built-in defaults.
+  loadHomeEnv();
   const config = validateConfig(getConfig());
 
   // Headless one-shot mode.

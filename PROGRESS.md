@@ -1,3 +1,34 @@
+#### 2026-08-17 — global config file under ~/.argus
+
+**Status: ✅ done**
+
+Goal (from discussion): machine-wide defaults without copying `.env` into
+every checkout.
+
+What was done:
+- ✅ `src/config.mjs` exports `argusHome()` (single source of truth for the
+  `~/.argus` root, `ARGUS_HOME`-aware, resolved lazily) and `loadHomeEnv()`,
+  which loads `$ARGUS_HOME/.env` (default `~/.argus/.env`) with the same
+  variables and format as the project `.env`.
+- ✅ `src/main.mjs` calls `loadHomeEnv()` right after the project `.env`, so
+  precedence is exactly: process env > project `.env` > home `.env` > built-in
+  defaults. Node's env-file loader never overrides an already-set variable,
+  which makes that ordering precise rather than accidental (verified).
+- ✅ `src/session.mjs` delegates `sessionsDir()` to `argusHome()`, so the
+  config file and the session store always agree on where "home" is.
+- ✅ Double-quoted multiline values work (`ARGUS_SYSTEM_PROMPT="…
+…"`), and
+  the home file can hold the API key — argus never writes the file, and a
+  `chmod 600` keeps it private. Documented in `.env.example`, README
+  (config + sessions), and `docs/architecture.md`.
+- ✅ Tests: new `test/config.test.mjs` (7 tests) covering home defaults,
+  missing-file tolerance, process-env precedence, project-over-home
+  precedence, multiline values, and a home-supplied DashScope key.
+- ✅ `GAPS.md` #10 and the `NEXT_STEPS.md` "recently completed" block note the
+  change.
+
+Verification: 154 tests pass (147 before + 7 new), `node --check` clean.
+
 #### 2026-08-17 — planning docs: reflect the reliability work in GAPS.md / NEXT_STEPS.md
 
 **Status: ✅ done**

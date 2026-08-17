@@ -16,13 +16,13 @@
  * The API key is never written to disk.
  */
 import { mkdir, readdir, readFile, appendFile, stat, rm } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join, basename } from "node:path";
+import { argusHome } from "./config.mjs";
 import { tools } from "./tools.mjs";
 
 export function sessionsDir() {
   // Resolve lazily so `.env` loaded by the standalone executable is honored.
-  return join(process.env.ARGUS_HOME || join(homedir(), ".argus"), "sessions");
+  return join(argusHome(), "sessions");
 }
 
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;

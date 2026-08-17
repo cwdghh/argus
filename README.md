@@ -32,6 +32,12 @@ Defaults already point at Alibaba Cloud DashScope with the
 Env vars are read from your shell and from `.env` (loaded automatically if it
 exists). `.env` is gitignored; `.env.example` is the committed template.
 
+Global defaults live in `~/.argus/.env` — the same variables and format,
+loaded after the project `.env` so they only fill gaps. Set a machine-wide
+model, endpoint, API key, timeouts, or system prompt once instead of copying
+them into every checkout; anything your shell or a project `.env` sets wins,
+and `ARGUS_HOME` relocates the file (and your sessions).
+
 | Variable | Default | Purpose |
 |---|---|---|
 | `ARGUS_API_KEY` | empty | API key for DashScope/custom endpoints |
@@ -165,7 +171,8 @@ Typing shows live suggestions in a popup just above the editor:
 ## Sessions & persistence
 
 argus auto-saves each turn to `~/.argus/sessions/<name>.jsonl` (override
-the root with the `ARGUS_HOME` env var). JSONL is append-only and keeps
+the root with the `ARGUS_HOME` env var; the global `~/.argus/.env` shares
+the same root). JSONL is append-only and keeps
 everything needed to reconstruct the exact requests a session made: the config
 (model, base URL, system prompt), the full `messages` (verbatim tool calls +
 results), the tool schemas, and the on-screen blocks (incl. thinking).

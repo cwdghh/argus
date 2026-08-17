@@ -44,6 +44,11 @@ Key properties:
   and overlays changed lines back onto the file so untouched bytes are
   preserved — the model can make precise edits without a perfect byte-level
   copy of the old text.
+- **Config as env vars.** `src/config.mjs` reads the process environment plus
+  two dotenv files — the project `.env` and the global `~/.argus/.env`
+  (loaded last, so it only fills gaps). Precedence is process env > project
+  `.env` > home `.env` > built-in defaults, matching how argus keeps every
+  knob small, inspectable, and overridable per checkout.
 
 ## Data flow
 
