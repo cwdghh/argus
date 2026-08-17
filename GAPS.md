@@ -61,6 +61,11 @@ questions are deliberately unresolved — we'll discuss them.
 > compaction keeps recent turns and summarizes older user intent + outcomes.
 > Tool results also have a hard per-result cap. Smarter semantic summaries and
 > cumulative per-turn token accounting remain open.
+> **2026-08-17:** `read` now self-bounds too — at most 2000 lines or 50KB per
+> call, with `offset`/`limit` paging and numbered lines, so reading a large
+> file never floods the context window; the per-result cap stays as the
+> backstop, and the model is told exactly which window it saw and how to
+> continue.
 
 - **What:** recent history is sent verbatim; older turns are compacted into a
   deterministic summary after a configurable character budget.
@@ -108,6 +113,9 @@ questions are deliberately unresolved — we'll discuss them.
 > timeout/retry behavior, turns have a step cap, tool arguments are validated,
 > truncated tool calls never run, and tool results are size-bounded.
 > Stream-protocol diagnostics and process isolation remain intentionally small.
+> **2026-08-17:** timeouts were relaxed for reasoning models that think a long
+> time before the first byte or between chunks — request timeout 600s, stream
+> idle 300s by default, both configurable and mirrored in `.env.example`.
 
 - **What:** expected failures have bounded handling, but malformed provider
   streams and subprocess isolation remain limited.
@@ -126,6 +134,10 @@ questions are deliberately unresolved — we'll discuss them.
 > (`src/tui.mjs`, raw-mode + ANSI) with markdown, scrollable history, a bottom
 > editor with caret, thinking display, live timings, and a responsive status
 > footer.
+> **2026-08-17:** GFM markdown tables render as aligned box-drawing tables in
+> the transcript, and column widths are CJK/emoji-aware (East Asian wide = 2,
+> ZWJ/VS16/skin-tone modifiers = 0, flags = 2) so borders stay aligned in
+> mixed scripts.
 
 - **What:** a raw-mode ANSI TUI provides streaming markdown, a fixed editor,
   transcript scrolling, theme detection, phase/tool/turn timing, and live
@@ -136,6 +148,11 @@ questions are deliberately unresolved — we'll discuss them.
 > switch is per-session, persisted in the session JSONL, restored on resume, and
 > resets to `ARGUS_MODEL` on `/new`. Desktop notifications remain an open
 > question (would a terminal-only agent keep its identity?).
+> Width measurement is per code point and covers common cases, but remains
+> approximate for grapheme clusters — keycap sequences (`1️⃣`), ambiguous-width
+> symbols (ornamental dingbats, geometric shapes), and the few emoji that
+> render narrow without VS16. Revisit grapheme-aware measurement only if such
+> glyphs show up in real output.
 
 ## 9. Testing & evals
 
@@ -151,18 +168,77 @@ questions are deliberately unresolved — we'll discuss them.
 - **Open questions for argus:**
   - Do we want a way to replay saved transcripts as tests?
   - Which behavioral evals would actually predict useful coding performance?
+  - An eval that checks whether the model picks content vs range edits
+    correctly, copies line numbers from a numbered read, and recovers from
+    fuzzy-fallback edits would exercise the edit-reliability work directly.
 
 ## 10. Model catalog / configuration
 
 > **Status: partially resolved (2026-08-16)** — `/model <name>` switches the
 > model at runtime; the override is stored per session and restored on resume,
 > and `/new` falls back to the `ARGUS_MODEL` env default.
+> **2026-08-17:** settled the prompt-vs-docs split — JSON tool schemas travel
+> with every request in the tools payload, compact behavioral tool rules
+> (read-before-edit, content vs range edits) live in the default system
+> prompt, and long usage documentation stays in `docs/`. The prompt is still
+> plain text from env/fallback, not a versioned artifact.
 
 - **What:** one model + one system prompt, read from env.
 - **Why it matters:** model choice and prompt are the user-facing "knobs."
 - **pi's approach (conceptual):** a generated model catalog; per-session config.
 - **Open questions for argus:**
   - Version the system prompt as a first-class artifact?
+
+---
+
+## 11. File editing reliability & freshness
+
+> **Status: partially resolved (2026-08-17)** — `edit` is now exact→fuzzy,
+> batches atomically (`edits[]`), preserves CRLF/BOM, and gained line-range
+> mode (`startLine`/`endLine`/`new`) for whole-block rewrites, insertions, and
+> deletions; `read` numbers every line so the model copies numbers instead of
+> counting. Stale-line protection and a deterministic read-before-edit guard
+> remain open.
+
+- **What:** editing is the highest-frequency and highest-risk tool. Two
+  failure modes dominated: (a) the model's `old` text doesn't match the file
+  byte-for-byte ("no old strings"), and (b) the model's sense of *where* —
+  line numbers, or the file's current shape — is stale.
+- **Why it matters:** "edits fail with no old strings" was argus's most
+  recurring reliability problem; and a wrong-but-successful edit is worse
+  than an error because it corrupts the file silently.
+- **Resolving (a) — content mode:** exact match first, then a normalized fuzzy
+  match (NFKC, ASCII folding of quotes/dashes/spaces, trailing-whitespace and
+  CRLF tolerance, and `N │ ` gutter-stripping for text copied from a numbered
+  read). Only changed lines are rewritten — an overlay onto the original — so
+  untouched bytes stay identical and CRLF + UTF-8 BOM survive. The result
+  reports `fuzzy: true`, and failures keep the "copy from a fresh read"
+  guidance.
+- **Resolving the *where* — range mode:** `startLine`/`endLine`/`new` replaces
+  the inclusive 1-indexed line range; `endLine = startLine - 1` inserts;
+  `new = ""` deletes. Line-oriented like `sed` — the block occupies whole
+  lines and never merges with neighbours. Content and range edits mix in one
+  `edits[]` batch, all resolved against the original file and applied
+  bottom-up, with bounds/overlap errors that name the file's current line
+  count.
+- **pi's approach (conceptual):** an edit diff/merge facade — exact match
+  first, then fuzzy fallback; results tagged `isExactMatch`/`isFuzzyMatch`;
+  edits into files above a context-size threshold are refused (a soft
+  read-first stance rather than tracked state).
+- **Open questions for argus:**
+  - Should range edits require *freshness* — a deterministic guard that the
+    file was read (or written by us) since its last modification, with `bash`
+    conservatively invalidating all reads? It costs loop state and forces
+    re-reads after every shell command; numbered reads make those re-reads
+    cheap. The alternative is the current soft rule (prompt + errors).
+  - If a guard is added, does a *partial* read (one `offset`/`limit` page)
+    count as fresh for edits inside that window, or is a whole-file read
+    required?
+  - Would a short verification anchor (the first line of the old block)
+    ever justify its per-edit model burden, or is the guard the better
+    mechanism? (`expect` was deliberately cut for now.)
+  - Does `read` need a raw mode (no gutters) for copying exact bytes into
+    `write`/heredocs, or is `edit`'s gutter-stripping enough?
 
 ---
 
