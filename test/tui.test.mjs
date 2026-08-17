@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { MinimalTui } from "../src/tui.mjs";
 import { COMPACT_DEFAULTS, estimateChars } from "../src/compact.mjs";
 import { formatChars } from "../src/format.mjs";
-import { SLASH_COMMANDS } from "../src/tui/help.mjs";
+import { SLASH_COMMANDS } from "../src/tui/commands.mjs";
 
 const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
 

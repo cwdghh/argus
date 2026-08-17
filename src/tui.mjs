@@ -31,7 +31,7 @@ import { promisify } from "node:util";
 import { runTurn } from "./agent.mjs";
 import { Editor } from "./tui/editor.mjs";
 import { footerText, headerText, statusText } from "./tui/frames.mjs";
-import { HELP_TEXT, KEY_HELP } from "./tui/help.mjs";
+import { COMMANDS } from "./tui/commands.mjs";
 import { decodeEscape } from "./tui/keys.mjs";
 import { acceptSuggestion, computeSuggestion, suggestionLines } from "./tui/suggestions.mjs";
 import { sessionConfig } from "./session.mjs";
@@ -339,126 +339,13 @@ export class MinimalTui {
   }
 
   async runCommand(text) {
-    const [command, ...args] = text.split(/\s+/);
-    this.historyIndex = -1;
-    if (command === "/help") {
-      this.pushBlock({ kind: "assistant", text: HELP_TEXT });
-    } else if (command === "/keys") {
-      this.pushBlock({ kind: "assistant", text: KEY_HELP });
-    } else if (command === "/status") {
-      const turns = this.history.filter((message) => message.role === "user").length;
-      const contextTokens = this.lastTurnUsage?.total_tokens ?? 0;
-      this.pushBlock({
-        kind: "assistant",
-        text:
-          `## Status\n\n- Session: \`${this.sessionName ?? "none"}\`\n` +
-          `- Model: \`${this.config.model}\`\n- Cwd: \`${this.cwd}\`\n` +
-          `- Last turn: ${this.lastTurnDurationMs == null ? "none yet" : formatDuration(this.lastTurnDurationMs)}` +
-          `${this.lastTurnUsage ? ` (${formatTokens(this.lastTurnUsage)})` : ""}\n` +
-          `- Context tokens: ${contextTokens.toLocaleString()}\n` +
-          `- Turns: ${turns}\n` +
-          `- Limits: ${this.config.maxSteps ?? 100} model steps, ${this.config.maxRetries ?? 2} retries, ` +
-          `${this.config.requestTimeoutMs ?? 300_000}ms/request, ` +
-          `${(this.config.maxToolResultChars ?? 50_000).toLocaleString()} chars/tool result`,
-      });
-    } else if (command === "/model") {
-      if (args.length === 0) {
-        this.pushBlock({
-          kind: "assistant",
-          text:
-            `## Model\n\nCurrent model: \`${this.config.model}\`\n` +
-            `Use \`/model <name>\` to switch. The override is saved with this session ` +
-            `and restored on resume; \`/new\` resets to \`${this.defaultModel}\`.`,
-        });
-      } else if (args.length > 1) {
-        this.pushBlock({ kind: "error", text: "usage: /model <name>" });
-      } else {
-        const model = args[0].trim();
-        if (!model) {
-          this.pushBlock({ kind: "error", text: "usage: /model <name>" });
-        } else if (model === this.config.model) {
-          this.pushBlock({ kind: "result", ok: true, summary: `model is already ${model}` });
-        } else {
-          this.config.model = model;
-          if (this.session) {
-            await this.session.setModel(model).catch((err) => {
-              this.pushBlock({ kind: "error", text: `could not save the model to this session: ${err.message}` });
-            });
-          }
-          this.pushBlock({ kind: "result", ok: true, summary: `model switched to ${model}` });
-        }
-      }
-    } else if (command === "/sessions") {
-      if (args.length) {
-        this.pushBlock({ kind: "error", text: "/sessions does not take arguments" });
-      } else if (!this.listSessions) {
-        this.pushBlock({ kind: "error", text: "session listing is unavailable in this frontend" });
-      } else {
-        await this.withLocalTask(async () => {
-          const sessions = await this.listSessions();
-          const lines = sessions.map((item) => {
-            const active = item.name === this.sessionName ? "→" : "-";
-            const date = new Date(item.mtime).toLocaleString();
-            const size = item.size != null ? ` · ${formatChars(item.size)}B` : "";
-            const prompt = item.lastPrompt
-              ? ` — ${item.lastPrompt.replace(/`/g, "'").slice(0, 80)}${item.lastPrompt.length > 80 ? "…" : ""}`
-              : "";
-            return `${active} \`${item.name}\` — ${item.turns} turn${item.turns === 1 ? "" : "s"}, ${date}${size}${prompt}`;
-          });
-          this.pushBlock({
-            kind: "assistant",
-            text: `## Recent sessions\n\n${lines.length ? lines.join("\n") : "No saved sessions yet."}\n\nUse \`/resume <name>\` to switch.`,
-          });
-        });
-      }
-    } else if (command === "/resume") {
-      if (args.length !== 1) {
-        this.pushBlock({ kind: "error", text: "usage: /resume <name>" });
-      } else if (!this.resumeSession) {
-        this.pushBlock({ kind: "error", text: "session switching is unavailable in this frontend" });
-      } else if (args[0] === this.sessionName) {
-        this.pushBlock({ kind: "result", ok: true, summary: `already in session ${this.sessionName}` });
-      } else {
-        await this.withLocalTask(async () => {
-          const next = await this.resumeSession(args[0]);
-          this.applySession(next, `resumed session ${next.sessionName}`);
-          this.refreshSessionNames();
-        });
-      }
-    } else if (command === "/name") {
-      if (args.length !== 1) {
-        this.pushBlock({ kind: "error", text: "usage: /name <name> — rename the current session" });
-      } else if (!this.renameSession) {
-        this.pushBlock({ kind: "error", text: "session renaming is unavailable in this frontend" });
-      } else if (args[0] === this.sessionName) {
-        this.pushBlock({ kind: "result", ok: true, summary: `already named ${this.sessionName}` });
-      } else {
-        await this.withLocalTask(async () => {
-          const safe = await this.renameSession(this.sessionName, args[0]);
-          if (this.session && typeof this.session.renameTo === "function") this.session.renameTo(safe);
-          this.sessionName = safe;
-          this.pushBlock({ kind: "result", ok: true, summary: `session renamed to ${safe}` });
-          this.refreshSessionNames();
-        });
-      }
-    } else if (command === "/new") {
-      if (!this.newSession) {
-        this.pushBlock({ kind: "error", text: "starting a new session is unavailable in this frontend" });
-      } else {
-        const name = args.length ? args.join(" ") : undefined;
-        try {
-          const next = await this.newSession(name);
-          this.applySession({ ...next, blocks: [], history: [] }, `started session ${next.sessionName}`);
-          this.refreshSessionNames();
-        } catch (err) {
-          this.pushBlock({ kind: "error", text: err.message });
-        }
-      }
-    } else if (command === "/exit" || command === "/quit") {
-      this.stop();
-      return;
+    this.editor.historyIndex = -1;
+    const [name, ...args] = text.split(/\s+/);
+    const command = COMMANDS.find((c) => c.name === name);
+    if (!command) {
+      this.pushBlock({ kind: "error", text: `unknown command: ${name} (try /help)` });
     } else {
-      this.pushBlock({ kind: "error", text: `unknown command: ${command} (try /help)` });
+      await command.run(this, args);
     }
     this.dirtyRendered = true;
   }

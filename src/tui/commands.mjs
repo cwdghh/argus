@@ -1,0 +1,224 @@
+/**
+ * Local slash commands for the TUI.
+ *
+ * `COMMANDS` is the single source of truth: the same table drives the
+ * in-editor suggestion popup (see suggestions.mjs), the `/help` reference
+ * text, and dispatch in the controller. Adding a command means adding one
+ * entry with a `run` handler — nothing else in the controller changes.
+ *
+ * Handlers receive the controller instance as `tui` plus the
+ * whitespace-split argument list, and report back through `tui.pushBlock`
+ * (assistant / result / error blocks). Long-running handlers wrap work in
+ * `tui.withLocalTask` so the footer shows a live "working" phase.
+ */
+import { formatChars, formatDuration, formatTokens } from "../format.mjs";
+
+/** The keyboard reference shown by /keys and at the bottom of /help. */
+export const KEY_HELP = `## Keyboard shortcuts
+
+### Edit the prompt
+
+- Left / Right — move the cursor
+- Ctrl-A / Ctrl-E — move to the start / end
+- Backspace / Delete — delete before / under the cursor
+- Ctrl-U / Ctrl-K — delete to the start / end
+- Ctrl-W — delete the previous word
+- Up / Down — move through the suggestion popup; recall earlier prompts otherwise
+- Tab — accept the suggested @path, /command, or /resume session name
+- Shift+Enter — insert a newline
+- Enter — submit
+
+### Control Argus
+
+- Esc — abort the active turn
+- Ctrl-C — abort; press again to force quit (or quit immediately when idle)
+- Ctrl-D — delete under the cursor, or quit when the prompt is empty
+- Ctrl-L — clear and redraw the screen
+
+### Browse the transcript
+
+- PgUp / PgDn or mouse wheel — scroll the transcript by a page
+- Home / End — jump to the top / bottom`;
+
+export const COMMANDS = [
+  {
+    name: "/help",
+    description: "show commands and keyboard shortcuts",
+    run(tui) {
+      tui.pushBlock({ kind: "assistant", text: HELP_TEXT });
+    },
+  },
+  {
+    name: "/keys",
+    description: "show keyboard shortcuts",
+    run(tui) {
+      tui.pushBlock({ kind: "assistant", text: KEY_HELP });
+    },
+  },
+  {
+    name: "/status",
+    description: "show the active session, model, cwd, context, and limits",
+    run(tui) {
+      const turns = tui.history.filter((message) => message.role === "user").length;
+      const contextTokens = tui.lastTurnUsage?.total_tokens ?? 0;
+      tui.pushBlock({
+        kind: "assistant",
+        text:
+          `## Status\n\n- Session: \`${tui.sessionName ?? "none"}\`\n` +
+          `- Model: \`${tui.config.model}\`\n- Cwd: \`${tui.cwd}\`\n` +
+          `- Last turn: ${tui.lastTurnDurationMs == null ? "none yet" : formatDuration(tui.lastTurnDurationMs)}` +
+          `${tui.lastTurnUsage ? ` (${formatTokens(tui.lastTurnUsage)})` : ""}\n` +
+          `- Context tokens: ${contextTokens.toLocaleString()}\n` +
+          `- Turns: ${turns}\n` +
+          `- Limits: ${tui.config.maxSteps ?? 100} model steps, ${tui.config.maxRetries ?? 2} retries, ` +
+          `${tui.config.requestTimeoutMs ?? 300_000}ms/request, ` +
+          `${(tui.config.maxToolResultChars ?? 50_000).toLocaleString()} chars/tool result`,
+      });
+    },
+  },
+  {
+    name: "/model",
+    args: "<name>",
+    description: "show or switch the model (e.g. /model gpt-4o-mini)",
+    async run(tui, args) {
+      if (args.length === 0) {
+        tui.pushBlock({
+          kind: "assistant",
+          text:
+            `## Model\n\nCurrent model: \`${tui.config.model}\`\n` +
+            `Use \`/model <name>\` to switch. The override is saved with this session ` +
+            `and restored on resume; \`/new\` resets to \`${tui.defaultModel}\`.`,
+        });
+      } else if (args.length > 1) {
+        tui.pushBlock({ kind: "error", text: "usage: /model <name>" });
+      } else {
+        const model = args[0].trim();
+        if (!model) {
+          tui.pushBlock({ kind: "error", text: "usage: /model <name>" });
+        } else if (model === tui.config.model) {
+          tui.pushBlock({ kind: "result", ok: true, summary: `model is already ${model}` });
+        } else {
+          tui.config.model = model;
+          if (tui.session) {
+            await tui.session.setModel(model).catch((err) => {
+              tui.pushBlock({ kind: "error", text: `could not save the model to this session: ${err.message}` });
+            });
+          }
+          tui.pushBlock({ kind: "result", ok: true, summary: `model switched to ${model}` });
+        }
+      }
+    },
+  },
+  {
+    name: "/sessions",
+    description: "list recent saved sessions",
+    async run(tui, args) {
+      if (args.length) {
+        tui.pushBlock({ kind: "error", text: "/sessions does not take arguments" });
+      } else if (!tui.listSessions) {
+        tui.pushBlock({ kind: "error", text: "session listing is unavailable in this frontend" });
+      } else {
+        await tui.withLocalTask(async () => {
+          const sessions = await tui.listSessions();
+          const lines = sessions.map((item) => {
+            const active = item.name === tui.sessionName ? "→" : "-";
+            const date = new Date(item.mtime).toLocaleString();
+            const size = item.size != null ? ` · ${formatChars(item.size)}B` : "";
+            const prompt = item.lastPrompt
+              ? ` — ${item.lastPrompt.replace(/`/g, "'").slice(0, 80)}${item.lastPrompt.length > 80 ? "…" : ""}`
+              : "";
+            return `${active} \`${item.name}\` — ${item.turns} turn${item.turns === 1 ? "" : "s"}, ${date}${size}${prompt}`;
+          });
+          tui.pushBlock({
+            kind: "assistant",
+            text: `## Recent sessions\n\n${lines.length ? lines.join("\n") : "No saved sessions yet."}\n\nUse \`/resume <name>\` to switch.`,
+          });
+        });
+      }
+    },
+  },
+  {
+    name: "/resume",
+    args: "<name>",
+    description: "switch to a saved session",
+    async run(tui, args) {
+      if (args.length !== 1) {
+        tui.pushBlock({ kind: "error", text: "usage: /resume <name>" });
+      } else if (!tui.resumeSession) {
+        tui.pushBlock({ kind: "error", text: "session switching is unavailable in this frontend" });
+      } else if (args[0] === tui.sessionName) {
+        tui.pushBlock({ kind: "result", ok: true, summary: `already in session ${tui.sessionName}` });
+      } else {
+        await tui.withLocalTask(async () => {
+          const next = await tui.resumeSession(args[0]);
+          tui.applySession(next, `resumed session ${next.sessionName}`);
+          tui.refreshSessionNames();
+        });
+      }
+    },
+  },
+  {
+    name: "/name",
+    args: "<name>",
+    description: "rename the current session",
+    async run(tui, args) {
+      if (args.length !== 1) {
+        tui.pushBlock({ kind: "error", text: "usage: /name <name> — rename the current session" });
+      } else if (!tui.renameSession) {
+        tui.pushBlock({ kind: "error", text: "session renaming is unavailable in this frontend" });
+      } else if (args[0] === tui.sessionName) {
+        tui.pushBlock({ kind: "result", ok: true, summary: `already named ${tui.sessionName}` });
+      } else {
+        await tui.withLocalTask(async () => {
+          const safe = await tui.renameSession(tui.sessionName, args[0]);
+          if (tui.session && typeof tui.session.renameTo === "function") tui.session.renameTo(safe);
+          tui.sessionName = safe;
+          tui.pushBlock({ kind: "result", ok: true, summary: `session renamed to ${safe}` });
+          tui.refreshSessionNames();
+        });
+      }
+    },
+  },
+  {
+    name: "/new",
+    args: "[<name>]",
+    description: "start a fresh session (optionally named)",
+    async run(tui, args) {
+      if (!tui.newSession) {
+        tui.pushBlock({ kind: "error", text: "starting a new session is unavailable in this frontend" });
+        return;
+      }
+      const name = args.length ? args.join(" ") : undefined;
+      try {
+        const next = await tui.newSession(name);
+        tui.applySession({ ...next, blocks: [], history: [] }, `started session ${next.sessionName}`);
+        tui.refreshSessionNames();
+      } catch (err) {
+        tui.pushBlock({ kind: "error", text: err.message });
+      }
+    },
+  },
+  {
+    name: "/exit",
+    description: "quit Argus",
+    run(tui) {
+      tui.stop();
+    },
+  },
+  {
+    name: "/quit",
+    description: "quit Argus (same as /exit)",
+    run(tui) {
+      tui.stop();
+    },
+  },
+];
+
+/** Name/args/description metadata for the suggestion popup and /help. */
+export const SLASH_COMMANDS = COMMANDS.map(({ name, args, description }) => ({ name, args, description }));
+
+export const COMMAND_HELP = `## Local commands
+
+${SLASH_COMMANDS.map((c) => `- ${c.name}${c.args ? ` ${c.args}` : ""} — ${c.description}`).join("\n")}`;
+
+export const HELP_TEXT = `${COMMAND_HELP}\n\n${KEY_HELP}`;

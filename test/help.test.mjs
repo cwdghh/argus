@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { SLASH_COMMANDS, COMMAND_HELP, KEY_HELP, HELP_TEXT } from "../src/tui/help.mjs";
+import { SLASH_COMMANDS, COMMAND_HELP, KEY_HELP, HELP_TEXT } from "../src/tui/commands.mjs";
 
 test("help: every slash command appears in the /help text", () => {
   assert.ok(SLASH_COMMANDS.length >= 9, "command table is populated");

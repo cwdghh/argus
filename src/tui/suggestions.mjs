@@ -13,7 +13,7 @@ import { readdirSync, realpathSync, statSync } from "node:fs";
 import { resolve, basename } from "node:path";
 import { styleText, stripAnsi, dispWidth, truncateEnd } from "./renderers.mjs";
 import { theme } from "../theme.mjs";
-import { SLASH_COMMANDS } from "./help.mjs";
+import { SLASH_COMMANDS } from "./commands.mjs";
 
 export const SUGGESTION_ROWS = 8;
 
