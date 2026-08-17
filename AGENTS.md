@@ -22,7 +22,7 @@ model. The default tool set is deliberately tiny: `read`, `write`, `edit`, `bash
 | `src/tui.mjs` + `src/tui/*.mjs` | Terminal UI (controller + pure renderers / editor / keys / suggestions / frames / help) |
 | `src/theme.mjs` | Colors / styling tokens |
 | `src/config.mjs` | Env-driven config |
-| `docs/` | Architecture, tool contract, self-updating guide |
+| `docs/` | Architecture, tool contract, self-updating guide, refactor plan |
 | `PROGRESS.md` | What we've done (append on real change) |
 | `GAPS.md` | Open design questions |
 

@@ -1,3 +1,18 @@
+#### 2026-08-17 — refactor plan proposed (docs/refactor-plan.md)
+
+**Status: proposed (not yet executed)**
+
+- Added `docs/refactor-plan.md` on branch `refactor/explore-and-propose`: a
+  tiered, behavior-preserving refactoring proposal grounded in a full read of
+  `src/` (170 tests green). Tier 0 = mechanical cleanups (neutral
+  `src/format.mjs`, shared block-folding, editor accessor cleanup); Tier 1 =
+  module splits (edit/read engine out of `tools.mjs`, markdown/blocks out of
+  `renderers.mjs`, tool-call executor + usage accumulation seams in
+  `agent.mjs`, SSE framing out of `llm.mjs`); Tier 2 = tame the 1,028-line
+  `tui.mjs` controller (table-driven commands, frame assembly to renderer
+  land); Tier 3 = optional session facade. No code behavior changed.
+- Updated the `AGENTS.md` file map to mention the refactor plan.
+
 #### 2026-08-17 — folder-scoped default resume
 
 **Status: ✅ done**
