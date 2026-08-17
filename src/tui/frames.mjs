@@ -9,7 +9,8 @@
  *   footer() { return footerText(this); }
  */
 import { estimateChars, COMPACT_DEFAULTS } from "../compact.mjs";
-import { styleText, stripAnsi, dispWidth, truncateMiddle, truncateEnd, formatDuration, formatChars, formatTokens } from "./renderers.mjs";
+import { formatChars, formatDuration, formatTokens } from "../format.mjs";
+import { styleText, stripAnsi, dispWidth, truncateMiddle, truncateEnd } from "./renderers.mjs";
 import { theme } from "../theme.mjs";
 
 const MODE_COLOR = () => ({

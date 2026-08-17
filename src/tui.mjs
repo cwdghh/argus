@@ -39,21 +39,24 @@ import { theme, setTheme } from "./theme.mjs";
 
 const execAsync = promisify(exec);
 const ESC = "\x1b";
+import { appendBlock } from "./transcript.mjs";
+import {
+  formatChars,
+  formatDuration,
+  formatTokens,
+  summarize,
+} from "./format.mjs";
 import {
   styleText,
   stripAnsi,
   dispWidth,
   truncateMiddle,
   truncateEnd,
-  formatDuration,
-  formatChars,
-  formatTokens,
-  summarize,
-  blockLines,
   previousCharIndex,
   nextCharIndex,
   previousWordIndex,
 } from "./tui/renderers.mjs";
+import { blockLines } from "./tui/blocks.mjs";
 
 export class MinimalTui {
   constructor(config, opts = {}) {

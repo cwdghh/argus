@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { markdownLines, stripAnsi, dispWidth, charWidth } from "../src/tui/renderers.mjs";
+import { markdownLines } from "../src/tui/markdown.mjs";
+import { stripAnsi, dispWidth, charWidth } from "../src/tui/renderers.mjs";
 
 const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
 const render = (md, width = 80) => markdownLines(md, width).map(strip);

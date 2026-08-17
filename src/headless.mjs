@@ -14,7 +14,8 @@
  */
 import { runTurn } from "./agent.mjs";
 import { loadSession, sessionConfig, sessionData } from "./session.mjs";
-import { summarize } from "./tui/renderers.mjs";
+import { summarize } from "./format.mjs";
+import { appendBlock } from "./transcript.mjs";
 
 export async function runHeadless(config, prompt, { session, cwd, stdout, stderr } = {}) {
   // Streams are injectable so tests can capture output without monkeypatching.
@@ -37,11 +38,7 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
   // Build display blocks alongside events (mirrors the TUI) so a turn saved to
   // a session reconstructs the transcript.
   const blocks = [];
-  const append = (kind, delta) => {
-    const last = blocks[blocks.length - 1];
-    if (last && last.kind === kind) last.text += delta;
-    else blocks.push({ kind, text: delta });
-  };
+  const append = (kind, delta) => appendBlock(blocks, kind, delta);
   const push = (b) => blocks.push(b);
 
   let sawText = false;
