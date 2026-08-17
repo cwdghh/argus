@@ -17,6 +17,14 @@ const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000;
 
 const CHAT_PATH = "/chat/completions";
 
+import {
+  assembleChatMessage,
+  createChatStreamState,
+  decodeSseChunk,
+  foldChatDelta,
+  ssePayload,
+} from "./sse.mjs";
+
 function buildBody({ model, systemPrompt, messages, tools }) {
   return {
     model,
@@ -166,10 +174,7 @@ export async function* streamChat({
   maxRetries,
 }) {
   const body = buildBody({ model, systemPrompt, messages, tools });
-  let content = "";
-  let finishReason = null;
-  let usage = null;
-  const toolCalls = new Map(); // index -> { id, name, arguments }
+  let state = createChatStreamState();
   let timeoutSignal = null;
   const idleTimeoutMs = streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS;
 
@@ -184,21 +189,17 @@ export async function* streamChat({
     while (true) {
       const { done, value } = await readWithIdleTimeout(reader, idleTimeoutMs, signal);
       if (done) break;
-      buffer += decoder.decode(value, { stream: true });
 
-      const lines = buffer.split("\n");
-      buffer = lines.pop(); // keep the possibly-incomplete last line
+      // Frame the chunk into complete `data:` lines; keep the trailing partial
+      // line for the next chunk.
+      const { lines, rest } = decodeSseChunk(buffer, decoder.decode(value, { stream: true }));
+      buffer = rest;
+
       for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith("data:")) continue;
-        const data = trimmed.slice(5).trim();
+        const data = ssePayload(line);
+        if (data == null) continue; // comments, heartbeats, events without data
         if (data === "[DONE]") {
-          yield {
-            type: "done",
-            finishReason,
-            usage,
-            message: assembleMessage(content, toolCalls),
-          };
+          yield { type: "done", finishReason: state.finishReason, usage: state.usage, message: assembleChatMessage(state) };
           return;
         }
 
@@ -209,44 +210,14 @@ export async function* streamChat({
           continue; // ignore partial/heartbeat lines
         }
 
-        // Capture usage from the final chunk (when stream_options.include_usage is true)
-        if (json.usage) {
-          usage = json.usage;
-        }
-
-        const choice = json.choices?.[0];
-        if (!choice) continue;
-        if (choice.finish_reason) finishReason = choice.finish_reason;
-
-        const delta = choice.delta ?? {};
-        if (delta.content) {
-          content += delta.content;
-          yield { type: "text_delta", delta: delta.content };
-        }
-        if (delta.reasoning_content || delta.reasoning) {
-          const t = delta.reasoning_content ?? delta.reasoning;
-          if (t) yield { type: "thinking_delta", delta: t };
-        }
-        if (delta.tool_calls) {
-          for (const tc of delta.tool_calls) {
-            const idx = tc.index ?? 0;
-            const cur = toolCalls.get(idx) ?? { id: "", name: "", arguments: "" };
-            if (tc.id) cur.id = tc.id;
-            if (tc.function?.name) cur.name = tc.function.name;
-            if (tc.function?.arguments) cur.arguments += tc.function.arguments;
-            toolCalls.set(idx, cur);
-          }
-        }
+        const { state: next, events } = foldChatDelta(state, json);
+        state = next;
+        for (const ev of events) yield ev;
       }
     }
 
     // Stream ended without [DONE] sentinel; still emit what we assembled.
-    yield {
-      type: "done",
-      finishReason,
-      usage,
-      message: assembleMessage(content, toolCalls),
-    };
+    yield { type: "done", finishReason: state.finishReason, usage: state.usage, message: assembleChatMessage(state) };
   } catch (err) {
     if (timeoutSignal?.aborted && !signal?.aborted) {
       throw new Error(`LLM request timed out after ${requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS}ms`);
@@ -255,21 +226,9 @@ export async function* streamChat({
       throw err;
     }
     if (signal?.aborted || err?.name === "AbortError") {
-      yield { type: "done", aborted: true, finishReason, usage, message: assembleMessage(content, toolCalls) };
+      yield { type: "done", aborted: true, finishReason: state.finishReason, usage: state.usage, message: assembleChatMessage(state) };
       return;
     }
     throw err;
   }
-}
-
-function assembleMessage(content, toolCalls) {
-  const message = { role: "assistant", content: content || null };
-  if (toolCalls.size > 0) {
-    message.tool_calls = [...toolCalls.entries()].sort(([a], [b]) => a - b).map(([, tc]) => ({
-      id: tc.id,
-      type: "function",
-      function: { name: tc.name, arguments: tc.arguments },
-    }));
-  }
-  return message;
 }
