@@ -94,8 +94,11 @@ questions are deliberately unresolved — we'll discuss them.
 > **2026-08-17:** naming is resolved — `/name <name>` renames the current
 > session (a pure file move: the name lives only in the filename), `/new <name>`
 > names a session at creation, and `/resume` completes saved-session names in
-> the editor popup, so a large session collection stays navigable. Manual
-> deletion (`/session delete`) remains open.
+> the editor popup, so a large session collection stays navigable. Rejected
+> names (spaces, non-ASCII, >249 chars) report the reason; the destination is
+> reserved with O_EXCL so a rename can never clobber an existing session; and
+> renaming a just-created `/new` session (no file on disk yet) is a pure
+> handle repoint. Manual deletion (`/session delete`) remains open.
 > **2026-08-17:** the auto-resume default is now folder-scoped — starting
 > without `--session`/`--new` picks the newest session whose cwd is the
 > current folder or a subfolder (newest 20 considered), and falls back to a
@@ -255,6 +258,63 @@ questions are deliberately unresolved — we'll discuss them.
     `write`/heredocs, or is `edit`'s gutter-stripping enough?
 
 ---
+
+## 12. Tool design — what should the tool surface be? (next discussion)
+
+> **Status: scheduled (2026-08-18)** — the next session *opens* with this
+> topic, deliberately before any new-tool or tool-behavior work (parallel
+> execution, the read-before-edit guard, possible search tools). The tool
+> surface is the contract everything else hangs off, so we settle the shape
+> first.
+
+- **What:** exactly four default tools today — `read`, `write`, `edit`,
+  `bash` — and both `AGENTS.md` and `docs/tools.md` say new tools must "earn
+  their place." This section is the discussion map for what a *reasonable*
+  tool surface means, and which (if any) tools should be added.
+- **Why it matters:** tools are the model's only interface to the world. A
+  good surface reduces model errors, saves context tokens, and keeps actions
+  auditable; a bad one bloats the prompt or pushes the model into unsafe
+  `bash` one-liners.
+- **Open questions for argus:**
+  - **The bar:** what earns a tool a place in the default set? Candidate
+    tests: (a) it measurably reduces model error (the `edit` argument vs raw
+    `bash` heredocs), (b) it saves context tokens vs the `bash` equivalent,
+    (c) it expresses a capability `bash` can't perform safely, (d) it makes
+    the transcript more auditable. Which of these do we actually want to
+    enforce?
+  - **Candidates to evaluate against the bar:** a `grep`/search tool
+    (structured results with line numbers vs `bash` grep that mixes
+    stdout/stderr), a `ls`-style listing tool with bounds, a `glob`/`find`
+    variant — or is "keep the four, let `bash` cover the rest" the right
+    answer?
+  - **Schema & validation:** how much JSON Schema do we need? `enum`,
+    `pattern`, `maxLength` enforcement, or is the current minimal subset
+    (required fields, primitives, arrays, integers, `minLength`) right?
+  - **Risk declaration:** should each tool declare a risk level (read-only /
+    mutating / destructive) so the safety gate (GAPS #2) can stop
+    pattern-matching shell text and route on declared risk instead?
+  - **Result shape:** standardize the error convention (`{error: true, ...}`
+    vs throwing), a standard truncation notice, and "how to continue"
+    guidance? `read` already models this well — should the contract require
+    it of every tool?
+  - **Naming:** `bash` vs `run`/`shell`, `edit` vs `patch` — familiar names
+    may matter to model reliability. Is there a naming policy?
+  - **Contract evolution:** do the freshness guard (GAPS #11) and parallel
+    execution (GAPS #3, NEXT_STEPS #1) change the tool contract, or stay
+    loop-level state that tools are unaware of?
+  - **Model-visible metadata:** currently only `name`/`description`/
+    `parameters`. Should tools declare result-size hints or timeout hints
+    the model can see?
+- **Suggested refinements to carry into that discussion (from the
+  2026-08-17 `/name` hardening review):**
+  - Treat the read-before-edit freshness guard (NEXT_STEPS #2) as the first
+    *contract-touching* feature to implement after the surface decision.
+  - Add a behavioral eval whose task exercises tool *choice* (numbered
+    read → correct content-vs-range `edit`, clean fuzzy-fallback recovery):
+    it both protects the edit work and measures how well our tool contract
+    reads to real models.
+  - `/session delete` is tool-independent housekeeping and can land anytime
+    — it does not need to wait for this discussion.
 
 ## Meta-question (the one we'll return to)
 

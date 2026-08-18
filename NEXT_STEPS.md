@@ -18,6 +18,31 @@ See `GAPS.md` for the broader design territory and open questions.
 > global latest. Item 2 below (read-before-edit freshness) is the main
 > direction that work deliberately deferred.
 
+## Scheduled next: tool-design discussion (opens the next session)
+
+**Bridge (2026-08-18):** the next session starts with a design discussion on
+**how to design reasonable tools first** — before any new-tool or
+tool-behavior work. The agenda and open questions live in `GAPS.md` #12 (and
+`docs/tools.md` now points there); `PROGRESS.md` has the ⏳ planned entry.
+
+Refinement suggestions recorded for that discussion:
+
+- **Set the bar for the default set** — what earns a tool a place?
+  (a) reduces model error, (b) saves context tokens vs `bash`, (c) enables
+  something `bash` can't do safely, (d) improves auditability.
+- **Evaluate concrete candidates against the bar** — a `grep`/search tool
+  (structured line-numbered results), a bounded `ls` listing tool — or keep
+  the four tools and let `bash` cover the rest.
+- **Risk declaration** — should each tool declare read-only/mutating/
+  destructive so the safety gate routes on declared risk instead of
+  pattern-matching shell text?
+- **Standardize result shape** — error convention, truncation notice, and
+  "how to continue" guidance (`read` already models this).
+- **After the decision**, land the first contract-touching features in order:
+  the read-before-edit freshness guard (item 2 below, the deliberately
+  deferred direction) and a behavioral eval that exercises tool *choice*.
+  `/session delete` (item 4) is tool-independent and can land any time.
+
 ---
 
 ## High impact, moderate complexity

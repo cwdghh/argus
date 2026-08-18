@@ -37,7 +37,7 @@
  *
  * The API key is never written to disk.
  */
-import { mkdir, readdir, readFile, appendFile, stat, rm, access, rename } from "node:fs/promises";
+import { mkdir, readdir, readFile, appendFile, stat, rm, access, rename, open } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { argusHome } from "../config.mjs";
 import { tools } from "../tools.mjs";
@@ -49,14 +49,33 @@ export function sessionsDir() {
 
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
 
+// NAME_MAX on common filesystems is 255 bytes per path component, and names
+// map 1:1 to filenames, so enforce the cap up front instead of leaking a raw
+// ENAMETOOLONG from the filesystem. The suffix counts toward the component:
+// "<name>.jsonl" must fit in 255 bytes.
+const NAME_MAX_LEN = 255 - ".jsonl".length;
+
+/** Sanitize a proposed session name, or null when it can't be a filename. */
 export function sanitizeName(name) {
   const n = String(name ?? "").trim();
-  return NAME_RE.test(n) ? n : null;
+  return NAME_RE.test(n) && n.length <= NAME_MAX_LEN ? n : null;
+}
+
+/** A human-readable reason a session name is invalid, or null when valid. */
+export function nameError(name) {
+  const raw = String(name ?? "").trim();
+  if (raw.length > NAME_MAX_LEN) {
+    return `invalid session name: too long (max ${NAME_MAX_LEN} characters)`;
+  }
+  if (!NAME_RE.test(raw)) {
+    return `invalid session name: ${JSON.stringify(raw)} — use letters, digits, "-" and "_" (no spaces)`;
+  }
+  return null;
 }
 
 export function sessionFilePath(name) {
   const safe = sanitizeName(name);
-  if (!safe) throw new Error(`invalid session name: ${name}`);
+  if (!safe) throw new Error(nameError(name) ?? `invalid session name: ${name}`);
   return join(sessionsDir(), `${safe}.jsonl`);
 }
 
@@ -137,24 +156,61 @@ export async function pruneSessions(keep, { exclude } = {}) {
 }
 
 /**
- * Rename a saved session file. The session name lives only in the filename
- * (never inside the JSONL), so this is a validated file move: the new name
- * must be valid and unused, and renaming to the current name is a no-op.
- * Returns the accepted name. The caller updates any live Session handle.
+ * Rename a saved session. The session name lives only in the filename (never
+ * inside the JSONL), so this is a validated file move: the new name must be
+ * valid and unused, and renaming to the current name is a no-op.
+ *
+ * A session that hasn't materialized a file yet (e.g. one just created by
+ * `/new`, which writes lazily on the first turn) has nothing to move: the
+ * rename is then just the handle repoint. Pass the live Session handle to
+ * repoint it atomically with the move, after letting any in-flight writes
+ * settle, so a queued append can never resolve against the old path and
+ * recreate the file we are moving away from.
+ *
+ * Returns the accepted name.
  */
-export async function renameSession(oldName, nextName) {
+export async function renameSession(oldName, nextName, handle = null) {
   const safe = sanitizeName(nextName);
-  if (!safe) throw new Error(`invalid session name: ${nextName}`);
+  if (!safe) throw new Error(nameError(nextName) ?? `invalid session name: ${nextName}`);
   if (safe === oldName) return safe;
+  if (handle?.writeQueue) await handle.writeQueue.catch(() => {});
+
+  await ensureDir();
   const oldFile = sessionFilePath(oldName);
   const nextFile = sessionFilePath(safe);
+
+  // Reserve the destination with O_CREAT|O_EXCL so rename() below can never
+  // clobber a file another process created between a check and the move
+  // (TOCTOU). The empty placeholder is replaced by the moved file, or removed
+  // again when there is nothing to move / the move fails.
+  let reserved = false;
   try {
-    await access(nextFile);
-    throw new Error(`session already exists: ${safe}`);
+    const fh = await open(nextFile, "wx");
+    await fh.close();
+    reserved = true;
   } catch (err) {
-    if (err.code !== "ENOENT") throw err;
+    if (err.code === "EEXIST") throw new Error(`session already exists: ${safe}`);
+    throw err;
   }
-  await rename(oldFile, nextFile);
+
+  try {
+    await access(oldFile);
+  } catch (err) {
+    if (err.code === "ENOENT") {
+      if (reserved) await rm(nextFile, { force: true }).catch(() => {});
+      handle?.renameTo?.(safe);
+      return safe;
+    }
+    throw err;
+  }
+
+  try {
+    await rename(oldFile, nextFile);
+  } catch (err) {
+    if (reserved) await rm(nextFile, { force: true }).catch(() => {});
+    throw err;
+  }
+  handle?.renameTo?.(safe);
   return safe;
 }
 
@@ -209,7 +265,7 @@ export class Session {
   /** Point this handle at a renamed file (the file was already moved). */
   renameTo(name) {
     const safe = sanitizeName(name);
-    if (!safe) throw new Error(`invalid session name: ${name}`);
+    if (!safe) throw new Error(nameError(name) ?? `invalid session name: ${name}`);
     this.name = safe;
     this.file = sessionFilePath(safe);
   }

@@ -1,3 +1,59 @@
+#### 2026-08-18 — planned: tool-design discussion (next session opener)
+
+**Status: ⏳ planned**
+
+Agreed with the maintainer: the next session opens with a design discussion on
+**how to design reasonable tools first** — before adding any tool or changing
+tool behavior (parallel execution, read-before-edit freshness guard, possible
+search tools). The discussion map and open questions were recorded in
+`GAPS.md` #12 (new section), `NEXT_STEPS.md` gained a "Scheduled next" block
+at the top, and `docs/tools.md` now points at the open design questions.
+Refinement suggestions from the `/name` hardening review were folded into the
+agenda (the tool-surface bar, risk declaration, result-shape conventions, and
+the order of the first contract-touching features: freshness guard, then a
+tool-choice behavioral eval; `/session delete` can land anytime). No code
+changed.
+
+#### 2026-08-17 — /name hardening: whitespace, length cap, TOCTOU, fresh-session rename
+
+**Status: ✅ done**
+
+Goal (from review): `/name` worked for the enforced filename charset, but its
+edges were broken — a multi-word name reported a misleading `usage:` error
+instead of the real reason, over-long names leaked a raw `ENAMETOOLONG` from
+the filesystem, the collision check had a check-then-rename race, and renaming
+a session right after `/new` (which writes its file lazily on the first turn)
+failed with `ENOENT` because there was no file to move.
+
+What was done:
+- ✅ `/name` joins whitespace-split words like `/new` does, so `/name fix the
+  bug` now reports `invalid session name: "fix the bug" — use letters, digits,
+  "-" and "_" (no spaces)` instead of `usage:`. Trailing whitespace no longer
+  fakes an empty second argument (`runCommand` trims before splitting), and a
+  missing active session gets its own error.
+- ✅ `sanitizeName` caps names at 249 characters (NAME_MAX minus the `.jsonl`
+  suffix, so the full component stays within the filesystem limit), with a
+  friendly `too long` message from a new exported `nameError(name)` helper used by
+  `renameSession`, `sessionFilePath`, `Session#renameTo`, `--session`,
+  `/new`, and `/resume` (previously each caller duplicated `invalid session
+  name:` and long names died with a raw ENAMETOOLONG).
+- ✅ `renameSession(old, next, handle?)`:
+  - closes the check-then-rename TOCTOU by reserving the destination with
+    `O_CREAT|O_EXCL` (a placeholder that is replaced by the move, or removed
+    on failure) — an existing session can never be clobbered;
+  - accepts a live `Session` handle, drains its in-flight write queue before
+    the move, and repoints it atomically with the move, so a queued append can
+    never recreate the old file (the `/name` handler forwards `tui.session`);
+  - treats a session that hasn't materialized a file yet (fresh `/new`) as a
+    pure handle repoint — no file move, no error.
+- ✅ Tests: +4 — `nameError` messages, whitespace/length sanitization,
+  fresh-`/new` rename (no file → repoint → later turns land under the new
+  name), handle drain + repoint, collision never clobbers the existing
+  session, and the TUI multi-word/trailing-space handler contract. Docs
+  updated in README and GAPS.md #5.
+
+Verification: 198 tests pass (194 before + 4 new), `node --check` clean.
+
 #### 2026-08-17 — refactor plan proposed (docs/refactor-plan.md)
 
 **Status: proposed (not yet executed)**

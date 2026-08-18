@@ -13,6 +13,7 @@ import {
   defaultSessionName,
   loadSession,
   listSessions,
+  nameError,
   newSessionName,
   pruneSessions,
   renameSession,
@@ -43,8 +44,9 @@ export function parseArgs(argv) {
     else if (argv[i] === "--session") {
       const value = argv[++i];
       if (!value) throw new Error("--session requires a name");
-      out.name = sanitizeName(value);
-      if (!out.name) throw new Error(`invalid session name: ${value}`);
+      const safeName = sanitizeName(value);
+      if (!safeName) throw new Error(nameError(value) ?? `invalid session name: ${value}`);
+      out.name = safeName;
     }
     else if (argv[i] === "--help" || argv[i] === "-h") out.help = true;
     else if (argv[i] === "--") {
@@ -121,7 +123,7 @@ async function main() {
       let nextName = newSessionName();
       if (name) {
         const safe = sanitizeName(name);
-        if (!safe) throw new Error(`invalid session name: ${name}`);
+        if (!safe) throw new Error(nameError(name) ?? `invalid session name: ${name}`);
         nextName = safe;
       }
       return {
@@ -133,7 +135,7 @@ async function main() {
     listSessions: () => sessionSummaries(20),
     resumeSession: async (nextName) => {
       const safe = sanitizeName(nextName);
-      if (!safe) throw new Error(`invalid session name: ${nextName}`);
+      if (!safe) throw new Error(nameError(nextName) ?? `invalid session name: ${nextName}`);
       const loaded = await loadSession(safe);
       if (!loaded) throw new Error(`session not found: ${safe}`);
       return sessionState(safe, config, loaded);

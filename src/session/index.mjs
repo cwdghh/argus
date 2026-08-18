@@ -12,6 +12,7 @@ export {
   latestSessionName,
   listSessions,
   loadSession,
+  nameError,
   newSessionName,
   pruneSessions,
   renameSession,

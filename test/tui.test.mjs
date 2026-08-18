@@ -626,13 +626,15 @@ test("/name renames the current session and repoints the handle", async () => {
     },
   };
   let moved = null;
+  let sawHandle = null;
   const t = new MinimalTui(
     { model: "m" },
     {
       sessionName: "old",
       session: handle,
-      renameSession: async (from, to) => {
+      renameSession: async (from, to, sessionHandle) => {
         moved = `${from}->${to}`;
+        sawHandle = sessionHandle;
         return to;
       },
       listSessionNames: async () => ["new", "old"],
@@ -640,11 +642,39 @@ test("/name renames the current session and repoints the handle", async () => {
   );
   await t.runCommand("/name new");
   assert.equal(moved, "old->new");
+  assert.equal(sawHandle, handle, "the live session handle is passed to renameSession");
   assert.equal(t.sessionName, "new");
   assert.equal(handle.renamedTo, "new");
   assert.equal(t.blocks.at(-1).summary, "session renamed to new");
   await t.refreshSessionNames();
   assert.deepEqual(t.sessionNames, ["new", "old"], "the completion cache refreshes after a rename");
+});
+
+test("/name tolerates trailing whitespace and joins multi-word input", async () => {
+  let called = [];
+  const t = new MinimalTui(
+    { model: "m" },
+    {
+      sessionName: "old",
+      // Mirrors the store contract: single joined name in, validated out.
+      renameSession: async (from, to) => {
+        called.push([from, to]);
+        if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(to)) throw new Error(`invalid session name: ${to}`);
+        return to;
+      },
+    }
+  );
+  // A trailing space must not fake an empty second argument (regression).
+  await t.runCommand("/name new ");
+  assert.deepEqual(called, [["old", "new"]]);
+  assert.equal(t.sessionName, "new");
+
+  // Multi-word input reaches the store as one name, so the error the user sees
+  // is the truthful "invalid session name" (from sanitizeName), not "usage".
+  await t.runCommand("/name fix the bug");
+  assert.deepEqual(called.at(-1), ["new", "fix the bug"]);
+  assert.equal(t.blocks.at(-1).kind, "error");
+  assert.match(t.blocks.at(-1).text, /invalid session name/);
 });
 
 test("/name validates usage, collisions, and same-name no-ops", async () => {

@@ -7,7 +7,7 @@ import { join } from "node:path";
 // Keep all session fixtures out of the user's real ~/.argus directory.
 process.env.ARGUS_HOME = mkdtempSync(join(tmpdir(), "argus-sess-test-"));
 
-const { Session, listSessions, loadSession, latestSessionName, latestSessionForCwd, defaultSessionName, newSessionName, pruneSessions, renameSession, sanitizeName, sessionConfig, sessionData, sessionSummaries, sessionsDir } = await import("../src/session/index.mjs");
+const { Session, listSessions, loadSession, latestSessionName, latestSessionForCwd, defaultSessionName, nameError, newSessionName, pruneSessions, renameSession, sanitizeName, sessionConfig, sessionData, sessionSummaries, sessionsDir } = await import("../src/session/index.mjs");
 
 const config = { baseUrl: "http://x", model: "mock", systemPrompt: "s" };
 
@@ -31,8 +31,20 @@ test("round-trip: turn + cwd persisted, latest detected", async () => {
 
 test("naming helpers", () => {
   assert.equal(sanitizeName("my-session_1"), "my-session_1");
+  assert.equal(sanitizeName("  padded  "), "padded", "outer whitespace is trimmed");
   assert.equal(sanitizeName("../evil"), null);
+  assert.equal(sanitizeName("my session"), null, "internal spaces are rejected");
+  assert.equal(sanitizeName("\u4e2d\u6587"), null, "non-ASCII is rejected");
+  assert.equal(sanitizeName("a".repeat(249)), "a".repeat(249));
+  assert.equal(sanitizeName("a".repeat(250)), null, "the name plus .jsonl must fit in NAME_MAX");
   assert.match(newSessionName(), /^argus-\d{8}-\d{6}-\d{3}$/);
+});
+
+test("nameError explains why a name is invalid", () => {
+  assert.equal(nameError("ok-name"), null);
+  assert.match(nameError("my session"), /invalid session name: "my session"/);
+  assert.match(nameError("my session"), /no spaces/);
+  assert.match(nameError("a".repeat(250)), /too long/);
 });
 
 test("no secrets written", async () => {
@@ -213,8 +225,11 @@ test("renameSession rejects invalid names and collisions, no-ops on itself", asy
   await s.appendTurn({ config, messages: [], blocks: [] });
   await assert.rejects(() => renameSession("r-a", "bad name!"), /invalid session name/);
   const other = new Session("r-b", config);
-  await other.appendTurn({ config, messages: [], blocks: [] });
+  await other.appendTurn({ config, messages: [{ role: "user", content: "untouched" }], blocks: [] });
   await assert.rejects(() => renameSession("r-a", "r-b"), /session already exists/);
+  const untouched = await loadSession("r-b");
+  assert.equal(untouched.turns[0].messages[0].content, "untouched", "the existing session is never clobbered");
+  assert.equal((await loadSession("r-a")).turns.length, 1, "the source session is untouched");
   assert.equal(await renameSession("r-a", "r-a"), "r-a", "renaming to the same name is a no-op");
 });
 
@@ -297,4 +312,38 @@ test("defaultSessionName falls back to a fresh name when nothing relates to the 
     assert.match(await defaultSessionName("/no-such-folder-xyz"), /^argus-/, "a fresh session starts when no folder session exists");
     assert.equal(await defaultSessionName("/d-repo"), "folder-work", "otherwise the newest session for the folder wins");
   });
+});
+
+test("renameSession repoints a session that has no file yet (fresh /new)", async () => {
+  const handle = new Session("fresh-old", config);
+  // The file is written lazily on the first append; nothing exists yet.
+  const dir = readdirSync(join(process.env.ARGUS_HOME, "sessions"));
+  assert.ok(!dir.includes("fresh-old.jsonl"), "fresh session has no file yet");
+
+  assert.equal(await renameSession("fresh-old", "fresh-new", handle), "fresh-new");
+
+  // No stray file was created by the rename itself.
+  const after = readdirSync(join(process.env.ARGUS_HOME, "sessions"));
+  assert.ok(!after.includes("fresh-old.jsonl"));
+  assert.ok(!after.includes("fresh-new.jsonl"), "rename of an unwritten session creates nothing");
+
+  // Later turns land under the new name only.
+  await handle.appendTurn({ config, messages: [{ role: "user", content: "first turn" }], blocks: [] });
+  assert.equal((await loadSession("fresh-new")).turns.length, 1);
+  assert.equal(await loadSession("fresh-old"), null);
+});
+
+test("renameSession(old, next, handle) drains in-flight writes and repoints the handle", async () => {
+  const handle = new Session("drain-old", config);
+  await handle.appendTurn({ config, messages: [{ role: "user", content: "before" }], blocks: [] });
+
+  // A write is queued but not yet flushed when the rename starts.
+  const pending = handle.appendTurn({ config, messages: [{ role: "user", content: "queued" }], blocks: [] });
+  assert.equal(await renameSession("drain-old", "drain-new", handle), "drain-new");
+  await pending;
+
+  const loaded = await loadSession("drain-new");
+  assert.equal(loaded.turns.length, 2);
+  assert.equal(loaded.turns[1].messages[0].content, "queued", "the queued turn lands in the renamed file");
+  assert.equal(await loadSession("drain-old"), null);
 });

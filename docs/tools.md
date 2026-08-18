@@ -131,3 +131,13 @@ such as `cd "a b" && pwd` persist correctly. Non-zero exit is returned as
 Add one object to the `tools` array in `src/tools.mjs`. The loop and TUI pick it
 up automatically. Update this file and the tool list in `AGENTS.md`. See
 `self-updating.md` for the full workflow.
+
+## Open design questions
+
+The exact shape of the tool surface is an open discussion — scheduled as the
+next session's opener (2026-08-18); the full agenda is `GAPS.md` #12. In
+short: what *earns* a tool a place among the default four, whether tools
+should declare a risk level so the safety gate can route on it, result-shape
+conventions (error shape, truncation notice, "how to continue" guidance), and
+whether the read-before-edit freshness guard or parallel execution change this
+contract or stay loop-level state.

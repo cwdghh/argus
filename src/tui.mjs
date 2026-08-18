@@ -318,7 +318,7 @@ export class MinimalTui {
 
   async runCommand(text) {
     this.editor.historyIndex = -1;
-    const [name, ...args] = text.split(/\s+/);
+    const [name, ...args] = text.trim().split(/\s+/);
     const command = COMMANDS.find((c) => c.name === name);
     if (!command) {
       this.pushBlock({ kind: "error", text: `unknown command: ${name} (try /help)` });

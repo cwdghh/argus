@@ -205,6 +205,13 @@ Give sessions meaningful names: `/name <name>` renames the current session
 (`/new` alone still uses a timestamp). Sessions are discovered by their
 names, not position in the list, so a large collection stays navigable.
 
+Session names become filenames, so they may contain letters, digits, `-` and
+`_` only (no spaces, and at most 249 characters so the name plus `.jsonl`
+fits the filesystem's per-component limit). `/name fix the bug` is rejected
+with that reason rather than silently altered. `/name` also works right after
+`/new`: a fresh session only touches the disk on its first turn, so an early
+rename simply repoints it.
+
 `/model <name>` switches the model for the current session only. The override
 is saved with the session (in its JSONL file) and restored when you resume it;
 `/status` and the footer reflect it immediately. A fresh session (`/resume` of a

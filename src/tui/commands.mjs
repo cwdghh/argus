@@ -162,20 +162,29 @@ export const COMMANDS = [
     args: "<name>",
     description: "rename the current session",
     async run(tui, args) {
-      if (args.length !== 1) {
+      if (!args.length) {
         tui.pushBlock({ kind: "error", text: "usage: /name <name> — rename the current session" });
       } else if (!tui.renameSession) {
         tui.pushBlock({ kind: "error", text: "session renaming is unavailable in this frontend" });
-      } else if (args[0] === tui.sessionName) {
-        tui.pushBlock({ kind: "result", ok: true, summary: `already named ${tui.sessionName}` });
+      } else if (!tui.sessionName) {
+        tui.pushBlock({ kind: "error", text: "no active session to rename" });
       } else {
-        await tui.withLocalTask(async () => {
-          const safe = await tui.renameSession(tui.sessionName, args[0]);
-          if (tui.session && typeof tui.session.renameTo === "function") tui.session.renameTo(safe);
-          tui.sessionName = safe;
-          tui.pushBlock({ kind: "result", ok: true, summary: `session renamed to ${safe}` });
-          tui.refreshSessionNames();
-        });
+        // Join the whitespace-split words (like /new) so a multi-word name is
+        // rejected as an invalid name with the reason, not as a usage mistake.
+        const nextName = args.join(" ").trim();
+        if (nextName === tui.sessionName) {
+          tui.pushBlock({ kind: "result", ok: true, summary: `already named ${tui.sessionName}` });
+        } else {
+          await tui.withLocalTask(async () => {
+            const safe = await tui.renameSession(tui.sessionName, nextName, tui.session);
+            // Defensive repoint for frontends whose renameSession ignores the
+            // handle argument; idempotent when the store already repointed it.
+            if (tui.session && typeof tui.session.renameTo === "function") tui.session.renameTo(safe);
+            tui.sessionName = safe;
+            tui.pushBlock({ kind: "result", ok: true, summary: `session renamed to ${safe}` });
+            tui.refreshSessionNames();
+          });
+        }
       }
     },
   },
