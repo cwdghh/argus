@@ -1,3 +1,85 @@
+#### 2026-08-22 — auto-compact audit: cumulative summaries + 200k real-token budget
+
+**Status: ✅ done**
+
+Goal (from review): verify the auto-compact functionality actually works, then
+relax the default compact limit to **200k real tokens** (the previous default
+was 300k chars ≈ 75k tokens, measured and displayed with a heuristic).
+
+Audit findings (`maybeCompact` / `src/compact.mjs`):
+
+- ✅ **It fires and summarizes correctly**, and two real problems were found
+  and fixed:
+  1. **Repeated compaction dropped the previous summary.** A second compaction
+     treated the existing "Summary of earlier conversation" system message as
+     an ordinary dropped turn and summarized only the newest dropped turns —
+     silently forgetting every older turn the first summary had compressed
+     (reproduced with a scripted 12+ turn session). Summaries are now carried
+     forward and folded into the new summary, so re-compaction never forgets.
+  2. **The limit was chars and the meter heuristic tokens.** Both are now real.
+- ✅ **Real-token compaction.** `ARGUS_COMPACT_TOKENS` (default 200_000) is the
+  budget. `nextContextTokens(lastUsage)` derives the context the *next*
+  request will carry — the last request's real `prompt_tokens` plus that
+  turn's `completion_tokens` (the reply is re-sent) — and `maybeCompact` fires
+  when it reaches the limit. Before the first usage report, a measured-payload
+  safety net (`ARGUS_COMPACT_AT`, default 800k chars ≈ 200k tokens) prevents
+  unbounded growth. The char heuristic is a safety net only, never the meter.
+- ✅ **Plumbed where real usage lives**: the TUI passes its `lastTurnUsage`
+  into every turn; headless now persists a timing block with its real usage
+  (so headless chains compact from real tokens on resume too); `runTurn`
+  forwards `lastTokens` to `maybeCompact`.
+- ✅ Footer Y is now the 200k real-token budget (`1.6K / 200.0K (1%)`,
+  `— / 200.0K (0%)` before the first request).
+- ✅ Tests: 211 pass. New coverage: real-token trigger (at/over the limit),
+  real-report-beats-char path, cumulative-summary regression,
+  `nextContextTokens`, derived defaults, agent-level real-token compaction,
+  and a headless resumed-run compaction test seeded with persisted usage.
+- ✅ Docs updated: README, .env.example, GAPS.md §4, docs/architecture.md,
+  docs/interrupt-resume.md.
+
+#### 2026-08-18 — token counts: real request tokens, shown as X / Y (Z%)
+
+**Status: ✅ done**
+
+Goal (from review): the footer claimed the "context window" was `2 / 300.0K` on
+an empty session, per-turn usage summed the same context once per model step,
+and both needed to stay honest under the planned interrupt→continue flow
+(`docs/interrupt-resume.md`). The review then hardened the ask: the context
+*count* must be the real, provider-reported tokens from the request — not a
+chars/4 heuristic — while keeping the `X / Y (Z%)` meter so the current upper
+limit and percentage stay visible.
+
+What was done:
+
+- ✅ **Startup context bug fixed.** The right-hand context field was
+  `estimateChars(history) / ARGUS_COMPACT_AT` chars, so an empty history
+  rendered as `2 / 300.0K (0%)` — the length of `JSON.stringify([])`. The
+  meter now shows the real `prompt_tokens` of the most recent request as X,
+  with `—` before any request has reported usage (no made-up number).
+- ✅ **X / Y (Z%) with a real X.** `contextUsage()` in `src/tui/frames.mjs` is
+  the single source for the footer and `/status`: X = real provider-reported
+  prompt tokens (live `turnUsage`, else persisted `lastTurnUsage`), Y = the
+  token-equivalent compaction budget — the only upper limit argus enforces
+  (`ARGUS_COMPACT_AT` chars, using the repo's documented ~4 chars/token
+  convention) — and Z% = X / Y. `/status`: `Context: 1.6K / 75.0K tokens (2%)`.
+- ✅ **No repeated counting in per-turn usage.** `accumulateUsage` no longer
+  sums `prompt_tokens` across model steps (that counted the shared history
+  once per step); it reports the largest context sent (`↑`), summed output
+  (`↓`), a consistent total, and the largest cached share. All real provider
+  counts.
+- ✅ **Interrupt/continuation ready.** An interrupted turn records only the
+  usage of *completed* steps (a mid-stream abort reports no usage), and a
+  regression test locks the spec's §6.2 end-state shape: the partial assistant
+  text appears in the message history exactly once, so the next request's real
+  prompt count can't be inflated by a duplicate.
+- ✅ Docs updated: README footer screenshot + bullets, GAPS.md §4 status note,
+  docs/interrupt-resume.md §4.3 accounting guarantee.
+
+Verification: 205 tests pass (`node --check` clean), including new agent
+(no-repeat accumulation, interrupted-turn usage), compact (token-budget
+conversion, continued-interrupt history shape), and TUI/frames (real context
+meter `X / Y (Z%)`, em-dash before the first request) coverage.
+
 #### 2026-08-18 — planned: tool-design discussion (next session opener)
 
 **Status: ⏳ planned**

@@ -109,6 +109,15 @@ once, in the least distorting position.
 - Partial-turn bytes round-trip exactly (append → load → reconstruct).
 - The continuation request includes `request_input` in `tools` and uses a fresh
   `tool_call_id` per continuation.
+- Token accounting stays honest across interrupt → continue: an interrupted
+  turn records only the usage of *completed* model steps (a mid-stream abort
+  reports no usage), the continuation's accumulated usage never counts the
+  re-sent context more than once (`prompt` = the largest context sent,
+  `completion` = the sum of each step's output), and the partial assistant
+  text appears in the message history exactly once, so the next request's real
+  provider-reported prompt count is never inflated by a duplicate. Context
+  counts come from real provider usage; the meter's upper limit is the same
+  200k real-token budget the compaction trigger enforces.
 
 ## 5. Component changes
 

@@ -94,6 +94,25 @@ as a reference and uses `read` visibly. Elapsed phase/tool/turn timing is also
 TUI-owned; it needs no agent-protocol or tool changes, and completed turn
 timings persist as ordinary display blocks.
 
+Token accounting is split by ownership: `src/agent.mjs` folds each request's
+`usage` into a turn total that never counts shared context twice (`prompt` =
+the largest context sent, `completion` = the sum of each step's output), so a
+turn with several model calls doesn't inflate the number by re-sending the same
+history once per step. Displayed token counts are real, provider-reported
+numbers: the footer's context meter (`X / Y (Z%)`) and `/status` read
+`contextUsage()` in `src/tui/frames.mjs`, where X is the real `prompt_tokens`
+of the most recent request (live `turnUsage`, else the persisted
+`lastTurnUsage`) and Y is the same 200k real-token budget the compaction
+trigger enforces (`compactBudgetTokens()`). Compaction itself runs on real
+tokens: the TUI/headless pass the last turn's usage into `runTurn` as
+`lastTokens` (via `nextContextTokens`), and `maybeCompact` fires at the
+`ARGUS_COMPACT_TOKENS` limit, carrying earlier summaries forward; `compactAtChars`
+is only a measured-payload safety net before the first usage report. Every
+completed turn carries its real provider usage in its timing display block, so
+`/status` and the footer can show the last turn after a resume. Both stay
+correct across the planned interrupt→continue flow — an aborted stream reports
+no usage, and a continuation re-sends the trimmed partial text exactly once.
+
 ## Message types
 
 - `user` — your prompt

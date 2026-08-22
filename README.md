@@ -83,7 +83,7 @@ layout: header, scrollable transcript, a bottom **editor**, and a **footer**.
 │────────────────────────────────────────────────────────────────────────────────────────────────────│
 │❯ Describe a task…  (/help for commands)                                                            │
 │────────────────────────────────────────────────────────────────────────────────────────────────────│
-│last 12s · ↑1.6K ↓412  git main ~2 · deepseek-v4-flash-0731 · 2 / 300.0K (0%) · /Users/…/argus      │
+│last 12s · ↑1.6K ↓412  git main ~2 · deepseek-v4-flash-0731 · 1.6K / 200.0K (1%) · /Users/…/argus  │
 └────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -101,10 +101,15 @@ layout: header, scrollable transcript, a bottom **editor**, and a **footer**.
   in the transcript, and `/status` reports the last turn.
 - **Token usage travels with the turn**: the footer shows live tokens while
   working, and the last turn's usage (`↑ input / ↓ output`) is kept in the
-  timing row and reported by `/status`. The right side shows the active
-  session's estimated history size against the compaction budget — e.g.
-  `12.3K / 300.0K (4%)` — using the same `estimateChars` measure compaction
-  itself applies.
+  timing row and reported by `/status`. Accumulation never counts the same
+  tokens twice: a multi-call turn reports the largest context that was sent
+  (`↑`) plus the sum of every step's output (`↓`), instead of summing the
+  shared history once per model step. The right-side context meter is
+  `X / Y (Z%)`: X is the real, provider-reported prompt tokens of the most
+  recent request, Y is the current upper limit argus enforces — a 200k
+  real-token compaction budget (`ARGUS_COMPACT_TOKENS`) — and Z% their ratio.
+  Before any request has reported usage, X shows `—` instead of a made-up
+  number (so a fresh session never shows a stray `2 / 300.0K`).
 - **Auto light/dark theme** (detected via OSC 11; falls back to light).
 - **Scrollable history**: mouse wheel to scroll; PgUp/PgDn (pages), Home/End
   (top/bottom). The header shows when you are away from the latest output.
@@ -116,9 +121,9 @@ layout: header, scrollable transcript, a bottom **editor**, and a **footer**.
 - **Responsive footer** shows phase + elapsed time plus live token usage
   (`↑` input / `↓` output, plus `✶` reasoning and `≡` cached when the provider
   reports them) on the left, and git status, model, context-window usage
-  (estimated history size as a percent of the compaction budget), and the
-  current path on the right — lower-priority details collapse cleanly on
-  narrow terminals.
+  (real prompt tokens of the most recent request against the token budget —
+  e.g. `1.6K / 200.0K (1%)`), and the current path on the right —
+  lower-priority details collapse cleanly on narrow terminals.
 - **Helpful empty state and editor hints** make commands, `@path` references,
   live suggestions, completion, and interruption discoverable without opening
   the manual first.
@@ -276,12 +281,17 @@ with untrusted repositories.
 ## Context
 
 Long sessions eventually overflow the model's context window. argus compacts
-automatically: when the estimated history size passes the `ARGUS_COMPACT_AT`
-budget (default 300k chars) the oldest turns are replaced by a short summary and
-the most recent `ARGUS_COMPACT_KEEP` (default 8) turns are kept intact. Full
-messages stay in the session file, so the original requests remain
-reconstructable. The footer shows how much of that budget the active session
-is using.
+automatically: once a request is sent the provider reports exactly how many
+tokens it cost, and when that real context reaches the `ARGUS_COMPACT_TOKENS`
+budget (default 200k tokens) the oldest turns are replaced by a short summary
+and the most recent `ARGUS_COMPACT_KEEP` (default 8) turns are kept intact.
+Earlier summaries are carried forward, so repeated compactions never forget
+older context, and the full messages stay in the session file so the original
+requests remain reconstructable. Before the first usage report (a brand-new
+session, or a provider that omits usage), a measured-size safety net
+(`ARGUS_COMPACT_AT`, default 800k chars ≈ the 200k-token budget) prevents
+unbounded growth. The footer shows how much of the 200k-token budget the most
+recent request used.
 
 Individual tool results are capped at `ARGUS_MAX_TOOL_RESULT_CHARS`. The `read`
 tool also truncates itself (2000 lines / 50KB), numbers every line, and

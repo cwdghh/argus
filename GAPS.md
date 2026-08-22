@@ -59,13 +59,26 @@ questions are deliberately unresolved — we'll discuss them.
 
 > **Status: resolved at the minimal level (2026-08-11)** — deterministic
 > compaction keeps recent turns and summarizes older user intent + outcomes.
-> Tool results also have a hard per-result cap. Smarter semantic summaries and
-> cumulative per-turn token accounting remain open.
+> Tool results also have a hard per-result cap. Smarter semantic summaries
+> remain open.
 > **2026-08-17:** `read` now self-bounds too — at most 2000 lines or 50KB per
 > call, with `offset`/`limit` paging and numbered lines, so reading a large
 > file never floods the context window; the per-result cap stays as the
 > backstop, and the model is told exactly which window it saw and how to
 > continue.
+> **2026-08-18:** per-turn token accounting resolved: `accumulateUsage` never
+> counts shared context twice (largest prompt + summed completions), an
+> interrupted turn records only completed steps, and the footer context meter
+> (`X / Y (Z%)`) uses the real, provider-reported prompt tokens of the most
+> recent request as X.
+> **2026-08-22:** auto-compact audited and the default limit relaxed to 200k
+> **real tokens**. The compaction *decision* now uses real provider tokens too
+> (`ARGUS_COMPACT_TOKENS`, default 200_000, fed by `nextContextTokens` from the
+> last turn's usage); `ARGUS_COMPACT_AT` (chars) survives only as a
+> pre-first-usage safety net. Repeated compactions now carry earlier summaries
+> forward instead of silently forgetting them. Remaining: a single oversized
+> turn still cannot be compacted (bounded by the tool-result cap and read
+> caps), and summaries are terse digests, not semantic rewrites.
 
 - **What:** recent history is sent verbatim; older turns are compacted into a
   deterministic summary after a configurable character budget.
@@ -74,7 +87,10 @@ questions are deliberately unresolved — we'll discuss them.
   what no longer fits.
 - **Open questions for argus:**
   - When is a real model-generated summary worth its latency and complexity?
-  - Should the budget use provider token counts instead of character estimates?
+  - ~~Should the compaction decision use provider token counts instead of
+    character estimates?~~ Resolved 2026-08-22: `ARGUS_COMPACT_TOKENS` drives
+    compaction from real provider tokens; `ARGUS_COMPACT_AT` remains only as
+    the pre-first-usage safety net.
 
 ## 5. Session persistence
 
