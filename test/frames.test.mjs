@@ -36,7 +36,7 @@ test("frames: statusText shows a live spinner while working", () => {
   assert.match(s, /^. working 4\.7s$/);
 });
 
-test("frames: footer shows tokens on the left and context budget on the right", () => {
+test("frames: footer shows tokens on the left and real context on the right", () => {
   const f = strip(
     footerText({
       ...base,
@@ -47,9 +47,14 @@ test("frames: footer shows tokens on the left and context budget on the right", 
   assert.ok(f.startsWith("last 2.7s · ↑1.1K ↓140"), "token usage travels with the status");
   assert.ok(f.includes("git main ✓"));
   assert.ok(f.includes("mock-model"));
-  assert.ok(f.includes("/ 300.0K (0%)"), "context-window usage vs. the compaction budget");
+  assert.ok(f.includes("1.1K / 200.0K (1%)"), "context meter: real prompt tokens vs. the 200k token budget");
   assert.ok(f.includes("/workspace/argus"));
   assert.ok(f.length <= 100, "fits the width");
+});
+
+test("frames: before any request, the context meter shows an em dash against the budget", () => {
+  const f = strip(footerText({ ...base, lastTurnDurationMs: 2700, lastTurnUsage: null }));
+  assert.ok(f.includes("— / 200.0K (0%)"), "no made-up context, but the upper limit stays visible");
 });
 
 test("frames: footer collapses cleanly on a narrow terminal", () => {

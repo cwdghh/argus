@@ -13,8 +13,9 @@
  * the turn errors, so the error block is preserved.
  */
 import { runTurn } from "./agent.mjs";
+import { nextContextTokens } from "./compact.mjs";
 import { loadSession, sessionConfig, sessionData } from "./session/index.mjs";
-import { summarize } from "./format.mjs";
+import { formatDuration, summarize } from "./format.mjs";
 import { appendBlock } from "./transcript.mjs";
 
 export async function runHeadless(config, prompt, { session, cwd, stdout, stderr } = {}) {
@@ -25,14 +26,18 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
   // Resume session history if one is given.
   let history = [];
   let activeCwd = cwd ?? process.cwd();
+  // Real tokens of the context this turn will re-send, from the last
+  // persisted turn's usage (null -> the char safety net applies).
+  let lastUsage = null;
   if (session) {
     const loaded = await loadSession(session.name);
-    const { history: saved, cwd: savedCwd, model } = sessionData(loaded);
+    const { history: saved, cwd: savedCwd, model, blocks: savedBlocks } = sessionData(loaded);
     history = saved;
     activeCwd = cwd ?? savedCwd ?? process.cwd();
     if (savedCwd) session.lastCwd = savedCwd;
     // Honor a persisted per-session model override (e.g. set by /model).
     if (model) config = { ...config, model };
+    lastUsage = [...savedBlocks].reverse().find((block) => block.kind === "timing")?.usage ?? null;
   }
 
   // Build display blocks alongside events (mirrors the TUI) so a turn saved to
@@ -44,6 +49,7 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
   let sawText = false;
   let result = null;
   let error = null;
+  const startedAt = Date.now();
   try {
     result = await runTurn(
       config,
@@ -70,7 +76,7 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
           writeErr("… earlier context compacted\n");
         }
       },
-      { cwd: activeCwd }
+      { cwd: activeCwd, lastTokens: nextContextTokens(lastUsage) }
     );
   } catch (err) {
     error = err;
@@ -78,7 +84,9 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
     writeErr(`\nerror: ${err.message}\n`);
   }
 
-  // Persist the turn (including error blocks) regardless of outcome.
+  // Persist the turn (including error blocks) regardless of outcome. A timing
+  // block carries the real provider usage so later headless/TUI runs on this
+  // session can drive compaction from real tokens.
   if (session) {
     const finalCwd = result?.cwd ?? error?.cwd;
     if (finalCwd) {
@@ -88,6 +96,13 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
         /* non-fatal */
       }
     }
+    const outcome = error ? "failed" : result?.aborted ? "interrupted" : "completed";
+    blocks.push({
+      kind: "timing",
+      summary: `${outcome} in ${formatDuration(Date.now() - startedAt)}`,
+      durationMs: Date.now() - startedAt,
+      usage: result?.usage ?? error?.usage ?? null,
+    });
     await session.appendTurn({
       config: sessionConfig(config),
       messages: result?.messages ?? error?.turnMessages ?? [{ role: "user", content: prompt }],

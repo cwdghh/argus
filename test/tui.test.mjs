@@ -4,7 +4,6 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MinimalTui } from "../src/tui.mjs";
-import { COMPACT_DEFAULTS, estimateChars } from "../src/compact.mjs";
 import { formatChars } from "../src/format.mjs";
 import { SLASH_COMMANDS } from "../src/tui/commands.mjs";
 import { suggestionLines } from "../src/tui/suggestions.mjs";
@@ -86,29 +85,30 @@ test("footer puts token usage on the left of the status", () => {
   assert.ok(f.includes("/workspace/argus"), "working directory stays in the right-hand meta area");
 });
 
-test("footer shows context-window usage as its share of the compaction budget", () => {
+test("footer shows the real provider-reported request tokens as context", () => {
   const t = new MinimalTui({ model: "mock-model" });
   t.width = 100;
   t.height = 12;
   t.git = { branch: "main", dirty: false, dirtyCount: 0 };
   t.cwd = "/workspace/argus";
-  t.history = [{ role: "user", content: "a".repeat(10_000) }];
-  const original = process.env.ARGUS_COMPACT_AT;
-  process.env.ARGUS_COMPACT_AT = "20000";
-  try {
-    const used = estimateChars(t.history);
-    const budget = COMPACT_DEFAULTS.compactAtChars;
-    const ratio = Math.min(100, Math.max(0, Math.round((used / budget) * 100)));
-    const f = strip(t.footer());
-    assert.ok(
-      f.includes(`${formatChars(used)} / ${formatChars(budget)} (${ratio}%)`),
-      `context field shows chars / budget (percent): ${f}`,
-    );
-    assert.ok(f.includes("git main"), "git stays in the right-hand meta area");
-  } finally {
-    if (original === undefined) delete process.env.ARGUS_COMPACT_AT;
-    else process.env.ARGUS_COMPACT_AT = original;
-  }
+  t.lastTurnUsage = { prompt_tokens: 1600, completion_tokens: 412, total_tokens: 2012, reasoning_tokens: 0, cached_tokens: 0 };
+  const f = strip(t.footer());
+  assert.ok(
+    f.includes(`${formatChars(1600)} / ${formatChars(200000)} (1%)`),
+    `context meter reports the last request's real prompt tokens against the 200k token budget: ${f}`,
+  );
+  assert.ok(f.includes("git main"), "git stays in the right-hand meta area");
+});
+
+test("before any request, the footer shows no made-up context but keeps the upper limit", () => {
+  const t = new MinimalTui({ model: "mock-model" });
+  t.width = 100;
+  t.height = 12;
+  t.git = { branch: "main", dirty: false, dirtyCount: 0 };
+  t.cwd = "/workspace/argus";
+  const f = strip(t.footer());
+  assert.ok(f.includes("— / 200.0K (0%)"), `no made-up context before a real request, limit shown: ${f}`);
+  assert.ok(!f.includes("2 / "), "and no empty-array artifact either");
 });
 
 test("header makes transcript scroll state visible", () => {
@@ -509,6 +509,7 @@ test("/status and timing rows show real token usage", async () => {
 
   await t.runCommand("/status");
   assert.ok(t.blocks.at(-1).text.includes("↑1.6K ↓412"), "/status shows last-turn usage");
+  assert.ok(t.blocks.at(-1).text.includes("Context: 1.6K / 200.0K tokens (1%)"), "/status reports real context against the 200k token budget");
 });
 
 test("Tab never completes plain text without an @ or / token", () => {

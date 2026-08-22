@@ -31,7 +31,16 @@ import { maybeCompact } from "./compact.mjs";
  * @param {Array}   history    full conversation so far (outside this turn)
  * @param {string}  userMessage the new user prompt
  * @param {(event: object) => void} [onEvent] called with {type, ...} as things happen
- * @param {{ signal?: AbortSignal }} [opts]
+ * @param {{
+ *   signal?: AbortSignal,
+ *   cwd?: string,
+ *   confirm?: (cmd: string) => Promise<boolean>,
+ *   maxToolResultChars?: number,
+ *   compactAtTokens?: number,
+ *   compactAtChars?: number,
+ *   keepTurns?: number,
+ *   lastTokens?: number|null,
+ * }} [opts]
  * @returns {Promise<{ messages: Array, finalText: string, aborted: boolean, cwd: string, usage: object|null }>}
  */
 export async function runTurn(config, history, userMessage, onEvent = () => {}, opts = {}) {
@@ -56,8 +65,13 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
   // Keep the model context within the window: drop the oldest turns and replace
   // them with a compact summary when the history grows too large.
   const { history: sendHistory, compacted } = maybeCompact(history, {
+    compactAtTokens: opts.compactAtTokens,
     compactAtChars: opts.compactAtChars,
     keepTurns: opts.keepTurns,
+    // Real provider-reported tokens of the context the next request will
+    // carry (see compact.mjs `nextContextTokens`); falls back to the char
+    // safety net before the first usage report.
+    lastTokens: opts.lastTokens,
   });
   if (compacted) onEvent({ type: "compacted" });
 
@@ -133,10 +147,27 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
 
 
 /**
- * Sum one model call's usage into the running turn total. Providers return
- * per-request usage (prompt + completion tokens); members that don't apply to
- * a given call (reasoning/cached) are simply added as zero, and a missing or
- * malformed report is ignored.
+ * Fold one model call's usage into the running turn total without ever
+ * counting the same tokens twice.
+ *
+ * Providers report per-request usage, and every request re-sends the whole
+ * context so far (history + tool results). Summing `prompt_tokens` across the
+ * steps of a multi-call turn would therefore count the same history once per
+ * model call — the "X tokens used" number would grow with the request count,
+ * not with the context. Instead:
+ *
+ *   - prompt_tokens  = the largest single prompt sent (the final request's
+ *                      context); shared context is counted exactly once.
+ *   - completion     = the sum of every step's output tokens (each step's
+ *                      output is distinct).
+ *   - total_tokens   = prompt_tokens + completion_tokens, recomputed so the
+ *                      turn total stays consistent with its two members.
+ *   - reasoning      = summed like completion (distinct per step).
+ *   - cached         = the largest cached share of any prompt sent (a subset
+ *                      of the prompt, so it is reported, not summed).
+ *
+ * Members that don't apply to a given call are added as zero, and a missing
+ * or malformed report is ignored.
  *
  * @returns {object|null} the accumulated usage object (null until a real one
  *   has been seen)
@@ -170,13 +201,14 @@ export function accumulateUsage(usage, stepUsage) {
       cached_tokens: step.cached,
     };
   }
+  const prompt = Math.max(usage.prompt_tokens, step.prompt);
+  const completion = add(usage.completion_tokens, step.completion);
   return {
-    ...usage,
-    prompt_tokens: add(usage.prompt_tokens, stepUsage.prompt_tokens),
-    completion_tokens: add(usage.completion_tokens, stepUsage.completion_tokens),
-    total_tokens: add(usage.total_tokens, stepUsage.total_tokens),
+    prompt_tokens: prompt,
+    completion_tokens: completion,
+    total_tokens: prompt + completion,
     reasoning_tokens: add(usage.reasoning_tokens, stepUsage.completion_tokens_details?.reasoning_tokens),
-    cached_tokens: add(usage.cached_tokens, stepUsage.prompt_tokens_details?.cached_tokens),
+    cached_tokens: Math.max(usage.cached_tokens, step.cached),
   };
 }
 

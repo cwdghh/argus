@@ -27,6 +27,7 @@
  *   @ / slash        live suggestions; Up/Down + Tab to pick, Esc to dismiss
  */
 import { runTurn } from "./agent.mjs";
+import { nextContextTokens } from "./compact.mjs";
 import { formatDuration, summarize } from "./format.mjs";
 import { appendBlock } from "./transcript.mjs";
 import { theme } from "./theme.mjs";
@@ -271,7 +272,14 @@ export class MinimalTui {
           this.turnUsage = ev.usage;
         }
         this.dirtyRendered = true;
-      }, { signal: ac.signal, cwd: this.cwd, confirm: (cmd) => this.confirm(cmd) });
+      }, {
+        signal: ac.signal,
+        cwd: this.cwd,
+        confirm: (cmd) => this.confirm(cmd),
+        // Real tokens of the context this turn will re-send (previous request's
+        // prompt + its completion); feeds the 200K-token compaction trigger.
+        lastTokens: nextContextTokens(this.lastTurnUsage),
+      });
       savedMessages = messages;
       this.history.push(...messages);
       if (typeof cwd === "string") this.cwd = cwd;

@@ -8,7 +8,7 @@
  *
  *   footer() { return footerText(this); }
  */
-import { estimateChars, COMPACT_DEFAULTS } from "../compact.mjs";
+import { compactBudgetTokens } from "../compact.mjs";
 import { formatChars, formatDuration, formatTokens } from "../format.mjs";
 import { styleText, stripAnsi, dispWidth, truncateMiddle, truncateEnd } from "./renderers.mjs";
 import { theme } from "../theme.mjs";
@@ -37,11 +37,43 @@ export function statusText(s) {
 }
 
 /**
+ * Real, provider-reported prompt tokens of the most recent model request —
+ * the actual context the model saw, never an estimate. Prefers the live
+ * turn's usage while working; while idle it falls back to the last completed
+ * turn's usage, which is persisted with the turn and therefore survives a
+ * resume. Returns null when no request has reported usage yet (e.g. a fresh
+ * session), so the meter can show "— / budget" instead of a made-up number.
+ */
+export function contextTokens(s) {
+  const usage = s.turnUsage != null ? s.turnUsage : s.mode === "idle" ? s.lastTurnUsage : null;
+  if (!usage || !Number.isFinite(usage.prompt_tokens)) return null;
+  return usage.prompt_tokens;
+}
+
+/**
+ * The context meter shared by the footer and `/status` — `X / Y (Z%)`:
+ *
+ *   - tokens = the real, provider-reported prompt tokens of the most recent
+ *              request (null until one has reported usage);
+ *   - budget = the real-token compaction budget — the upper limit argus
+ *              actually enforces (`ARGUS_COMPACT_TOKENS`, default 200k);
+ *   - ratio  = tokens / budget as a clamped percentage.
+ */
+export function contextUsage(s) {
+  const tokens = contextTokens(s);
+  const budget = compactBudgetTokens();
+  const ratio = Math.min(100, Math.max(0, Math.round(((tokens ?? 0) / budget) * 100)));
+  return { tokens, budget, ratio };
+}
+
+/**
  * The full footer line: status + token usage on the left, then a right-aligned
- * meta area (git status, model, context-window usage vs. the compaction
- * budget, working directory). Lower-priority details (context, model) are
- * dropped first on narrow terminals; if even git won't fit, the working
- * directory is shown alone.
+ * meta area (git status, model, context-window usage, working directory).
+ * The context meter is `X / Y (Z%)` — X is the real, provider-reported
+ * prompt-token count of the most recent request, Y is the token-equivalent
+ * compaction budget (the upper limit argus enforces), and Z% is their ratio.
+ * Lower-priority details (context, model) are dropped first on narrow
+ * terminals; if even git won't fit, the working directory is shown alone.
  */
 export function footerText(s) {
   const status = statusText(s);
@@ -56,16 +88,17 @@ export function footerText(s) {
     s.git.branch != null
       ? `git ${s.git.branch}${s.git.dirty ? ` ~${s.git.dirtyCount}` : " ✓"}`
       : "git -";
-  const contextChars = estimateChars(s.history);
-  const compactAt = COMPACT_DEFAULTS.compactAtChars;
-  const usedRatio = Math.min(100, Math.max(0, Math.round((contextChars / compactAt) * 100)));
-  const context = `${formatChars(contextChars)} / ${formatChars(compactAt)} (${usedRatio}%)`;
+  const { tokens: ctxTokens, budget: ctxBudget, ratio: ctxRatio } = contextUsage(s);
   const sepText = " · ";
   const sep = styleText(sepText, { fg: theme.dim });
   const metaBudget = s.width - dispWidth(statusPlain) - 2;
   if (metaBudget < 6) return statusStr;
 
-  const ctxField = [styleText(context, { fg: theme.dim })];
+  const ctxField = [
+    styleText(`${ctxTokens == null ? "—" : formatChars(ctxTokens)} / ${formatChars(ctxBudget)} (${ctxRatio}%)`, {
+      fg: theme.dim,
+    }),
+  ];
   const gitField = [styleText(git, { fg: s.git.dirty ? theme.bad : theme.good })];
   const modelField = [styleText(model, { fg: theme.text })];
 

@@ -97,6 +97,50 @@ test("headless: resumed session uses its persisted cwd", async (t) => {
   assert.equal(observedCwd, expected);
 });
 
+test("headless: persisted usage drives real-token compaction on a resumed run", async (t) => {
+  // Seed a session with 12 turns whose last timing block reports a real
+  // context at/over the 200k-token budget (prompt 199900 + completion 150).
+  const config = { apiKey: "", model: "mock", systemPrompt: "s" };
+  const session = new Session("hs-compact", config);
+  const mkTurn = (n) => ({
+    config: { baseUrl: "http://mock", model: "mock", systemPrompt: "s" },
+    messages: [
+      { role: "user", content: `q${n}` },
+      { role: "assistant", content: `a${n}`.repeat(80) },
+    ],
+    blocks: [
+      { kind: "user", text: `q${n}` },
+      { kind: "assistant", text: "ok" },
+      {
+        kind: "timing",
+        summary: "completed in 100ms",
+        durationMs: 100,
+        usage: { prompt_tokens: 199_900, completion_tokens: 150, total_tokens: 200_050, reasoning_tokens: 0, cached_tokens: 0 },
+      },
+    ],
+  });
+  for (let i = 1; i <= 12; i++) await session.appendTurn(mkTurn(i));
+
+  const err = [];
+  let lastBody = null;
+  const srv = await createMockServer((i, body) => {
+    lastBody = body;
+    return [{ content: "fresh" }];
+  });
+  t.after(() => srv.close());
+  config.baseUrl = srv.url;
+
+  await runHeadless(config, "next", { session, stdout: () => {}, stderr: (s) => err.push(s) });
+
+  assert.ok(err.join("").includes("compacted"), "persisted real tokens trigger compaction on resume");
+  assert.ok(
+    lastBody.messages.some((m) => m.role === "system" && /Summary of earlier/.test(m.content)),
+    "the compacted summary is sent",
+  );
+  const users = lastBody.messages.filter((m) => m.role === "user").map((m) => m.content);
+  assert.deepEqual(users, ["q5", "q6", "q7", "q8", "q9", "q10", "q11", "q12", "next"], "keeps the last 8 turns plus the new prompt");
+});
+
 test("headless: later request failure preserves completed tools and cwd", async (t) => {
   const srv = await createMockServer((i) => {
     if (i === 0) {

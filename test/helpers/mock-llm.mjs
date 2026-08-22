@@ -50,6 +50,10 @@ export async function createMockServer(script) {
             finishReason = d.finishReason;
             continue;
           }
+          if (d && d.usage) {
+            res.write(`data: ${JSON.stringify({ choices: [], usage: d.usage })}\n\n`);
+            continue;
+          }
           res.write(`data: ${JSON.stringify({ choices: [{ delta: d ?? {} }] })}\n\n`);
         }
         res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: finishReason }] })}\n\n`);

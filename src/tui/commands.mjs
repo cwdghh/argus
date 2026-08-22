@@ -12,6 +12,7 @@
  * `tui.withLocalTask` so the footer shows a live "working" phase.
  */
 import { formatChars, formatDuration, formatTokens } from "../format.mjs";
+import { contextUsage } from "./frames.mjs";
 
 /** The keyboard reference shown by /keys and at the bottom of /help. */
 export const KEY_HELP = `## Keyboard shortcuts
@@ -60,7 +61,7 @@ export const COMMANDS = [
     description: "show the active session, model, cwd, context, and limits",
     run(tui) {
       const turns = tui.history.filter((message) => message.role === "user").length;
-      const contextTokens = tui.lastTurnUsage?.total_tokens ?? 0;
+      const { tokens: ctx, budget: ctxBudget, ratio: ctxRatio } = contextUsage(tui);
       tui.pushBlock({
         kind: "assistant",
         text:
@@ -68,7 +69,7 @@ export const COMMANDS = [
           `- Model: \`${tui.config.model}\`\n- Cwd: \`${tui.cwd}\`\n` +
           `- Last turn: ${tui.lastTurnDurationMs == null ? "none yet" : formatDuration(tui.lastTurnDurationMs)}` +
           `${tui.lastTurnUsage ? ` (${formatTokens(tui.lastTurnUsage)})` : ""}\n` +
-          `- Context tokens: ${contextTokens.toLocaleString()}\n` +
+          `- Context: ${ctx == null ? "—" : formatChars(ctx)} / ${formatChars(ctxBudget)} tokens (${ctxRatio}%)\n` +
           `- Turns: ${turns}\n` +
           `- Limits: ${tui.config.maxSteps ?? 100} model steps, ${tui.config.maxRetries ?? 2} retries, ` +
           `${tui.config.requestTimeoutMs ?? 300_000}ms/request, ` +
