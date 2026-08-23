@@ -282,6 +282,16 @@ questions are deliberately unresolved — we'll discuss them.
 > execution, the read-before-edit guard, possible search tools). The tool
 > surface is the contract everything else hangs off, so we settle the shape
 > first.
+>
+> **Partially resolved (2026-08-23):** a runaway "model keeps generating"
+> problem led to three contract decisions, without touching the 4-tool set:
+> (1) the agent loop now refuses a third identical tool call (same name +
+> arguments) so degenerate loops stop fast — see `PROGRESS.md`;
+> (2) requests set `parallel_tool_calls: false` — one tool per model step,
+> sequential and audit-friendly; (3) `edit` collapsed to a single canonical
+> `edits[]` shape in the model-visible schema (legacy top-level fields
+> removed from the schema; `execute` stays tolerant). The `grep`/`ls`
+> candidates, risk declaration, and result-shape contract below remain open.
 
 - **What:** exactly four default tools today — `read`, `write`, `edit`,
   `bash` — and both `AGENTS.md` and `docs/tools.md` say new tools must "earn

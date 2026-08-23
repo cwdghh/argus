@@ -38,6 +38,9 @@ function buildBody({ model, systemPrompt, messages, tools }) {
       },
     })),
     tool_choice: "auto",
+    // One tool call per model step: sequential, audit-friendly, and it keeps
+    // the loop tight (fewer ways for the model to keep generating).
+    parallel_tool_calls: false,
     stream: true,
     stream_options: { include_usage: true },
   };

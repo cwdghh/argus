@@ -69,15 +69,18 @@ passed explicitly. Prefer `edit` for focused changes to an existing file.
 ```js
 { name: "edit", parameters: {
     path: string,
-    edits?: [                 // mix and match in one atomic call
+    edits: [                  // one canonical shape, mix and match in one atomic call
         { old?: string, new?: string },            // content form
         { startLine?: int, endLine?: int, new?: string },  // range form
     ],
-    old?: string, new?: string,      // legacy content form
-    startLine?: int, endLine?: int,  // legacy range form
-    all?: boolean,
+    all?: boolean,            // replace every occurrence of old
 } }
 ```
+
+`edits[]` is the **only** shape the model sees; the legacy top-level
+`old`/`new`/`startLine`/`endLine` fields were removed from the schema so the
+model has exactly one way to call `edit`. `execute` still accepts the legacy
+fields defensively (old saved transcripts, older tool scripts).
 
 **Content mode** (`old`/`new`) replaces one or more targeted strings, matched
 exactly first, then tolerant of the small differences that make edits "fail

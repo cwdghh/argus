@@ -75,6 +75,12 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
   });
   if (compacted) onEvent({ type: "compacted" });
 
+  // Guard against degenerate loops: a model that keeps requesting the same
+  // tool call never "stops generating". Refuse after the third identical
+  // (name + arguments) call so a runaway loop ends quickly instead of
+  // grinding through ARGUS_MAX_STEPS.
+  const toolCallCounts = new Map();
+
   try {
     while (true) {
       if (steps >= maxSteps) {
@@ -114,6 +120,16 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
       // Execute each requested tool call and feed the result back as a
       // `tool` message. The model does not actually run anything itself.
       for (const call of toolCalls) {
+        const repeatKey = canonicalToolCall(call);
+        const repeats = (toolCallCounts.get(repeatKey) ?? 0) + 1;
+        toolCallCounts.set(repeatKey, repeats);
+        if (repeats >= 3) {
+          throw new Error(
+            `agent stopped: the model repeated the same tool call ${repeats} times ` +
+              `(${call?.function?.name ?? "(missing name)"}); this looks like a loop — ` +
+              "refusing to keep generating"
+          );
+        }
         const { result, cwd: nextCwd } = await executeToolCall(call, {
           cwd,
           signal,
@@ -224,6 +240,18 @@ export function accumulateUsage(usage, stepUsage) {
  *
  * @returns {Promise<{ result: object, cwd: string }>}
  */
+/** Stable identity for one tool request: name + canonical (parsed) arguments. */
+export function canonicalToolCall(call) {
+  const name = call?.function?.name ?? "";
+  let args = call?.function?.arguments;
+  try {
+    args = JSON.stringify(JSON.parse(args ?? "{}"));
+  } catch {
+    args = String(args ?? "").trim();
+  }
+  return `${name}\u0000${args}`;
+}
+
 export async function executeToolCall(call, { cwd, signal, confirm, maxToolResultChars, onEvent = () => {} }) {
   const toolName = call?.function?.name ?? "";
   const rawArguments = call?.function?.arguments;

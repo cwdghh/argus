@@ -5,10 +5,24 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { findTool } from "../src/tools.mjs";
+import { findTool, tools } from "../src/tools.mjs";
 
 const read = findTool("read");
 const edit = findTool("edit");
+
+test("edit advertises a single canonical edits[] shape to the model", () => {
+  const props = edit.parameters.properties;
+  for (const legacy of ["old", "new", "startLine", "endLine"]) {
+    assert.equal(props[legacy], undefined, `legacy top-level ${legacy} is not in the schema`);
+  }
+  assert.ok(props.edits, "edits[] is the canonical shape");
+  assert.equal(edit.parameters.required[0], "path");
+  assert.deepEqual(
+    tools.map((t) => t.name),
+    ["read", "write", "edit", "bash"],
+    "the default tool set stays four focused tools",
+  );
+});
 
 function withDir(fn) {
   return async () => {

@@ -14,6 +14,27 @@ index** (`null` = follow the latest output):
 - Tests: absolute-anchor stability while appending, wheel/page/home/end
   semantics, header distance.
 
+#### 2026-08-23 — agent stops runaway tool loops; tool surface simplified
+
+**Status: ✅ done**
+
+Investigated "the model fails to stop generating" and landed three changes
+(decisions recorded in GAPS.md #12):
+
+- **Loop guard.** `runTurn` refuses a third identical tool call (same name +
+  canonical arguments), so a degenerate model loop ends with a clear error
+  instead of grinding through ARGUS_MAX_STEPS.
+- **One tool per step.** The request body now sends `parallel_tool_calls:
+  false` — sequential, audit-friendly, fewer ways for the model to keep going.
+- **`edit` simplified to one shape.** The model-visible schema exposes only
+  `edits[]` (+ `all`); the legacy top-level `old`/`new`/`startLine`/`endLine`
+  fields were removed from the schema (description and system-prompt guidance
+  now point at the single shape). `execute` still accepts the legacy fields
+  defensively.
+- Tools stay four (`read`, `write`, `edit`, `bash`) — the simplicity win was
+  *shape*, not count. Tests: repeated-call guard, `parallel_tool_calls`,
+  canonical-tool-call identity, single-shape schema.
+
 #### 2026-08-22 — auto-compact audit: cumulative summaries + 200k real-token budget
 
 **Status: ✅ done**

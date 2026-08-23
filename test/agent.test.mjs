@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createMockServer } from "./helpers/mock-llm.mjs";
-import { runTurn, executeToolCall, accumulateUsage } from "../src/agent.mjs";
+import { runTurn, executeToolCall, accumulateUsage, canonicalToolCall } from "../src/agent.mjs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -138,6 +138,38 @@ test("real last-request tokens trigger compaction before the next turn", async (
     { lastTokens: 1_000, keepTurns: 3 }
   );
   assert.ok(!ev2.includes("compacted"), "a small real context does not compact");
+});
+
+test("requests ask for exactly one tool call per step", async (t) => {
+  let seenBody = null;
+  const srv = await createMockServer((i, body) => {
+    seenBody = body;
+    return [{ content: "ok" }];
+  });
+  t.after(() => srv.close());
+  await runTurn(config(srv), [], "hi", () => {});
+  assert.equal(seenBody.parallel_tool_calls, false, "one tool per step keeps the loop tight");
+});
+
+test("canonicalToolCall normalizes argument formatting", () => {
+  const a = { function: { name: "bash", arguments: '{"command":"true"}' } };
+  const b = { function: { name: "bash", arguments: '{ "command": "true" }' } };
+  assert.equal(canonicalToolCall(a), canonicalToolCall(b), "whitespace in JSON does not defeat the guard");
+  assert.notEqual(canonicalToolCall(a), canonicalToolCall({ function: { name: "read", arguments: "{}" } }));
+});
+
+test("an identical repeated tool call stops the turn instead of looping", async (t) => {
+  // A model that keeps requesting the exact same call never "stops
+  // generating"; refuse on the third identical request.
+  const srv = await createMockServer(() => [
+    { tool_calls: [{ index: 0, id: "c1", function: { name: "bash", arguments: '{"command":"echo loop"}' } }] },
+  ]);
+  t.after(() => srv.close());
+  await assert.rejects(
+    runTurn(config(srv), [], "go", () => {}),
+    /repeated the same tool call 3 times \(bash\); this looks like a loop/,
+  );
+  assert.equal(srv.calls(), 3, "stopped on the third identical request");
 });
 
 test("persistent cwd: cd then pwd", async (t) => {

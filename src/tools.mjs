@@ -142,37 +142,31 @@ export const tools = [
   {
     name: "edit",
     description:
-      "Edit a file: replace an exact string (content mode) or an inclusive 1-indexed line " +
-      "range (range mode). Use edits[] to apply several targeted replacements to one file " +
-      "atomically, all matched against the original file (applied bottom-up, so they never " +
-      "shift each other). Content mode matches exactly first, then tolerates small " +
-      "differences: trailing whitespace, line numbers, smart quotes, unicode dashes and CRLF " +
-      "are normalised; errors if old is missing or ambiguous unless all=true. Range mode " +
-      "replaces lines [startLine, endLine] with new; set endLine = startLine - 1 to insert " +
-      "before startLine, and new='' to delete. Line numbers must come from the most recent " +
-      "read of the file.",
+      "Edit a file in one canonical shape: edits[] holds one or more targeted replacements, " +
+      "applied atomically against the original file (bottom-up, so they never shift each " +
+      "other). Each item is content form ({old, new}: exact replace, tolerant of trailing " +
+      "whitespace, line numbers, smart quotes and dashes; old must be unique unless all=true) " +
+      "or range form ({startLine, endLine, new}: replace inclusive 1-indexed lines from the " +
+      "most recent read; endLine = startLine - 1 inserts before startLine; new='' deletes). " +
+      "Use write for whole new files.",
     parameters: {
       type: "object",
       properties: {
         path: { type: "string", description: "Path of the file to edit" },
         edits: {
           type: "array",
-          description: "One or more targeted replacements, applied atomically in one call",
+          description: "One or more targeted replacements, applied atomically in one call (content and/or range form)",
           items: {
             type: "object",
             properties: {
               old: { type: "string", minLength: 1, description: "Content form: text to find (unique in the file unless all=true)" },
-              new: { type: "string", description: "Replacement text" },
+              new: { type: "string", description: "Replacement text (content or range form)" },
               startLine: { type: "integer", minimum: 1, description: "Range form: first line to replace (1-indexed, from a read)" },
               endLine: { type: "integer", minimum: 1, description: "Range form: last line to replace (default startLine; startLine-1 inserts before startLine)" },
             },
           },
         },
-        old: { type: "string", minLength: 1, description: "Legacy single-edit content form: text to find" },
-        new: { type: "string", description: "Replacement text (content or range form)" },
-        startLine: { type: "integer", minimum: 1, description: "Legacy single-edit range form: first line to replace (1-indexed, from a read)" },
-        endLine: { type: "integer", minimum: 1, description: "Legacy single-edit range form: last line to replace (default startLine; startLine-1 inserts before startLine)" },
-        all: { type: "boolean", description: "Replace every occurrence (default: false)" },
+        all: { type: "boolean", description: "Replace every occurrence of old (default: false)" },
       },
       required: ["path"],
     },
