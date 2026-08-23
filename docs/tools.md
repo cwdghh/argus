@@ -140,5 +140,6 @@ up automatically. Update this file and the tool list in `AGENTS.md`. See
 What else earns a place among the default tools — a `grep`/search or
 bounded-`ls` tool, risk declaration for the safety gate, result-shape
 conventions, naming policy, and whether the freshness guard or parallel
-execution stay loop-level state — is `GAPS.md` #12 (the tool-surface
-discussion map). `NEXT_STEPS.md` holds the ranked candidate steps.
+execution stay loop-level state — is the ongoing discussion tracked in
+`docs/tool-surface.md` (per-tool status, removal candidates, decision log;
+`GAPS.md` #12 and `NEXT_STEPS.md` point there).

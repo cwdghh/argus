@@ -16,11 +16,11 @@ gap may have been resolved since this file was last touched.
 
 ## Scheduled next: tool-design discussion
 
-**Bridge (2026-08-18):** the next session opens with a design discussion on
-**how to design reasonable tools first** — before any new-tool or
-tool-behavior work. The full agenda and open questions live in `GAPS.md` #12
-(and `docs/tools.md` points there); `PROGRESS.md` has the ⏳ planned entry.
-After the decision, land the first contract-touching features in order: the
+**Bridge (2026-08-18, reopened 2026-08-23):** the canonical tool-set
+discussion is **in progress** — per-tool status, removal candidates, and the
+decision log D1–D15 live in `docs/tool-surface.md` (`GAPS.md` #12 and
+`docs/tools.md` point there); `PROGRESS.md` has the 🚧 in-discussion entry.
+After the decisions, land the first contract-touching features in order: the
 read-before-edit freshness guard (item 2 below, the deliberately deferred
 direction) and a behavioral eval that exercises tool *choice*.
 `/session delete` (item 5) is tool-independent and can land any time.

@@ -27,7 +27,7 @@ model. The default tool set is deliberately tiny: `read`, `write`, `edit`, `bash
 | `src/transcript.mjs` | Shared transcript block folding (used by TUI + headless) |
 | `src/theme.mjs` | Colors / styling tokens |
 | `src/config.mjs` | Env-driven config |
-| `docs/` | Architecture, tool contract, self-updating guide |
+| `docs/` | Architecture, tool contract, tool-surface tracker, self-updating guide |
 | `docs/archive/` | Frozen history & executed one-time plans (read only when needed) |
 | `PROGRESS.md` | What we've done (append on real change) |
 | `GAPS.md` | Open design questions |
@@ -36,7 +36,8 @@ model. The default tool set is deliberately tiny: `read`, `write`, `edit`, `bash
 > **Agent docs (read before you work on argus itself):**
 > `docs/self-updating.md` — the contract for how argus changes argus (fact
 > ownership, the verify/record workflow, boundaries); `docs/architecture.md` —
-> how the code fits together; `docs/tools.md` — the tool contract. README is
+> how the code fits together; `docs/tools.md` — the tool contract;
+> `docs/tool-surface.md` — the canonical tool-set discussion. README is
 > the user-facing view; `PROGRESS.md`/`GAPS.md`/`NEXT_STEPS.md` are the
 > current state. See `docs/self-updating.md` for the bootstrap reading order.
 

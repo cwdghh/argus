@@ -4,6 +4,27 @@ Dated changelog, **newest first** (this file is a log — never edit entries in 
 
 ---
 
+#### 2026-08-23 — tool-surface discussion opened: status list + tracker
+
+**Status: 🚧 in discussion**
+
+Started the canonical tool-set discussion (slim the model burden, drop unused
+functionality). No tool was added or removed — the set stays `read`, `write`,
+`edit`, `bash` (test-enforced).
+
+- **`docs/tool-surface.md` (new)** is the single source of truth for the
+  discussion: per-tool status table (model-visible schema, result shape,
+  safety, usage guidance), where the "ways to use them" live (tool
+  descriptions + system prompt + loop rules), removal candidates (R1 legacy
+  top-level `edit` tolerance, R2 system-prompt duplication of tool guidance,
+  R3 `/exit`/`/quit` alias), and a decision log D1–D15.
+- **`GAPS.md` #12 slimmed** to a pointer at the new tracker (was ~70 lines of
+  retold open questions).
+- `docs/self-updating.md` and AGENTS.md now list the tracker (fact owner for
+  tool-surface discussion state).
+- Verified: full test suite green (217 tests); docs cross-references follow
+  the one-fact-one-owner rule.
+
 #### 2026-08-23 — docs consolidation: single source of truth + archive
 
 **Status: ✅ done**
