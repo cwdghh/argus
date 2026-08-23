@@ -26,12 +26,12 @@ makes a fact appear twice, one of the two mentions must become a pointer.
 | `docs/architecture.md` | How the code fits together | a module boundary moves |
 | `docs/tools.md` | The tool contract, tool by tool | any tool's name, schema, or behaviour changes |
 | `docs/self-updating.md` | This contract: how argus changes argus | the workflow itself changes |
-| `docs/refactor-plan.md` | Record of the 2026-08-17 refactor | never — frozen history |
+| `docs/archive/` | Frozen history: old `PROGRESS.md` entries, executed one-time plans | never — archived, read only when you need it |
 | `PROGRESS.md` | Dated changelog, newest first | every real change (append an entry) |
 | `GAPS.md` | Open design questions, one numbered section per gap | a question is resolved, refined, or scheduled |
 | `NEXT_STEPS.md` | Concrete candidate steps, ranked by impact | a step is taken, superseded, or added |
 
-Everything except `docs/refactor-plan.md` is a living document.
+Everything under `docs/archive/` is frozen history; everything else is a living document.
 
 ## Fact ownership
 
@@ -114,8 +114,19 @@ care as code:
   the tree and verified. ⏳ planned describes an agreement, not a promise.
 - **One job per file.** When a doc starts doing two jobs, split it — the
   same rule as for code modules.
-- **Frozen files stay frozen.** `docs/refactor-plan.md` is a record of what
-  shipped, not a plan to re-execute.
+- **Archive aggressively.** History and one-time plans are not “facts to
+  keep handy” — they are context to *not* carry. When a live doc grows past
+  roughly 400 lines, move the superseded stretch to `docs/archive/` with a
+  header naming the cutoff, preserve the words verbatim, and update every
+  pointer. `docs/archive/README.md` is the record of what lives there.
+- **Archived files stay frozen.** `docs/archive/` holds immutable history
+  (old `PROGRESS.md` entries, executed one-time plans like the 2026-08-17
+  refactor). Never edit archived content in place; a correction is a dated
+  note in the archive or `PROGRESS.md`, never a rewrite.
+- **Live docs stay small.** A live doc that grows past roughly 400 lines
+  should move its historical/superseded stretch into `docs/archive/` and
+  leave a pointer (see “Archiving” below) — an agent reads these files on
+  every session, so size is context cost.
 
 ## Self-development: when argus changes argus
 

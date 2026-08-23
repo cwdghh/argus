@@ -27,7 +27,8 @@ model. The default tool set is deliberately tiny: `read`, `write`, `edit`, `bash
 | `src/transcript.mjs` | Shared transcript block folding (used by TUI + headless) |
 | `src/theme.mjs` | Colors / styling tokens |
 | `src/config.mjs` | Env-driven config |
-| `docs/` | Architecture, tool contract, self-updating guide, refactor plan |
+| `docs/` | Architecture, tool contract, self-updating guide |
+| `docs/archive/` | Frozen history & executed one-time plans (read only when needed) |
 | `PROGRESS.md` | What we've done (append on real change) |
 | `GAPS.md` | Open design questions |
 | `NEXT_STEPS.md` | Candidate next directions, ranked by impact |

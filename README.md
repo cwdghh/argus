@@ -246,7 +246,7 @@ here is the condensed version:
 | `src/format.mjs` | Neutral value formatting (durations, tokens, result summaries) |
 | `src/main.mjs` | Entry point / CLI |
 | `package.json` | `start` / `test` scripts (loads `.env` if present) |
-| `docs/` | Architecture, tool contract, self-updating guide |
+| `docs/` | Architecture, tool contract, self-updating guide (`docs/archive/` holds history) |
 | `test/` | `node:test` suites + `helpers/mock-llm.mjs` (scripted mock LLM server) |
 | [`AGENTS.md`](AGENTS.md) | Rules for working with/updating argus — the authoritative file map |
 | [`PROGRESS.md`](PROGRESS.md) | Running log of what we've done |
