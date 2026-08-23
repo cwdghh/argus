@@ -1,3 +1,19 @@
+#### 2026-08-23 — scrolling: absolute viewport anchor while generating
+
+**Status: ✅ done**
+
+Scrolling was relative to the last transcript line, so while the model was
+generating the viewport crept toward the newest output and scrolling back
+didn't stay put. `scrollOffset` is now an **absolute first-visible-line
+index** (`null` = follow the latest output):
+
+- PgUp/PgDn/Home/End/wheel adjust the absolute index; reaching the bottom
+  resumes following; the end of a turn no longer yanks the viewport.
+- The header hint shows the true distance from the latest line (and stays
+  accurate as output grows).
+- Tests: absolute-anchor stability while appending, wheel/page/home/end
+  semantics, header distance.
+
 #### 2026-08-22 — auto-compact audit: cumulative summaries + 200k real-token budget
 
 **Status: ✅ done**

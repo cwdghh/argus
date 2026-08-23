@@ -18,7 +18,7 @@ const base = {
   cwd: "/workspace/argus",
   history: [],
   sessionName: "work",
-  scrollOffset: 0,
+  scrollOffset: null, // null = following the latest output
 };
 
 test("frames: statusText shows idle then the last turn's usage", () => {

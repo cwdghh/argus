@@ -14,8 +14,14 @@
  * Controls:
  *   Up/Down          navigate past inputs; in multiline input, move the caret
  *   PgUp/PgDn        scroll the transcript by a page
- *   Home/End         jump to top / bottom of the transcript
+ *   Home/End         jump to top / follow the bottom of the transcript
  *   mouse wheel      scroll the transcript (SGR mouse tracking)
+ *
+ * Scrolling is anchored to an absolute line index (see `scrollOffset`): the
+ * viewport only moves when the user scrolls. While the model is generating,
+ * new output grows the transcript below the anchor, so scrolling back stays
+ * stable instead of creeping toward the latest line. End (or reaching the
+ * bottom) resumes "follow the latest output" mode.
  *   Left/Right       move the editor caret
  *   Ctrl-A/E         move to start/end of input
  *   Ctrl-U/K/W       delete to start/end/previous word
@@ -79,7 +85,9 @@ export class MinimalTui {
       .filter((message) => message.role === "user" && typeof message.content === "string")
       .map((message) => message.content);
     this.mode = "idle"; // idle | working | thinking | aborting | confirm
-    this.scrollOffset = 0;
+    // Absolute index of the first visible transcript line, or null while
+    // following the latest output (see the scrolling keys in this header).
+    this.scrollOffset = null;
     this.width = process.stdout.columns || 80;
     this.height = process.stdout.rows || 24;
     this.lastFrame = [];
@@ -319,7 +327,9 @@ export class MinimalTui {
       this.activeToolStartedAt = null;
       this.activityStartedAt = null;
       this.mode = "idle";
-      this.scrollOffset = 0;
+      // Leave the scroll anchor alone: a user who scrolled back during
+      // generation keeps reading the same spot instead of being yanked to
+      // the bottom when the turn ends. The default (null) follows anyway.
       this.dirtyRendered = true;
     }
   }
@@ -365,7 +375,7 @@ export class MinimalTui {
       .filter((message) => message.role === "user" && typeof message.content === "string")
       .map((message) => message.content);
     this.editor.historyIndex = -1;
-    this.scrollOffset = 0;
+    this.scrollOffset = null;
     this.suggestion = null;
     this.refreshGitStatus();
   }
@@ -604,16 +614,25 @@ export class MinimalTui {
         this.historyDown();
         return;
       case "pageup":
-        this.scrollOffset = Math.min(this.scrollOffset + this.transcriptHeight(), this.maxScroll());
+        // "Up" = toward older content: decrease the absolute first-line index.
+        this.scrollOffset =
+          this.scrollOffset == null
+            ? Math.max(0, this.maxScroll() - this.transcriptHeight())
+            : Math.max(0, this.scrollOffset - this.transcriptHeight());
         break;
       case "pagedown":
-        this.scrollOffset = Math.max(0, this.scrollOffset - this.transcriptHeight());
+        if (this.scrollOffset != null) {
+          const max = this.maxScroll();
+          this.scrollOffset = Math.min(this.scrollOffset + this.transcriptHeight(), max);
+          // Reaching the bottom resumes following the latest output.
+          if (this.scrollOffset >= max) this.scrollOffset = null;
+        }
         break;
       case "home":
-        this.scrollOffset = this.maxScroll();
+        this.scrollOffset = 0;
         break;
       case "end":
-        this.scrollOffset = 0;
+        this.scrollOffset = null;
         break;
       case "escape":
         if (this.pendingConfirm) this.resolveConfirm(false);
@@ -628,7 +647,18 @@ export class MinimalTui {
         }
         break;
       case "wheel":
-        this.scrollOffset = Math.min(Math.max(0, this.scrollOffset + action.dir * 3), this.maxScroll());
+        if (action.dir > 0) {
+          // Wheel up: toward older content.
+          this.scrollOffset =
+            this.scrollOffset == null
+              ? Math.max(0, this.maxScroll() - 3)
+              : Math.max(0, this.scrollOffset - 3);
+        } else if (this.scrollOffset != null) {
+          // Wheel down: toward the bottom; reaching it resumes following.
+          const max = this.maxScroll();
+          this.scrollOffset = Math.min(this.scrollOffset + 3, max);
+          if (this.scrollOffset >= max) this.scrollOffset = null;
+        }
         break;
       default:
         return;

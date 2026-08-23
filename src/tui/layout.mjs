@@ -36,8 +36,19 @@ export function buildFrame(state) {
 
   const lines = state.transcriptLines();
   const transcriptHeight = Math.max(1, height - 4 - (editorHeight - 1));
-  state.scrollOffset = Math.min(state.scrollOffset, Math.max(0, lines.length - transcriptHeight));
-  const start = Math.max(0, lines.length - transcriptHeight - state.scrollOffset);
+  const maxStart = Math.max(0, lines.length - transcriptHeight);
+  // scrollOffset is an absolute first-visible-line index, or null while
+  // following the latest output (the default, so generation stays in view).
+  // Absolute positions never shift when the transcript grows; only clamping
+  // can move the viewport, and reaching the bottom resumes following.
+  if (state.scrollOffset != null) {
+    if (state.scrollOffset >= maxStart) {
+      state.scrollOffset = null;
+    } else {
+      state.scrollOffset = Math.max(0, Math.min(state.scrollOffset, maxStart));
+    }
+  }
+  const start = state.scrollOffset == null ? maxStart : state.scrollOffset;
   for (let r = 0; r < transcriptHeight; r++) {
     rows[1 + r] = lines[start + r] ?? "";
   }

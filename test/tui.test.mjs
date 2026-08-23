@@ -114,14 +114,17 @@ test("before any request, the footer shows no made-up context but keeps the uppe
 test("header makes transcript scroll state visible", () => {
   const t = new MinimalTui({ model: "m" }, { sessionName: "work" });
   t.width = 60;
-  t.scrollOffset = 12;
+  t.height = 10;
+  for (let i = 0; i < 20; i++) t.pushBlock({ kind: "assistant", text: `line ${i}` });
+  t.scrollOffset = 12; // absolute first-visible transcript line
   const header = strip(t.header());
   assert.ok(header.includes("work"));
-  assert.ok(header.includes("12 from latest") && header.includes("End"));
+  // 20 lines, viewport 6 → line 12 is 20 - 6 - 12 = 2 lines from the latest.
+  assert.ok(header.includes("2 from latest") && header.includes("End"));
   assert.ok(header.length <= 60);
   t.width = 22;
   const narrow = strip(t.header());
-  assert.ok(narrow.includes("↑12") && narrow.includes("End"), "narrow headers should still expose scroll state");
+  assert.ok(narrow.includes("↑2") && narrow.includes("End"), "narrow headers should still expose scroll state");
   assert.ok(narrow.length <= 22);
 });
 
@@ -152,11 +155,30 @@ test("scrolling: wheel up/down + clamp", () => {
   t.width = 40;
   t.height = 10;
   for (let i = 0; i < 30; i++) t.pushBlock({ kind: "assistant", text: `line ${i}` });
+  assert.equal(t.scrollOffset, null, "starts following the latest output");
   t.runAction({ type: "wheel", dir: 1 });
-  assert.ok(t.scrollOffset > 0);
+  assert.ok(t.scrollOffset > 0, "wheel up anchors an absolute line index");
   t.runAction({ type: "wheel", dir: -1 });
   t.runAction({ type: "wheel", dir: -1 });
+  assert.equal(t.scrollOffset, null, "reaching the bottom resumes following");
+});
+
+test("scrolling: the viewport anchor is absolute, so new output doesn't move it", () => {
+  const t = new MinimalTui({ model: "m" });
+  t.width = 40;
+  t.height = 10;
+  for (let i = 0; i < 10; i++) t.pushBlock({ kind: "assistant", text: `line ${i}` });
+  t.runAction({ type: "home" }); // absolute top: first visible line is 0
   assert.equal(t.scrollOffset, 0);
+  const first = (rows) => rows.slice(1, 1 + t.transcriptHeight()).find((r) => r.length > 0);
+  const before = first(t.buildFrame());
+  // Simulate generation appending output below the anchor.
+  for (let i = 10; i < 22; i++) t.pushBlock({ kind: "assistant", text: `line ${i}` });
+  const after = first(t.buildFrame());
+  assert.equal(after, before, "the top visible line stays put while output grows below");
+  // Reaching the end again follows the latest line.
+  t.runAction({ type: "end" });
+  assert.equal(t.scrollOffset, null);
 });
 
 test("local slash commands do not enter model history", async () => {

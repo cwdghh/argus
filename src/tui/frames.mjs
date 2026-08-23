@@ -149,7 +149,9 @@ export function footerText(s) {
 /** The one-row header: brand + session name, plus a scroll-away hint. */
 export function headerText(s) {
   const left = `argus  ·  ${s.sessionName ?? "session"}`;
-  if (s.scrollOffset === 0) {
+  // scrollOffset is the absolute first-visible transcript line, or null while
+  // following the latest output; the hint shows how far from the end we are.
+  if (s.scrollOffset == null) {
     if (dispWidth(left) > s.width) {
       return styleText(truncateMiddle(left, s.width), { fg: theme.accent, bold: true });
     }
@@ -158,8 +160,12 @@ export function headerText(s) {
       styleText(`  ·  ${s.sessionName ?? "session"}`, { fg: theme.dim })
     );
   }
-  const longRight = `↑ ${s.scrollOffset} from latest · End`;
-  const shortRight = `↑${s.scrollOffset} · End`;
+  const fromLatest =
+    typeof s.transcriptLines === "function" && typeof s.transcriptHeight === "function"
+      ? Math.max(0, Math.max(0, s.transcriptLines().length - s.transcriptHeight()) - s.scrollOffset)
+      : s.scrollOffset;
+  const longRight = `↑ ${fromLatest} from latest · End`;
+  const shortRight = `↑${fromLatest} · End`;
   const right = dispWidth(longRight) + 10 <= s.width ? longRight : shortRight;
   const leftBudget = s.width - dispWidth(right) - 2;
   if (leftBudget < 5) return styleText(truncateEnd(right, s.width), { fg: theme.accent, bold: true });
