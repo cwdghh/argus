@@ -109,7 +109,10 @@ layout: header, scrollable transcript, a bottom **editor**, and a **footer**.
   recent request, Y is the current upper limit argus enforces — a 200k
   real-token compaction budget (`ARGUS_COMPACT_TOKENS`) — and Z% their ratio.
   Before any request has reported usage, X shows `—` instead of a made-up
-  number (so a fresh session never shows a stray `2 / 300.0K`).
+  number (so a fresh session never shows a stray `2 / 300.0K`); once a request
+  has reported usage, X keeps showing the last-known real context even while
+  the next response is streaming (the live number replaces it as soon as the
+  provider reports it).
 - **Auto light/dark theme** (detected via OSC 11; falls back to light).
 - **Scrollable history**: mouse wheel to scroll; PgUp/PgDn (pages), Home/End
   (top/bottom). The header shows when you are away from the latest output.

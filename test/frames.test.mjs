@@ -57,6 +57,23 @@ test("frames: before any request, the context meter shows an em dash against the
   assert.ok(f.includes("— / 200.0K (0%)"), "no made-up context, but the upper limit stays visible");
 });
 
+test("frames: while working the meter keeps the last-known real context", () => {
+  // The provider reports usage only at the end of a streamed response, so a
+  // working turn's `turnUsage` is null until then. The meter must not flicker
+  // to an em dash for the whole response — it keeps the last request's real
+  // context until the live number arrives.
+  const f = strip(
+    footerText({
+      ...base,
+      mode: "working",
+      activityStartedAt: 3000,
+      lastTurnUsage: { prompt_tokens: 1100, completion_tokens: 140, total_tokens: 1240 },
+    })
+  );
+  assert.ok(f.includes("1.1K / 200.0K"), "last-known context stays visible while responding");
+  assert.ok(!f.includes("— /"), "no em-dash flicker mid-turn");
+});
+
 test("frames: footer collapses cleanly on a narrow terminal", () => {
   const f = strip(footerText({ ...base, width: 30, cwd: "/a/very/long/path" }));
   assert.ok(f.length <= 30, `footer within 30 cols: ${f}`);

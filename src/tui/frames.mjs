@@ -38,14 +38,17 @@ export function statusText(s) {
 
 /**
  * Real, provider-reported prompt tokens of the most recent model request —
- * the actual context the model saw, never an estimate. Prefers the live
- * turn's usage while working; while idle it falls back to the last completed
- * turn's usage, which is persisted with the turn and therefore survives a
- * resume. Returns null when no request has reported usage yet (e.g. a fresh
- * session), so the meter can show "— / budget" instead of a made-up number.
+ * the actual context the model saw, never an estimate. Shows the live turn's
+ * usage once the first request of the turn reports it; before that — and while
+ * idle — it keeps showing the last completed turn's usage, which is persisted
+ * with the turn and therefore survives a resume. The provider only reports
+ * usage at the end of a streamed response, so without this fallback the meter
+ * would flicker to an em dash for the whole time the model is responding.
+ * Returns null only when no request has ever reported usage (a fresh session),
+ * so the meter can show "— / budget" instead of a made-up number.
  */
 export function contextTokens(s) {
-  const usage = s.turnUsage != null ? s.turnUsage : s.mode === "idle" ? s.lastTurnUsage : null;
+  const usage = s.turnUsage != null ? s.turnUsage : s.lastTurnUsage;
   if (!usage || !Number.isFinite(usage.prompt_tokens)) return null;
   return usage.prompt_tokens;
 }
@@ -54,7 +57,8 @@ export function contextTokens(s) {
  * The context meter shared by the footer and `/status` — `X / Y (Z%)`:
  *
  *   - tokens = the real, provider-reported prompt tokens of the most recent
- *              request (null until one has reported usage);
+ *              request (null only until any request in the session has
+ *              reported usage — the meter then shows "— / budget");
  *   - budget = the real-token compaction budget — the upper limit argus
  *              actually enforces (`ARGUS_COMPACT_TOKENS`, default 200k);
  *   - ratio  = tokens / budget as a clamped percentage.
@@ -70,8 +74,9 @@ export function contextUsage(s) {
  * The full footer line: status + token usage on the left, then a right-aligned
  * meta area (git status, model, context-window usage, working directory).
  * The context meter is `X / Y (Z%)` — X is the real, provider-reported
- * prompt-token count of the most recent request, Y is the token-equivalent
- * compaction budget (the upper limit argus enforces), and Z% is their ratio.
+ * prompt-token count of the most recent request (the last-known one while a
+ * new response is streaming), Y is the compaction budget — the upper limit
+ * argus enforces — and Z% is their ratio.
  * Lower-priority details (context, model) are dropped first on narrow
  * terminals; if even git won't fit, the working directory is shown alone.
  */
