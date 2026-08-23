@@ -83,6 +83,154 @@ discussion:
 Which of these do we actually want to enforce, and how do we measure them
 (e.g. a behavioral eval that exercises tool *choice*)? → D6, D14.
 
+## Draft proposal (2026-08-23 — awaiting your review)
+
+**Recommended set: `read`, `write`, `edit`, `bash` — unchanged names, no
+additions.** Anything that looks like a new tool either duplicates one of
+these or belongs at the loop level. Four principles shape the schemas:
+
+1. **One canonical shape per tool** — no legacy fields, no aliases (D5, D10).
+2. **Fewest parameters that cover real use.** Every optional knob is surface
+   the model pays for on *every* request; extra knobs are the "heavy burden"
+   we are removing (D7).
+3. **`error: true` is the failure signal.** Success returns the natural
+   payload — no mandatory `ok` flag on read/bash (it would be pure overhead);
+   mutating tools (write/edit) keep `ok: true`. Bounded results follow the
+   `read` pattern: a truncation flag, the continuation handle, and a
+   human-readable "how to continue" note (D9).
+4. **Tool descriptions are the single source of usage guidance.** The system
+   prompt stops retelling them (D13).
+
+### read — risk: read-only
+
+```js
+{
+  name: "read",
+  description: "Read a file and return its text with every line prefixed by its absolute 1-indexed line number — copy those numbers for edit's startLine/endLine. Output is bounded at 2000 lines or 50KB; pass offset/limit to page through large files. Paths are relative to the working directory.",
+  parameters: {
+    type: "object",
+    properties: {
+      path:   { type: "string", description: "File to read" },
+      offset: { type: "integer", minimum: 1, description: "1-indexed first line to return (default: 1)" },
+      limit:  { type: "integer", minimum: 1, description: "Maximum lines to return (default: up to the 2000-line / 50KB bound)" },
+    },
+    required: ["path"],
+  },
+}
+```
+
+Result: `{ path, content }` — numbered lines, bounded at 2000 lines / 50KB;
+`{ path, content, truncated: true, nextOffset: N }` plus a `[..Use offset=N to
+continue.]` note when cut short; `{ error: true, path, message }` on failure.
+(No schema change — read already models the result-shape contract.)
+
+### write — risk: mutating
+
+```js
+{
+  name: "write",
+  description: "Create a new file with the given content. Refuses to overwrite an existing file unless overwrite=true; use edit for precise changes to existing files.",
+  parameters: {
+    type: "object",
+    properties: {
+      path:      { type: "string", description: "Path of the file to create" },
+      content:   { type: "string", description: "Full text content to write" },
+      overwrite: { type: "boolean", description: "Allow replacing an existing file (default: false)" },
+    },
+    required: ["path", "content"],
+  },
+}
+```
+
+Result: `{ ok: true, path, bytes }`; `{ error: true, message }` when the file
+exists (with the overwrite hint). (No change from today.)
+
+### edit — risk: mutating (canonical, legacy removed)
+
+```js
+{
+  name: "edit",
+  description: "Apply one or more targeted replacements to an existing file in a single atomic call. edits[] mixes content mode ({old, new}: exact replace, tolerant of trailing whitespace and unicode punctuation; old must be unique unless all=true) and range mode ({startLine, endLine, new}: replace inclusive 1-indexed lines copied from a read; endLine = startLine - 1 inserts before startLine; new = '' deletes).",
+  parameters: {
+    type: "object",
+    properties: {
+      path: { type: "string", description: "File to edit" },
+      edits: {
+        type: "array",
+        description: "Targeted replacements, applied atomically bottom-up in one call",
+        items: {
+          type: "object",
+          properties: {
+            old:       { type: "string", minLength: 1, description: "Content mode: text to replace (must be unique unless all=true)" },
+            new:       { type: "string", description: "Replacement text (content or range mode)" },
+            startLine: { type: "integer", minimum: 1, description: "Range mode: first line to replace (1-indexed, from a read)" },
+            endLine:   { type: "integer", minimum: 1, description: "Range mode: last line (default startLine; startLine-1 inserts before startLine)" },
+          },
+        },
+      },
+      all: { type: "boolean", description: "Replace every occurrence of old (default: false)" },
+    },
+    required: ["path"],
+  },
+}
+```
+
+Result: `{ ok: true, path, replacements }` (+ `fuzzy: true` on a relaxed
+match); `{ error: true, path, message }` with an actionable message.
+
+**Proposed change (R1/D5):** delete the legacy top-level
+`old`/`new`/`startLine`/`endLine` tolerance in `execute` and the
+"edit legacy old/new still works" test — the schema is the only entry point.
+
+### bash — risk: shell (destructive-pattern gate stays as backstop)
+
+```js
+{
+  name: "bash",
+  description: "Run a shell command and return its stdout and stderr. The working directory persists across calls (cd is remembered). Destructive commands (recursive rm, dd, mkfs, shutdown, ...) require approval. 60s timeout.",
+  parameters: {
+    type: "object",
+    properties: {
+      command: { type: "string", description: "The shell command to run" },
+    },
+    required: ["command"],
+  },
+}
+```
+
+Result: `{ stdout, stderr, cwd }`; `{ error: true, stdout, stderr, message,
+cwd }` on non-zero exit; `{ error: true, aborted: true, message }` on timeout.
+(No change.)
+
+### Registry-level (model-invisible) change — risk declaration (D8)
+
+Add per-tool `risk: "read-only" | "mutating" | "shell"` in the registry only
+(not in the model-visible schema). The safety gate (GAPS #2) can then route on
+declared risk instead of pattern-matching shell text; `bash` keeps the
+destructive-pattern gate as the backstop regardless.
+
+### Evaluated, not recommended now
+
+| Candidate | Verdict | Why |
+|-----------|---------|-----|
+| `grep` / `search` | ⏸ not now | `bash` covers it; a structured tool can't beat the current result cap without evidence. Revisit after the tool-choice eval (D14) if bash-grep causes measurable errors. |
+| `ls` / `glob` / `find` | ⏸ not now | Listing via `bash` is bounded by the result cap; too little value to add schema to every request. |
+| `patch` (unified diff) | ✖ no | `edit` already covers precise changes; a second editing tool doubles the surface. |
+| `ask` (model → user) | ⏸ separate feature | Genuinely useful, but it is human-in-the-loop work tied to interrupt/continue (`docs/interrupt-resume.md`), not this tool-surface round. |
+| parallel tool calls | ⏸ loop-level | Keep `parallel_tool_calls: false`; parallelism is D11, a loop concern, not a schema concern. |
+
+### Decisions this proposal answers (draft status — not yet decided)
+
+- **D5** — remove legacy top-level `edit` tolerance + its test: **proposed yes**.
+- **D6** — new search/listing tools: **proposed no** (keep four; revisit after D14 evidence).
+- **D7** — schema validation stays the minimal subset; no `enum`/`pattern`/`maxLength` beyond what exists today.
+- **D8** — per-tool risk declaration: **proposed yes** (registry-only, model-invisible).
+- **D9** — result shape: **proposed** — `error: true` is the failure signal; `read`-style truncation + continue note is the standard for bounded results; no `ok` flag on read/bash, keep it on write/edit.
+- **D10** — naming: **proposed keep** `read`/`write`/`edit`/`bash` (most familiar to models; renaming is churn with no payoff).
+- **D11** — freshness guard stays loop-level (a "re-read first" refusal error when it lands); no schema change.
+- **D12** — model-visible metadata (size/timeout hints): **proposed no** for now — every hint adds tokens; the bounded-result contract already protects context.
+- **D13** — de-duplicate system prompt: **proposed yes** (tighter prompt; all tool usage lives in descriptions).
+
 ## Decision log
 
 | # | Question | Status |
