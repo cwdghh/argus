@@ -15,7 +15,9 @@ the contract that makes that work.
 
 argus's docs form a closed, cross-referenced system. Each file has exactly
 one job; when behaviour changes, the doc that owns that job changes in the
-same commit.
+same commit. **Each fact has exactly one owning file** (see "Fact ownership"
+below); every other mention is a *pointer*, never a retelling — if a change
+makes a fact appear twice, one of the two mentions must become a pointer.
 
 | File | Job | Update when… |
 |------|-----|--------------|
@@ -30,6 +32,40 @@ same commit.
 | `NEXT_STEPS.md` | Concrete candidate steps, ranked by impact | a step is taken, superseded, or added |
 
 Everything except `docs/refactor-plan.md` is a living document.
+
+## Fact ownership
+
+One fact, one owner. Decide *which file owns a fact* from this table, then
+write it there and point everywhere else. If you catch a fact living in two
+places (a status retold in two files, a default spelled out twice), keep the
+owner's copy and turn the other mention into a pointer.
+
+| Fact | Owner | Pointers live in |
+|------|-------|------------------|
+| The one rule | `AGENTS.md` | restated nowhere — referenced from `docs/self-updating.md` |
+| Module list / file map | `AGENTS.md` | `README.md` links to it |
+| Env var defaults | `.env.example` (values + prose) and `src/config.mjs` (code) | README config table (short), `docs/architecture.md` when relevant |
+| Tool contract (name/schema/behaviour) | `docs/tools.md` | tool list in `AGENTS.md` is a pointer |
+| How the code fits together | `docs/architecture.md` | referenced everywhere, retold nowhere |
+| User-facing story | `README.md` | — |
+| History (dates, what shipped) | `PROGRESS.md` | GAPS status blocks **point at** PROGRESS dates, short |
+| Current design state (resolved / open) | `GAPS.md` | `NEXT_STEPS.md` points at gap numbers, short |
+| Next actions, ranked | `NEXT_STEPS.md` | — |
+| The self-updating workflow | `docs/self-updating.md` | — |
+
+## Reading order at bootstrap
+
+A fresh session reads before touching anything:
+
+1. `AGENTS.md` — rules and file map
+2. `docs/self-updating.md` — the contract (this file)
+3. `docs/architecture.md` — how the code fits together
+4. `docs/tools.md` — the tool contract
+
+Then consult by topic: `GAPS.md` for current design state, `NEXT_STEPS.md` for
+what to do next, `PROGRESS.md` for what already happened (newest first),
+README for the user view, `docs/*` for specifics (e.g. `docs/interrupt-resume.md`
+for the interrupt→continue design).
 
 ## The one rule (restated)
 

@@ -134,10 +134,8 @@ up automatically. Update this file and the tool list in `AGENTS.md`. See
 
 ## Open design questions
 
-The exact shape of the tool surface is an open discussion — scheduled as the
-next session's opener (2026-08-18); the full agenda is `GAPS.md` #12. In
-short: what *earns* a tool a place among the default four, whether tools
-should declare a risk level so the safety gate can route on it, result-shape
-conventions (error shape, truncation notice, "how to continue" guidance), and
-whether the read-before-edit freshness guard or parallel execution change this
-contract or stay loop-level state.
+What else earns a place among the default tools — a `grep`/search or
+bounded-`ls` tool, risk declaration for the safety gate, result-shape
+conventions, naming policy, and whether the freshness guard or parallel
+execution stay loop-level state — is `GAPS.md` #12 (the tool-surface
+discussion map). `NEXT_STEPS.md` holds the ranked candidate steps.

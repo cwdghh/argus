@@ -228,7 +228,9 @@ Headless runs against a session honor the same override.
 
 ## What it teaches
 
-The whole agent lives in a few focused modules:
+The whole agent lives in a few focused modules. The authoritative file map
+(with the TUI widget list, session package, and doc roles) is `AGENTS.md`;
+here is the condensed version:
 
 | File | What it does |
 |------|--------------|
@@ -246,10 +248,10 @@ The whole agent lives in a few focused modules:
 | `package.json` | `start` / `test` scripts (loads `.env` if present) |
 | `docs/` | Architecture, tool contract, self-updating guide |
 | `test/` | `node:test` suites + `helpers/mock-llm.mjs` (scripted mock LLM server) |
-| `AGENTS.md` | Rules for working with/updating argus |
-| `PROGRESS.md` | Running log of what we've done |
-| `GAPS.md` | Open design questions & where argus stays simple |
-| `NEXT_STEPS.md` | Candidate next directions (planning reference) |
+| [`AGENTS.md`](AGENTS.md) | Rules for working with/updating argus — the authoritative file map |
+| [`PROGRESS.md`](PROGRESS.md) | Running log of what we've done |
+| [`GAPS.md`](GAPS.md) | Open design questions & where argus stays simple |
+| [`NEXT_STEPS.md`](NEXT_STEPS.md) | Candidate next directions (planning reference) |
 
 ### The core loop (`src/agent.mjs`)
 

@@ -30,6 +30,14 @@ model. The default tool set is deliberately tiny: `read`, `write`, `edit`, `bash
 | `docs/` | Architecture, tool contract, self-updating guide, refactor plan |
 | `PROGRESS.md` | What we've done (append on real change) |
 | `GAPS.md` | Open design questions |
+| `NEXT_STEPS.md` | Candidate next directions, ranked by impact |
+
+> **Agent docs (read before you work on argus itself):**
+> `docs/self-updating.md` — the contract for how argus changes argus (fact
+> ownership, the verify/record workflow, boundaries); `docs/architecture.md` —
+> how the code fits together; `docs/tools.md` — the tool contract. README is
+> the user-facing view; `PROGRESS.md`/`GAPS.md`/`NEXT_STEPS.md` are the
+> current state. See `docs/self-updating.md` for the bootstrap reading order.
 
 ## The one rule
 
@@ -40,6 +48,20 @@ constraints stay: the default tool set stays minimal (`read`, `write`, `edit`,
 `bash`), and the runtime stays dependency-free. If a change adds a tool, a
 dependency, or a new concept, the docs that describe it must be updated in the
 same change. See `docs/self-updating.md` for the workflow.
+
+## PREREQUISITES
+
+- **One fact, one owner.** `docs/self-updating.md` keeps the fact-ownership
+  table: history lives in `PROGRESS.md` (pointers only elsewhere), current
+  design state lives in `GAPS.md`, next actions in `NEXT_STEPS.md`, tool
+  contract in `docs/tools.md`, defaults in `.env.example`. A fact that appears
+  in two files at once is a bug — turn the duplicate into a pointer.
+- **Never edit `PROGRESS.md` in place.** Append dated entries, newest first;
+  add a dated correction note if one turns out wrong. An argus that rewrites
+  its own history can't be trusted to review its own work.
+- **The human reviews and commits.** Verification actually runs in this
+  session is listed in the PROGRESS entry; claims beyond that are wishes, not
+  statuses. See `docs/self-updating.md`.
 
 ## How to run
 

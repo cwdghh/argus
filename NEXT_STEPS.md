@@ -6,43 +6,24 @@ direction fits the current goals.
 
 See `GAPS.md` for the broader design territory and open questions.
 
-> **Recently completed (2026-08-17, details in `PROGRESS.md`):** bounded
-> numbered reads (2000 lines / 50KB, `offset`/`limit` paging), exact→fuzzy
-> edits with atomic `edits[]` batches, line-range edit mode for whole-block
-> rewrites/inserts, markdown table rendering with CJK/emoji-aware widths,
-> relaxed timeouts for long-reasoning models, a global `~/.argus/.env`
-> config file (process env > project `.env` > home `.env` > defaults), and
-> session naming: `/name <name>` rename, `/new <name>` at creation, and
-> `/resume` name completion. Default startup also resumes the newest session
-> for the current folder (falling back to a fresh session) instead of the
-> global latest. Item 2 below (read-before-edit freshness) is the main
-> direction that work deliberately deferred.
+## Where history lives
 
-## Scheduled next: tool-design discussion (opens the next session)
+PROGRESS.md is the running changelog (newest first). This file only holds
+*what's left to do*, ranked; a step that ships moves to PROGRESS.md as ✅
+done and is removed here (or kept as a pointer to a related idea). The Gap
+sections below point at GAPS.md numbers; check GAPS.md first — a numbered
+gap may have been resolved since this file was last touched.
 
-**Bridge (2026-08-18):** the next session starts with a design discussion on
+## Scheduled next: tool-design discussion
+
+**Bridge (2026-08-18):** the next session opens with a design discussion on
 **how to design reasonable tools first** — before any new-tool or
-tool-behavior work. The agenda and open questions live in `GAPS.md` #12 (and
-`docs/tools.md` now points there); `PROGRESS.md` has the ⏳ planned entry.
-
-Refinement suggestions recorded for that discussion:
-
-- **Set the bar for the default set** — what earns a tool a place?
-  (a) reduces model error, (b) saves context tokens vs `bash`, (c) enables
-  something `bash` can't do safely, (d) improves auditability.
-- **Evaluate concrete candidates against the bar** — a `grep`/search tool
-  (structured line-numbered results), a bounded `ls` listing tool — or keep
-  the four tools and let `bash` cover the rest.
-- **Risk declaration** — should each tool declare read-only/mutating/
-  destructive so the safety gate routes on declared risk instead of
-  pattern-matching shell text?
-- **Standardize result shape** — error convention, truncation notice, and
-  "how to continue" guidance (`read` already models this).
-- **After the decision**, land the first contract-touching features in order:
-  the read-before-edit freshness guard (item 2 below, the deliberately
-  deferred direction) and a behavioral eval that exercises tool *choice*.
-  `/session delete` (item 4) is tool-independent and can land any time.
-
+tool-behavior work. The full agenda and open questions live in `GAPS.md` #12
+(and `docs/tools.md` points there); `PROGRESS.md` has the ⏳ planned entry.
+After the decision, land the first contract-touching features in order: the
+read-before-edit freshness guard (item 2 below, the deliberately deferred
+direction) and a behavioral eval that exercises tool *choice*.
+`/session delete` (item 5) is tool-independent and can land any time.
 ---
 
 ## High impact, moderate complexity
@@ -97,9 +78,7 @@ Refinement suggestions recorded for that discussion:
 
 ### 4. Session deletion
 
-- **What:** `/session delete <name>` for housekeeping. Naming is already
-  done: `/name <name>` renames the current session, `/new <name>` names a
-  session at creation, and `/resume` completes saved-session names.
+- **What:** `/session delete <name>` for housekeeping.
 - **Why:** `/sessions` already lists sessions, but there's no way to clean
   up old ones without manually deleting files.
 - **Considerations:**
