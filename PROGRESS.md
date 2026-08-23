@@ -4,6 +4,21 @@ Dated changelog, **newest first** (this file is a log — never edit entries in 
 
 ---
 
+#### 2026-08-24 — tool-surface discussion brief for fresh-session continuity
+
+**Status: 🚧 in discussion**
+
+Wrote the canonical tool-set discussion down end-to-end in
+`docs/tool-surface.md` so it can resume in a new session with fresh context:
+
+- Retitled to a **discussion brief**; added a `Background` section (goals,
+  timeline, commits `885e43a`/`3def44c`, prior decisions D1–D4) and a
+  `Next session — where we left off` section with the approval checklist
+  (4-tool set; D5/D8/D9/D13; confirm D6/D7/D10/D11/D12) plus a reading
+  order.
+- The draft proposal (schemas for `read`/`write`/`edit`/`bash`) is unchanged
+  and still awaiting user review; nothing beyond D1–D4 is decided.
+
 #### 2026-08-23 — tool-surface discussion opened: status list + tracker
 
 **Status: 🚧 in discussion**

@@ -1,6 +1,6 @@
-# Tool surface — canonical tool set & usage (discussion tracker)
+# Tool surface — canonical tool set & usage (discussion brief)
 
-**Status: in discussion (2026-08-23).** This file is the single source of
+**Status: in discussion (2026-08-24).** This file is the single source of
 truth for the ongoing decision about *which* tools argus exposes to the model
 and *how the model is told to use them*. A decision is recorded in the
 decision log below **before** any code changes; once a row is `decided`, the
@@ -10,6 +10,12 @@ Owner: this file. Pointers: `GAPS.md` #12, `NEXT_STEPS.md` #1, `docs/tools.md`
 (`docs/tools.md` is the contract — *what the code does today*; this file is
 *what we are deciding*).
 
+**Fresh-session start here:** read this file top to bottom, then `docs/tools.md`
+(the current contract) and `src/tools.mjs` (schemas + execute). The immediate
+open thread — the approval checklist — is `Next session — where we left off`
+at the bottom; the `Draft proposal` above it is what that checklist walks
+through.
+
 ## How to use this tracker
 
 - Every unresolved question is a row in the decision log (`D#`), status `open`.
@@ -18,6 +24,30 @@ Owner: this file. Pointers: `GAPS.md` #12, `NEXT_STEPS.md` #1, `docs/tools.md`
 - Don't retell answers here in `GAPS.md` or anywhere else — point at the row.
 - This file is a live doc: keep it under ~400 lines; move superseded stretches
   to `docs/archive/` when it grows (see `docs/self-updating.md`).
+
+## Background — how this discussion started
+
+The goal is a canonical, minimal tool surface: **which tools argus exposes,
+and how the model is told to use them** — so we can (a) delete functionality
+the model never uses, (b) minimize the per-request prompt burden ("heavy
+burden to the models"), and (c) keep tools simple enough that degenerate loops
+are easy to stop. The user discussed this with argus on 2026-08-23; this file
+records the whole discussion so a new session with fresh context can continue
+it without re-deriving context.
+
+Timeline:
+- **2026-08-23 (commits `885e43a`, `3def44c`):** status audit of the 4-tool
+  set + this tracker; then the first concrete proposal — schemas for `read`,
+  `write`, `edit`, `bash`, removal candidates, and a decision-log mapping
+  D5–D13. Both commits are pushed to `origin/main`.
+- **2026-08-24 (this write-up):** the discussion is written down end-to-end so
+  it can resume in a fresh session. **Nothing beyond D1–D4 is decided yet; the
+  proposal is awaiting user review.**
+
+Prior decisions that shape this discussion (D1–D4, already decided — details
+in `PROGRESS.md`, 2026-08-23): the set stays exactly four tools; one tool per
+model step (`parallel_tool_calls: false`); the loop stops after 3 identical
+tool calls; `edit` exposes only the canonical `edits[]` shape.
 
 ## Current state (snapshot 2026-08-23)
 
@@ -250,6 +280,29 @@ destructive-pattern gate as the backstop regardless.
 | D13 | De-duplicate the system prompt (drop retold tool guidance)? | **open** — removal candidate R2; low-risk token win. |
 | D14 | Add a behavioral eval that exercises tool *choice*? | **open** — protects the `edit` contract and measures how the contract reads to real models. |
 | D15 | Collapse the `/exit` and `/quit` alias? | **open** — adjacent, user-facing only; low priority. |
+
+## Next session — where we left off (pending approvals)
+
+Nothing is decided beyond D1–D4. The first move in the next session:
+
+1. Walk the **Draft proposal** above with the user, item by item.
+2. Flip the matching decision-log rows to `decided` (date + one-line
+   rationale) only when the user agrees, then implement with tests + docs in
+   the same change.
+3. The explicit approvals the user still owes:
+
+| # | Proposal | Awaiting |
+|---|----------|----------|
+| — | Keep the 4-tool set (`read`/`write`/`edit`/`bash`), no additions | approve / revise |
+| D5 | Delete the legacy top-level `edit` tolerance + its test | yes / no |
+| D8 | Registry-only `risk` declaration per tool (model-invisible) | yes / no |
+| D9 | Result convention: `error: true` = failure; no `ok` flag on read/bash; `read`-style truncation notes | yes / no / amend |
+| D13 | Shrink the system prompt (~110 → ~25 words; tool usage lives in descriptions) | yes / no |
+| D6, D7, D10, D11, D12 | Proposal answers (no new search tools; minimal validation; keep names; freshness guard is loop-level; no model-visible metadata) | confirm / revisit |
+
+4. After the surface is decided, the next contract-touching features in order:
+   read-before-edit freshness guard (NEXT_STEPS #2), behavioral eval for tool
+   choice (D14). `/session delete` can land any time (NEXT_STEPS #5).
 
 ## Standing notes
 
