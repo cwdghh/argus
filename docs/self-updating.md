@@ -25,6 +25,7 @@ makes a fact appear twice, one of the two mentions must become a pointer.
 | `README.md` | The user-facing story: run, configure, use | a user-visible capability changes |
 | `docs/architecture.md` | How the code fits together | a module boundary moves |
 | `docs/tools.md` | The tool contract, tool by tool | any tool's name, schema, or behaviour changes |
+| `docs/debug-tool-failures.md` | How to find tool failures in saved session transcripts | the session or failure shape changes |
 | `docs/self-updating.md` | This contract: how argus changes argus | the workflow itself changes |
 | `docs/archive/` | Frozen history: old `PROGRESS.md` entries, executed one-time plans | never — archived, read only when you need it |
 | `PROGRESS.md` | Dated changelog, newest first | every real change (append an entry) |

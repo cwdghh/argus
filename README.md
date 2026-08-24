@@ -195,6 +195,10 @@ Set `ARGUS_SESSION_KEEP` to a positive number to prune everything but the
 newest sessions on startup — the session you are opening is always preserved.
 `0` (the default) keeps everything.
 
+Failed and interrupted turns are saved like any other, so you can analyze tool
+failures after the fact directly from the JSONL transcripts — see
+[`docs/debug-tool-failures.md`](docs/debug-tool-failures.md).
+
 Session directories are created with owner-only permissions and transcript
 files with owner read/write permissions on platforms that support POSIX modes.
 Use `/delete <name>` for confirmed cleanup; the active session is protected and

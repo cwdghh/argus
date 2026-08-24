@@ -4,6 +4,25 @@ Dated changelog, **newest first** (this file is a log — never edit entries in 
 
 ---
 
+#### 2026-08-24 — doc: how to find tool failures in saved sessions
+
+**Status: ✅ done**
+
+- Added `docs/debug-tool-failures.md` — the exact session-file locations for
+  failed tool results, a set of dependency-free `grep`/pipe queries that
+  enumerate and group failures by tool and message, how to distinguish real
+  tool failures from `bash` non-zero exits / read errors / turn-level errors,
+  and how a full failure turn is reconstructable from the JSONL. It also
+  records *why* no separate failure log is needed (every outcome is already
+  persisted, and `eval/tool-choice.mjs` covers controlled traces).
+- Linked it from `AGENTS.md` (file map + agent-docs list), `README.md`
+  (sessions section), and `docs/self-updating.md` (documentation-set table).
+- No code changed; the session/loop already persist failures (confirmed in
+  `agent.mjs`, `session/store.mjs`, `headless.mjs`, `tui.mjs`).
+
+Verified in this session: docs follow the one-owner/pointer rules; `git diff
+--check` clean; no tests needed (no runtime change).
+
 #### 2026-08-24 — `edit` description clarifies line-oriented range mode
 
 **Status: ✅ done**
