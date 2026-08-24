@@ -88,10 +88,27 @@ const allTasks = [
       return readFileSync(join(cwd, "note.txt"), "utf8") === "tool surface ok\n";
     },
     requiredTools: ["write"],
-    allowedTools: ["write", "read"],
+    allowedTools: ["write", "read", "bash"],
     diagnose(cwd) {
       try {
         return { actual: readFileSync(join(cwd, "note.txt"), "utf8") };
+      } catch {
+        return { actual: null };
+      }
+    },
+  },
+  {
+    name: "new-file-no-newline",
+    setup() {},
+    prompt: "Create raw.txt with exactly `no final newline` and no newline after it, then report completion.",
+    verify(cwd) {
+      return readFileSync(join(cwd, "raw.txt"), "utf8") === "no final newline";
+    },
+    requiredTools: ["write"],
+    allowedTools: ["write", "read", "bash"],
+    diagnose(cwd) {
+      try {
+        return { actual: readFileSync(join(cwd, "raw.txt"), "utf8") };
       } catch {
         return { actual: null };
       }

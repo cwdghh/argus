@@ -4,6 +4,39 @@ Dated changelog, **newest first** (this file is a log — never edit entries in 
 
 ---
 
+#### 2026-08-24 — explicit write newline policy closes live-provider miss
+
+**Status: ✅ implemented and live-validated**
+
+Replaced the unreliable instruction to embed an invisible final character in
+`write.content` with a required, structured newline decision.
+
+- Added required `ensureFinalNewline: boolean`. `true` appends LF only when
+  `content` lacks a final line break; `false` writes `content` exactly and
+  never strips an already supplied newline.
+- `write` now reports `finalNewline` and `newlineAdded` alongside its actual
+  byte count, so the result itself explains what reached disk.
+- Added schema/behavior tests for the required flag, append, exact-write, and
+  no-duplicate cases. Updated direct tool-boundary fixtures to use the current
+  canonical shape.
+- Added a live no-final-newline task and allowed `bash` only as optional
+  post-write byte verification; the required primary tool remains `write`.
+- `deepseek-v4-flash-0731` selected `true` and `false` correctly in a focused
+  **2/2** paid run. The first complete run produced all six exact outcomes but
+  scored 5/6 because `xxd` verification was not yet allowed; after correcting
+  that harness policy, the final complete run passed **6/6 with 0 invalid
+  calls**.
+- The standing prompt remains 406 characters. The four bare model-visible tool
+  definitions now serialize to 3,570 characters (read 658, write 839, edit
+  1,498, bash 575); the explicit newline contract replaces repeated prose with
+  an enforced decision.
+
+Verified in this session: full `node --check`; `git diff --check`; `npm test`
+(**243/243 pass**); `npm pack --dry-run --json` (`src/main.mjs` executable,
+project `.env` excluded); a real configured-provider headless CLI response; an
+isolated interactive TUI startup and clean `/exit`; focused paid newline eval
+**2/2**; and final complete paid tool eval **6/6**.
+
 #### 2026-08-24 — numbered-read/edit boundary validated on live model
 
 **Status: ✅ implemented and measured on `refine/argus-tool-surface-v2`**

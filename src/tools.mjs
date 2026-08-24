@@ -162,8 +162,8 @@ export const tools = [
     name: "write",
     risk: "filesystem-write",
     description:
-      "Create a text file from byte-exact complete content, including any requested final newline. " +
-      "Existing files are protected unless overwrite=true. " +
+      "Create a complete text file. Set ensureFinalNewline=true to append LF when content lacks one; " +
+      "false writes content exactly. Existing files are protected unless overwrite=true. " +
       "Use this instead of bash redirection or heredocs for text files; use edit for targeted changes " +
       "to an existing file.",
     parameters: {
@@ -172,20 +172,22 @@ export const tools = [
         path: { type: "string", minLength: 1, description: "Path of the file to write" },
         content: {
           type: "string",
-          description: "Exact full text. Include requested final newlines in the string; for example, a one-line file uses content: \"text\\n\"",
+          description: "Complete file text; final-newline policy is controlled separately",
         },
+        ensureFinalNewline: { type: "boolean", description: "Append LF if content has no final line break" },
         overwrite: { type: "boolean", description: "Allow replacing an existing file (default: false)" },
       },
-      required: ["path", "content"],
+      required: ["path", "content", "ensureFinalNewline"],
       additionalProperties: false,
     },
     validate({ path }) {
       return path.trim() ? null : "write argument path must not be blank";
     },
-    async execute({ path, content, overwrite = false }, ctx = {}) {
+    async execute({ path, content, ensureFinalNewline, overwrite = false }, ctx = {}) {
       const file = resolve(ctx.cwd || process.cwd(), path);
+      const output = ensureFinalNewline && !content.endsWith("\n") ? content + "\n" : content;
       try {
-        await writeFile(file, content, { encoding: "utf8", flag: overwrite ? "w" : "wx" });
+        await writeFile(file, output, { encoding: "utf8", flag: overwrite ? "w" : "wx" });
       } catch (err) {
         if (err.code === "EEXIST") {
           return { error: true, message: `file already exists: ${file}; use edit or set overwrite=true` };
@@ -193,7 +195,13 @@ export const tools = [
         return { error: true, path: file, message: `cannot write ${file}: ${err.message}`, ...(err.code ? { code: err.code } : {}) };
       }
       ctx.toolState?.recordMutation(file);
-      return { ok: true, path: file, bytes: Buffer.byteLength(content) };
+      return {
+        ok: true,
+        path: file,
+        bytes: Buffer.byteLength(output),
+        finalNewline: output.endsWith("\n"),
+        newlineAdded: output !== content,
+      };
     },
   },
   {

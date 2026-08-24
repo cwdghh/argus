@@ -70,7 +70,7 @@ model request.
 | D11 | Freshness and parallelism | **Decided 2026-08-24:** same-turn range freshness is loop-scoped state; execution remains sequential. |
 | D12 | Extra model-visible metadata | **Decided 2026-08-24:** keep essential bounds in descriptions; do not add a second metadata protocol. |
 | D13 | Prompt duplication | **Decided 2026-08-24:** remove repeated tool mechanics from the default system prompt (119 words to 59). |
-| D14 | Tool-choice evaluation | **Decided 2026-08-24:** keep an opt-in real-model evaluator for content edit, range edit, uncued numbered-read editing, shell search, and file creation. The harness is shipped; provider baselines are measurements, not test-suite claims. |
+| D14 | Tool-choice evaluation | **Decided 2026-08-24:** keep an opt-in real-model evaluator for content edit, range edit, uncued numbered-read editing, shell search, and file creation with/without a final newline. The harness is shipped; provider baselines are measurements, not test-suite claims. |
 | D15 | `/exit` and `/quit` | **Decided 2026-08-24:** retain the harmless user-facing alias; it costs the model nothing. |
 
 ## Evaluated alternatives

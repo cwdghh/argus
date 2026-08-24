@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { findTool, tools, validateToolArgs } from "../src/tools.mjs";
 
 const read = findTool("read");
+const writeTool = findTool("write");
 const edit = findTool("edit");
 
 test("edit advertises a single canonical edits[] shape to the model", () => {
@@ -97,6 +98,8 @@ test("read handles empty files and single huge lines", withDir(async ({ tmp, wri
 test("runtime validation enforces the full canonical schema", () => {
   assert.match(validateToolArgs(read, { path: "x", offset: 0 }), /at least 1/);
   assert.match(validateToolArgs(read, { path: "x", limit: -1 }), /at least 1/);
+  assert.match(validateToolArgs(writeTool, { path: "x", content: "body" }), /ensureFinalNewline/);
+  assert.equal(validateToolArgs(writeTool, { path: "x", content: "body", ensureFinalNewline: true }), null);
   assert.match(validateToolArgs(edit, { path: "x", edits: [] }), /at least 1 item/);
   assert.match(validateToolArgs(edit, { path: "x", edits: [{ old: "x" }] }), /missing required argument: new/);
   assert.match(validateToolArgs(edit, { path: "x", edits: [{ old: "x", startLine: 1, new: "y" }] }), /exactly one/);
@@ -105,6 +108,33 @@ test("runtime validation enforces the full canonical schema", () => {
   assert.match(validateToolArgs(edit, { path: "x", edits: [{ old: "x", new: "y", surprise: true }] }), /unknown argument/);
   assert.equal(validateToolArgs(edit, { path: "x", edits: [{ startLine: 1, endLine: 0, new: "y" }] }), null);
 });
+
+test("write applies an explicit final-newline policy and reports the result", withDir(async ({ tmp, content }) => {
+  const added = await writeTool.execute(
+    { path: "with-newline.txt", content: "body", ensureFinalNewline: true },
+    { cwd: tmp("") },
+  );
+  assert.equal(content("with-newline.txt"), "body\n");
+  assert.deepEqual(
+    { finalNewline: added.finalNewline, newlineAdded: added.newlineAdded, bytes: added.bytes },
+    { finalNewline: true, newlineAdded: true, bytes: 5 },
+  );
+
+  const exact = await writeTool.execute(
+    { path: "exact.txt", content: "body", ensureFinalNewline: false },
+    { cwd: tmp("") },
+  );
+  assert.equal(content("exact.txt"), "body");
+  assert.equal(exact.finalNewline, false);
+  assert.equal(exact.newlineAdded, false);
+
+  const existing = await writeTool.execute(
+    { path: "already.txt", content: "body\n", ensureFinalNewline: true },
+    { cwd: tmp("") },
+  );
+  assert.equal(content("already.txt"), "body\n", "ensure does not duplicate an existing newline");
+  assert.equal(existing.newlineAdded, false);
+}));
 
 test("edit canonical content form works", withDir(async ({ tmp, write, content }) => {
   write("a.txt", "hello");

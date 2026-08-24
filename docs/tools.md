@@ -71,19 +71,26 @@ range in same-turn freshness state for range edits.
 ### `write`
 
 ```js
-{ path: string, content: string, overwrite?: boolean }
+{
+  path: string,
+  content: string,
+  ensureFinalNewline: boolean,
+  overwrite?: boolean,
+}
 ```
 
 Creates a complete UTF-8 text file. Existing files are protected unless
-`overwrite: true` is explicit. Success returns `{ ok: true, path, bytes }`.
-Filesystem failures return `{ error: true, path?, message, code? }`.
+`overwrite: true` is explicit. `ensureFinalNewline: true` appends LF when
+`content` does not already end in one; `false` writes `content` exactly and
+does not strip a newline already present. Success returns
+`{ ok: true, path, bytes, finalNewline, newlineAdded }`. Filesystem failures
+return `{ error: true, path?, message, code? }`.
 
-`content` is byte-exact, including whether it ends in a newline: when a final
-newline is requested, the string passed as `content` must itself end with that
-newline character (for example, `content: "text\n"`). Use `write`, rather than
-shell redirection or a heredoc, to create text files. `write` invalidates any
-freshness stamp for its resolved path. Use `edit` for targeted changes to an
-existing file.
+The newline decision is required and separate from `content` because live
+models can omit an invisible trailing character even when prose asks for it.
+Use `write`, rather than shell redirection or a heredoc, to create text files.
+`write` invalidates any freshness stamp for its resolved path. Use `edit` for
+targeted changes to an existing file.
 
 ### `edit`
 

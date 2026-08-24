@@ -205,7 +205,7 @@ test("edit refuses ambiguous replacements unless all=true", async () => {
   const write = findTool("write");
   const edit = findTool("edit");
   const read = findTool("read");
-  await write.execute({ path: "a.txt", content: "x x" }, { cwd: dir });
+  await write.execute({ path: "a.txt", content: "x x", ensureFinalNewline: false }, { cwd: dir });
   const ambiguous = await edit.execute({ path: "a.txt", edits: [{ old: "x", new: "y" }] }, { cwd: dir });
   assert.equal(ambiguous.error, true);
   assert.match(ambiguous.message, /occurs 2 times/);
@@ -217,11 +217,11 @@ test("write requires an explicit opt-in to overwrite an existing file", async ()
   const dir = mkdtempSync(join(tmpdir(), "argus-write-"));
   const write = findTool("write");
   const read = findTool("read");
-  await write.execute({ path: "a.txt", content: "original" }, { cwd: dir });
-  const protectedWrite = await write.execute({ path: "a.txt", content: "replacement" }, { cwd: dir });
+  await write.execute({ path: "a.txt", content: "original", ensureFinalNewline: false }, { cwd: dir });
+  const protectedWrite = await write.execute({ path: "a.txt", content: "replacement", ensureFinalNewline: false }, { cwd: dir });
   assert.equal(protectedWrite.error, true);
   assert.equal((await read.execute({ path: "a.txt" }, { cwd: dir })).numberedText, "1 │ original");
-  await write.execute({ path: "a.txt", content: "replacement", overwrite: true }, { cwd: dir });
+  await write.execute({ path: "a.txt", content: "replacement", ensureFinalNewline: false, overwrite: true }, { cwd: dir });
   assert.equal((await read.execute({ path: "a.txt" }, { cwd: dir })).numberedText, "1 │ replacement");
 });
 

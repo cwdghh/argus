@@ -92,9 +92,9 @@ test("read/write/edit resolve relative to the session cwd", async () => {
     const write = findTool("write");
     const read = findTool("read");
     const edit = findTool("edit");
-    const w = await write.execute({ path: "a.txt", content: "hello" }, { cwd: dir });
+    const w = await write.execute({ path: "a.txt", content: "hello", ensureFinalNewline: false }, { cwd: dir });
     assert.equal(w.path, join(dir, "a.txt"));
-    const protectedWrite = await write.execute({ path: "a.txt", content: "lost" }, { cwd: dir });
+    const protectedWrite = await write.execute({ path: "a.txt", content: "lost", ensureFinalNewline: false }, { cwd: dir });
     assert.equal(protectedWrite.error, true, "write should protect existing files by default");
     assert.equal((await read.execute({ path: "a.txt" }, { cwd: dir })).numberedText, "1 │ hello");
     const e = await edit.execute({ path: "a.txt", edits: [{ old: "hello", new: "bye" }] }, { cwd: dir });

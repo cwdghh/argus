@@ -197,8 +197,8 @@ test("identical reads separated by other work do not trigger the no-progress gua
 test("a provider response with multiple tool calls is rejected before side effects", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "argus-multi-call-"));
   const srv = await createMockServer(() => [{ tool_calls: [
-    { index: 0, id: "c1", function: { name: "write", arguments: '{"path":"a.txt","content":"a"}' } },
-    { index: 1, id: "c2", function: { name: "write", arguments: '{"path":"b.txt","content":"b"}' } },
+    { index: 0, id: "c1", function: { name: "write", arguments: '{"path":"a.txt","content":"a","ensureFinalNewline":false}' } },
+    { index: 1, id: "c2", function: { name: "write", arguments: '{"path":"b.txt","content":"b","ensureFinalNewline":false}' } },
   ] }]);
   t.after(async () => {
     await srv.close();
@@ -212,7 +212,7 @@ test("a provider response with multiple tool calls is rejected before side effec
 test("the final allowed model step cannot perform an orphaned mutation", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "argus-final-step-"));
   const srv = await createMockServer(() => [{
-    tool_calls: [{ index: 0, id: "c1", function: { name: "write", arguments: '{"path":"a.txt","content":"a"}' } }],
+    tool_calls: [{ index: 0, id: "c1", function: { name: "write", arguments: '{"path":"a.txt","content":"a","ensureFinalNewline":false}' } }],
   }]);
   t.after(async () => {
     await srv.close();
