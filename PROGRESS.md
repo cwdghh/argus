@@ -4,6 +4,36 @@ Dated changelog, **newest first** (this file is a log — never edit entries in 
 
 ---
 
+#### 2026-08-24 — `edit` description clarifies line-oriented range mode
+
+**Status: ✅ done**
+
+- Replaced the ambiguous phrase "replaces freshly read inclusive lines" in the
+  model-visible `edit` description (`src/tools.mjs`) with an explicit
+  line-oriented contract: a single-line replacement never merges with the
+  following line; the block always occupies whole lines.
+- Matched the executable contract prose in `docs/tools.md` (range mode
+  paragraph) to the same wording so the two stay in agreement.
+- No schema, validation, or engine behavior changed; the wording only removes
+  the possible misreading that a range replacement rewrites all lines between
+  `startLine` and `endLine`.
+
+Verified in this session: `node --check src/tools.mjs`; full `npm test`
+(244/244 pass); `git diff --check` clean.
+
+#### 2026-08-24 — default system prompt names the agent Argus
+
+**Status: ✅ done**
+
+- Added a sentence at the top of the built-in default system prompt
+  (`src/config.mjs`): the agent now identifies itself as **Argus**.
+- Env override (`ARGUS_SYSTEM_PROMPT`) unchanged; documented example in
+  `.env.example` unchanged (it never retells the default content).
+- Added a config test covering the default prompt wording.
+
+Verified in this session: `node --check` on `src/config.mjs` and
+`test/config.test.mjs`; `npm test` (full suite) passes.
+
 #### 2026-08-24 — explicit write newline policy closes live-provider miss
 
 **Status: ✅ implemented and live-validated**

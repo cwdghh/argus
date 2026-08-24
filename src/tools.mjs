@@ -210,8 +210,9 @@ export const tools = [
     description:
       "Apply an atomic edits[] batch to an existing file. Each item uses exactly one selector: " +
       "{old,new} replaces unique content (all=true replaces every match), or " +
-      "{startLine,endLine,new} replaces freshly read inclusive lines. endLine=startLine-1 inserts; " +
-      "new='' deletes. old may include read's line prefixes; new must contain only file text. " +
+      "{startLine,endLine,new} replaces the freshly read inclusive lines (line-oriented, so a " +
+      "single-line replacement with new='X' does not merge the next line; endLine=startLine-1 inserts; " +
+      "new='' deletes). old may include read's line prefixes; new must contain only file text. " +
       "Exact content falls back to whitespace/punctuation-tolerant matching. Use " +
       "this instead of shell text-rewrite commands.",
     parameters: {

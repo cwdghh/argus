@@ -83,6 +83,12 @@ test("a project .env (loaded first) beats the home .env", () => {
   }
 });
 
+test("default system prompt names the agent Argus", () => {
+  delete process.env.ARGUS_SYSTEM_PROMPT;
+  const prompt = getConfig().systemPrompt;
+  assert.match(prompt, /Your name is Argus\./);
+});
+
 test("home .env supports double-quoted multiline values", () => {
   const dir = tempHome();
   try {

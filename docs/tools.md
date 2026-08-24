@@ -124,12 +124,14 @@ range replacement over ordinary unnumbered lines. It never silently strips
 `new`, and ambiguous insertions remain allowed so genuine numbered data is not
 made impossible.
 
-Range mode replaces inclusive 1-indexed lines. `endLine` defaults to
-`startLine`; `endLine = startLine - 1` inserts before the line; `new = ""`
-deletes. The same turn must first have read the affected lines from the exact
-current file content. Partial pages authorize only their shown range. A file
-change, a `write`/`edit` to that path, or any executed `bash` call invalidates
-the relevant evidence. Freshness state is never restored from a session.
+Range mode is line-oriented and replaces inclusive 1-indexed lines. `endLine`
+defaults to `startLine`; `endLine = startLine - 1` inserts before the line;
+`new = ""` deletes. A single-line replacement never merges with the following
+line: the block always occupies whole lines. The same turn must first have
+read the affected lines from the exact current file content. Partial pages
+authorize only their shown range. A file change, a `write`/`edit` to that
+path, or any executed `bash` call invalidates the relevant evidence.
+Freshness state is never restored from a session.
 
 Content and range items may be mixed. All items resolve against the original
 file, overlapping replacements are rejected, and the batch is written only
