@@ -69,8 +69,8 @@ test("multi-step usage reports the largest context, never a per-step sum", async
   assert.equal(usage.prompt_tokens, 130);
   assert.equal(usage.completion_tokens, 35); // 10 + 25
   assert.equal(usage.total_tokens, 165); // 130 + 35
-  assert.deepEqual(seen[0], { prompt_tokens: 100, completion_tokens: 10, total_tokens: 110, reasoning_tokens: 0, cached_tokens: 0 });
-  assert.deepEqual(seen[1], { prompt_tokens: 130, completion_tokens: 35, total_tokens: 165, reasoning_tokens: 0, cached_tokens: 0 });
+  assert.deepEqual(seen[0], { prompt_tokens: 100, completion_tokens: 10, total_tokens: 110, reasoning_tokens: 0, cached_tokens: 0, cache_creation_input_tokens: 0 });
+  assert.deepEqual(seen[1], { prompt_tokens: 130, completion_tokens: 35, total_tokens: 165, reasoning_tokens: 0, cached_tokens: 0, cache_creation_input_tokens: 0 });
 });
 
 test("an interrupted turn records only the steps that reported usage", async (t) => {
@@ -97,7 +97,7 @@ test("an interrupted turn records only the steps that reported usage", async (t)
   ac.abort();
   const res = await p;
   assert.equal(res.aborted, true);
-  assert.deepEqual(res.usage, { prompt_tokens: 100, completion_tokens: 12, total_tokens: 112, reasoning_tokens: 0, cached_tokens: 0 });
+  assert.deepEqual(res.usage, { prompt_tokens: 100, completion_tokens: 12, total_tokens: 112, reasoning_tokens: 0, cached_tokens: 0, cache_creation_input_tokens: 0 });
 });
 
 test("real last-request tokens trigger compaction before the next turn", async (t) => {
@@ -288,19 +288,19 @@ test("accumulateUsage never counts shared context more than once", () => {
     completion_tokens_details: { reasoning_tokens: 2 },
     prompt_tokens_details: { cached_tokens: 3 },
   });
-  assert.deepEqual(a, { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, reasoning_tokens: 2, cached_tokens: 3 });
+  assert.deepEqual(a, { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, reasoning_tokens: 2, cached_tokens: 3, cache_creation_input_tokens: 0 });
 
   // The second request re-sends the same 10-token context plus 80 new tokens.
   // `prompt_tokens` stays at the largest context sent (never the sum, which
   // would count the shared history once per model step); only `completion`
   // accumulates, since each step's output tokens are distinct.
   const b = accumulateUsage(a, { prompt_tokens: 90, completion_tokens: 95, total_tokens: 185 });
-  assert.deepEqual(b, { prompt_tokens: 90, completion_tokens: 100, total_tokens: 190, reasoning_tokens: 2, cached_tokens: 3 });
+  assert.deepEqual(b, { prompt_tokens: 90, completion_tokens: 100, total_tokens: 190, reasoning_tokens: 2, cached_tokens: 3, cache_creation_input_tokens: 0 });
 
   // Even a request whose prompt does not grow leaves the running context
   // untouched — the re-sent history is never counted repeatedly.
   const c = accumulateUsage(b, { prompt_tokens: 90, completion_tokens: 10, total_tokens: 100 });
-  assert.deepEqual(c, { prompt_tokens: 90, completion_tokens: 110, total_tokens: 200, reasoning_tokens: 2, cached_tokens: 3 });
+  assert.deepEqual(c, { prompt_tokens: 90, completion_tokens: 110, total_tokens: 200, reasoning_tokens: 2, cached_tokens: 3, cache_creation_input_tokens: 0 });
   // A call with no reasoning/cached fields leaves those totals unchanged.
   assert.equal(c.reasoning_tokens + c.cached_tokens, 5);
 });

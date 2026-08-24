@@ -46,6 +46,9 @@ and `ARGUS_HOME` relocates the file (and your sessions).
 | `ARGUS_REQUEST_TIMEOUT_MS` | `600000` | Time before a model request is abandoned (generous for long reasoning/thinking) |
 | `ARGUS_STREAM_IDLE_TIMEOUT_MS` | `300000` | Streaming idle timeout between chunks; resets on each chunk |
 | `ARGUS_MAX_RETRIES` | `2` | Retries for 408/429/5xx/network failures |
+| `ARGUS_QUOTA_RETRIES` | `2` | Retries for HTTP 429 `insufficientquota` errors (longer, dedicated backoff — see `ARGUS_QUOTA_RETRY_DELAY_MS`) |
+| `ARGUS_QUOTA_RETRY_DELAY_MS` | `10000` | Base delay for quota retries; doubles each attempt |
+| `ARGUS_CONTEXT_CACHE` | off | DashScope explicit context cache: add `cache_control` markers to the system message and newest message so the backend creates and re-reads 5-minute cache blocks. Only models listed under "Explicit cache" in the [Model Studio context-cache docs](https://help.aliyun.com/zh/model-studio/context-cache) support it (e.g. `qwen3.8-max`); `deepseek-v4-flash*` is only in the implicit-cache list, which needs no configuration. Off by default because not every OpenAI-compatible server accepts `cache_control` content blocks. |
 | `ARGUS_MAX_STEPS` | `100` | Maximum model calls in one turn |
 | `ARGUS_MAX_TOOL_RESULT_CHARS` | `50000` | Maximum characters returned by one tool |
 | `ARGUS_MAX_TURN_TOOL_RESULT_CHARS` | `400000` | Cumulative tool-result characters allowed in one active turn |

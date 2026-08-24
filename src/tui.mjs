@@ -279,6 +279,14 @@ export class MinimalTui {
         } else if (ev.type === "compacted") {
           this.pushBlock({ kind: "result", ok: true, summary: "… earlier context compacted" });
           if (this.mode !== "aborting") this.mode = "working";
+        } else if (ev.type === "retrying") {
+          const why = ev.reason === "quota" ? "LLM quota exhausted" : "LLM request failed";
+          this.pushBlock({
+            kind: "result",
+            ok: true,
+            summary: `${why}; retrying (${ev.attempt}/${ev.budget}) in ${formatDuration(ev.delayMs)}`,
+          });
+          if (this.mode !== "aborting") this.mode = "working";
         } else if (ev.type === "usage") {
           this.turnUsage = ev.usage;
         }

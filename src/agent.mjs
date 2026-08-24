@@ -219,6 +219,11 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
  *   - reasoning      = summed like completion (distinct per step).
  *   - cached         = the largest cached share of any prompt sent (a subset
  *                      of the prompt, so it is reported, not summed).
+ *   - cache_creation = the largest cache block created by any request. Each
+ *                      request with a `cache_control` marker can create (or
+ *                      extend) a cache block; the biggest of them dominates,
+ *                      because every later block reuses the earlier ones as a
+ *                      prefix rather than adding on top of them.
  *
  * Members that don't apply to a given call are added as zero, and a missing
  * or malformed report is ignored.
@@ -245,6 +250,7 @@ export function accumulateUsage(usage, stepUsage) {
     total: n(stepUsage.total_tokens),
     reasoning: n(stepUsage.completion_tokens_details?.reasoning_tokens),
     cached: n(stepUsage.prompt_tokens_details?.cached_tokens),
+    cacheCreation: n(stepUsage.prompt_tokens_details?.cache_creation_input_tokens),
   };
   if (!usage) {
     return {
@@ -253,6 +259,7 @@ export function accumulateUsage(usage, stepUsage) {
       total_tokens: step.total,
       reasoning_tokens: step.reasoning,
       cached_tokens: step.cached,
+      cache_creation_input_tokens: step.cacheCreation,
     };
   }
   const prompt = Math.max(usage.prompt_tokens, step.prompt);
@@ -263,6 +270,7 @@ export function accumulateUsage(usage, stepUsage) {
     total_tokens: prompt + completion,
     reasoning_tokens: add(usage.reasoning_tokens, stepUsage.completion_tokens_details?.reasoning_tokens),
     cached_tokens: Math.max(usage.cached_tokens, step.cached),
+    cache_creation_input_tokens: Math.max(usage.cache_creation_input_tokens, step.cacheCreation),
   };
 }
 
@@ -427,6 +435,9 @@ function requestPayloadChars(config, messages, toolList) {
     systemPrompt: config.systemPrompt,
     messages,
     tools: toolList,
+    // The marker changes the wire shape, so the char safety check must measure
+    // the same body the loop will actually send.
+    contextCache: config.contextCache,
   })).length;
 }
 
@@ -442,6 +453,9 @@ async function streamAssistant(config, messages, toolList, onEvent, signal) {
     tools: toolList,
     signal,
     streamIdleTimeoutMs: config.streamIdleTimeoutMs,
+    // Surface retry backoffs (notably the long quota waits) through the same
+    // event channel as everything else.
+    onEvent,
   });
   let message = null;
   let finishReason = null;

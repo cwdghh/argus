@@ -4,6 +4,36 @@ Dated changelog, **newest first** (this file is a log — never edit entries in 
 
 ---
 
+#### 2026-08-24 — context cache (explicit) + automatic quota retry
+
+**Status: ✅ done**
+
+- **Explicit context cache** (opt-in via `ARGUS_CONTEXT_CACHE=on`, DashScope
+  `cache_control` markers): `buildBody` stamps `{type:"ephemeral"}` markers on
+  the system message (which also covers the tool schemas) and on the newest
+  message, so a multi-turn session or a multi-step tool loop re-reads its own
+  prefix instead of reprocessing it. Only the marked message is rewritten to
+  content blocks; intermediate and non-cacheable messages keep plain shapes.
+  Request-time only — persisted history is untouched.
+- **Cache usage read:** `accumulateUsage` now tracks
+  `cache_creation_input_tokens` (largest creation, like cached reads);
+  `formatTokens` renders it as `✚N` between reasoning (`✶`) and cache reads
+  (`≡`).
+- **Automatic retry for HTTP 429 `insufficientquota`:** `request()` parses the
+  DashScope error body and gives quota errors their own budget
+  (`ARGUS_QUOTA_RETRIES`, default 2) and longer doubling backoff
+  (`ARGUS_QUOTA_RETRY_DELAY_MS`, default 10s), independent of
+  `ARGUS_MAX_RETRIES`. Non-quota (rate-limit) 429s keep the generic budget.
+  Every retry emits a `retrying` event surfaced on stderr (headless) and as a
+  result block (TUI); the mock server can now return arbitrary HTTP statuses.
+- Caveat recorded where users will read it: explicit cache only works for
+  models on the Model Studio "Explicit cache" list (e.g. `qwen3.8-max`);
+  `deepseek-v4-flash*` is implicit-cache only, which already needs no config.
+
+Verified in this session: `node --test` **256/256 pass**.
+
+---
+
 #### 2026-08-24 — TUI: distinct block separation + first-class confirm mode
 
 **Status: ✅ done**

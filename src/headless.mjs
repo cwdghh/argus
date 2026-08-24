@@ -80,6 +80,9 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
           writeErr(`   ${ev.approved ? "✓" : "✗"} ${summary}\n`);
         } else if (ev.type === "compacted") {
           writeErr("… earlier context compacted\n");
+        } else if (ev.type === "retrying") {
+          const why = ev.reason === "quota" ? "insufficient quota" : "transient failure";
+          writeErr(`retrying (${why}, attempt ${ev.attempt}/${ev.budget}) in ${formatDuration(ev.delayMs)}\n`);
         }
       },
       { cwd: activeCwd, lastTokens: nextContextTokens(lastUsage) }

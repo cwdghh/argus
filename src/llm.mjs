@@ -8,14 +8,29 @@
  *
  * This is intentionally minimal, but it is the only place that talks to the
  * network, and all turns stream so token usage can be captured.
+ *
+ * Two DashScope-specific extensions live here, both opt-in via config:
+ *   - Explicit context cache (`contextCache`): stamps `cache_control` markers
+ *     on the system message and the newest message so the backend creates and
+ *     re-reads 5-minute cache blocks (see buildBody).
+ *   - Quota retries (`quotaRetries`/`quotaRetryDelayMs`): HTTP 429 errors with
+ *     code `insufficientquota` get their own, longer backoff because a quota
+ *     reset is slower than a rate-limit burst.
  */
 // Timeout defaults (also the .env.example template). Reasoning models can
 // spend a long time "thinking" before the first byte or between chunks, so
 // both are generous; mirror the values in src/config.mjs.
 const DEFAULT_REQUEST_TIMEOUT_MS = 600_000;
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000;
+const DEFAULT_QUOTA_RETRY_DELAY_MS = 10_000;
 
 const CHAT_PATH = "/chat/completions";
+
+// Units of the messages array that may carry a cache marker (Aliyun docs:
+// system, user, assistant, and tool messages; tool *definitions* cannot be
+// marked, they ride along inside the system message's cache block).
+const CACHEABLE_ROLES = new Set(["system", "user", "assistant", "tool"]);
+const EXHAUSTED_MARKER = /^LLM request failed \(\d+\):/;
 
 import {
   assembleChatMessage,
@@ -25,10 +40,32 @@ import {
   ssePayload,
 } from "./sse.mjs";
 
-export function buildBody({ model, systemPrompt, messages, tools }) {
+/**
+ * Build the chat-completions request body.
+ *
+ * When `contextCache` is enabled, two `cache_control` markers are added
+ * (DashScope explicit cache, max four per request):
+ *
+ *   1. On the system message (covers the system prompt AND the tool schemas,
+ *      which DashScope folds into the system message for cache accounting —
+ *      the most stable prefix across *every* request).
+ *   2. On the newest message (a rolling marker: each request caches everything
+ *      up to the end, so the next request of a multi-turn session or a
+ *      multi-step tool-calling loop re-reads it instead of reprocessing it).
+ *
+ * Remember to put shared content at the front: a cache hit is a *prefix* hit,
+ * and marker lookback is limited to 20 content blocks. Markers require
+ * content-block message shapes, so only the marked message is rewritten to an
+ * array; everything else keeps the plain string form.
+ */
+export function buildBody({ model, systemPrompt, messages, tools, contextCache }) {
+  const system = contextCache
+    ? { role: "system", content: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }] }
+    : { role: "system", content: systemPrompt };
+  const bodyMessages = contextCache ? markNewestMessage(messages) : messages;
   return {
     model,
-    messages: [{ role: "system", content: systemPrompt }, ...messages],
+    messages: [system, ...bodyMessages],
     tools: tools.map((t) => ({
       type: "function",
       function: {
@@ -46,14 +83,56 @@ export function buildBody({ model, systemPrompt, messages, tools }) {
   };
 }
 
-async function request({ baseUrl, apiKey, body, signal, requestTimeoutMs, maxRetries: configuredRetries }) {
+/** Rewrite only the newest message so it carries a rolling cache marker. */
+function markNewestMessage(messages) {
+  if (messages.length === 0) return messages;
+  const copy = messages.slice();
+  const last = copy.length - 1;
+  const message = copy[last];
+  if (!CACHEABLE_ROLES.has(message.role)) return copy;
+  const content = message.content;
+  if (content == null) return copy; // e.g. assistant message with tool_calls
+  if (Array.isArray(content)) {
+    const tail = content[content.length - 1];
+    if (!tail || typeof tail !== "object" || tail.type !== "text") return copy;
+    const next = content.slice();
+    next[next.length - 1] = { ...tail, cache_control: { type: "ephemeral" } };
+    copy[last] = { ...message, content: next };
+    return copy;
+  }
+  copy[last] = {
+    ...message,
+    content: [{ type: "text", text: String(content), cache_control: { type: "ephemeral" } }],
+  };
+  return copy;
+}
+
+/** Pull the machine-readable error code out of a DashScope/OpenAI error body. */
+function errorCode(responseText) {
+  if (!responseText) return null;
+  try {
+    return JSON.parse(responseText)?.error?.code ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function requestError(res, responseText) {
+  return new Error(`LLM request failed (${res.status}): ${responseText.slice(0, 500)}`);
+}
+
+async function request({ baseUrl, apiKey, body, signal, requestTimeoutMs, maxRetries, quotaRetries, quotaRetryDelayMs, onEvent }) {
   const timeoutMs = requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
-  const maxRetries = configuredRetries ?? 0;
+  const genericBudget = maxRetries ?? 0;
+  const quotaBudget = quotaRetries ?? 0;
+  const quotaDelayMs = quotaRetryDelayMs ?? DEFAULT_QUOTA_RETRY_DELAY_MS;
   const url = `${baseUrl.replace(/\/+$/, "")}${CHAT_PATH}`;
 
-  for (let attempt = 0; ; attempt++) {
+  for (let generic = 0, quota = 0; ; ) {
     const timeoutSignal = AbortSignal.timeout(timeoutMs);
     const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+    let backoffMs;
+    let retryKind;
     try {
       const res = await fetch(url, {
         method: "POST",
@@ -67,22 +146,50 @@ async function request({ baseUrl, apiKey, body, signal, requestTimeoutMs, maxRet
       if (res.ok) return { response: res, timeoutSignal };
 
       const responseText = await res.text();
-      const retryable = res.status === 408 || res.status === 429 || res.status >= 500;
-      if (!retryable || attempt >= maxRetries) {
-        throw new Error(`LLM request failed (${res.status}): ${responseText.slice(0, 500)}`);
+      // A 429 can mean "slow down" (rate limit) or "you are out of money"
+      // (insufficient quota). Only the latter gets the longer quota backoff —
+      // repeat users of a resetting quota often just need a longer wait than
+      // the generic 250ms-doubling schedule would ever give them.
+      const isQuota = res.status === 429 && errorCode(responseText) === "insufficientquota";
+      if (isQuota) {
+        if (quota >= quotaBudget) throw requestError(res, responseText);
+        retryKind = "quota";
+        quota++;
+        backoffMs = quotaDelayMs * 2 ** (quota - 1);
+      } else {
+        const retryable = res.status === 408 || res.status === 429 || res.status >= 500;
+        if (!retryable || generic >= genericBudget) throw requestError(res, responseText);
+        retryKind = "retry";
+        generic++;
+        backoffMs = 250 * 2 ** (generic - 1);
       }
     } catch (err) {
       if (signal?.aborted) throw err;
       if (timeoutSignal.aborted) {
-        if (attempt >= maxRetries) throw new Error(`LLM request timed out after ${timeoutMs}ms`);
-      } else if (/^LLM request failed \(\d+\):/.test(err.message)) {
+        if (generic >= genericBudget) throw new Error(`LLM request timed out after ${timeoutMs}ms`);
+        generic++;
+        retryKind = "retry";
+        backoffMs = 250 * 2 ** (generic - 1);
+      } else if (EXHAUSTED_MARKER.test(err.message)) {
+        // Both budgets spent: the error was already wrapped with its status.
         throw err;
-      } else if (attempt >= maxRetries) {
+      } else if (generic >= genericBudget) {
         throw err;
+      } else {
+        generic++;
+        retryKind = "retry";
+        backoffMs = 250 * 2 ** (generic - 1);
       }
     }
 
-    await abortableDelay(250 * 2 ** attempt, signal);
+    onEvent?.({
+      type: "retrying",
+      reason: retryKind,
+      attempt: retryKind === "quota" ? quota : generic,
+      budget: retryKind === "quota" ? quotaBudget : genericBudget,
+      delayMs: backoffMs,
+    });
+    await abortableDelay(backoffMs, signal);
   }
 }
 
@@ -175,14 +282,28 @@ export async function* streamChat({
   requestTimeoutMs,
   streamIdleTimeoutMs,
   maxRetries,
+  contextCache,
+  quotaRetries,
+  quotaRetryDelayMs,
+  onEvent,
 }) {
-  const body = buildBody({ model, systemPrompt, messages, tools });
+  const body = buildBody({ model, systemPrompt, messages, tools, contextCache });
   let state = createChatStreamState();
   let timeoutSignal = null;
   const idleTimeoutMs = streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS;
 
   try {
-    const requested = await request({ baseUrl, apiKey, body, signal, requestTimeoutMs, maxRetries });
+    const requested = await request({
+      baseUrl,
+      apiKey,
+      body,
+      signal,
+      requestTimeoutMs,
+      maxRetries,
+      quotaRetries,
+      quotaRetryDelayMs,
+      onEvent,
+    });
     const res = requested.response;
     timeoutSignal = requested.timeoutSignal;
     const reader = res.body.getReader();

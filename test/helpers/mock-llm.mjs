@@ -11,7 +11,10 @@
  *   srv.close();
  *
  * If the script throws for a call, the server responds with HTTP 500, which the
- * client surfaces as an LLM request error.
+ * client surfaces as an LLM request error. To return a specific non-200 status
+ * (e.g. a 429 quota error), return a raw response object instead of an array:
+ *
+ *   createMockServer(() => ({ status: 429, body: { error: { code: "insufficientquota", message: "exceeded quota" } } }))
  */
 import http from "node:http";
 
@@ -36,7 +39,14 @@ export async function createMockServer(script) {
           deltas = await script(idx, reqBody);
         } catch (err) {
           res.writeHead(500, { "content-type": "application/json" });
-          res.end(JSON.stringify({ error: err?.message ?? "mock script error" }));
+          res.end(JSON.stringify({ error: { message: err?.message ?? "mock script error" } }));
+          return;
+        }
+        // A raw response object (has a numeric status) is an explicit HTTP
+        // error, not an SSE stream.
+        if (!Array.isArray(deltas) && deltas && Number.isInteger(deltas.status)) {
+          res.writeHead(deltas.status, { "content-type": "application/json" });
+          res.end(JSON.stringify(deltas.body ?? { error: { message: `mock status ${deltas.status}` } }));
           return;
         }
         res.writeHead(200, { "content-type": "text/event-stream" });

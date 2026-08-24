@@ -41,6 +41,11 @@ function nonNegativeInt(value, fallback) {
   return Number.isInteger(n) && n >= 0 ? n : fallback;
 }
 
+/** Case-insensitive "on": accepts 1/true/on/yes; anything else is off. */
+function envIsOn(value) {
+  return /^(1|true|on|yes)$/i.test(String(value ?? "").trim());
+}
+
 export function getConfig() {
   const baseUrl = (process.env.ARGUS_BASE_URL ?? "https://dashscope.aliyuncs.com/compatible-mode/v1").replace(/\/+$/, "");
   let hostname = "";
@@ -67,6 +72,20 @@ export function getConfig() {
     // For streaming, the idle timeout resets on each chunk received.
     streamIdleTimeoutMs: positiveInt(process.env.ARGUS_STREAM_IDLE_TIMEOUT_MS, 300_000, 100),
     maxRetries: nonNegativeInt(process.env.ARGUS_MAX_RETRIES, 2),
+    // Explicit context-cache markers (`cache_control: {type: "ephemeral"}`) on
+    // the system message and the newest message, so the DashScope backend can
+    // create and re-read 5-minute cache blocks. Opt-in: the marker requires
+    // content-block message shapes and model-side support (Aliyun Model Studio
+    // "explicit cache"), so plain OpenAI-compatible servers keep the old shape.
+    contextCache: envIsOn(process.env.ARGUS_CONTEXT_CACHE),
+    // Dedicated retry budget for HTTP 429 "insufficient quota" errors. A quota
+    // reset is slower than a rate-limit burst, so these retries use their own
+    // longer backoff (ARGUS_QUOTA_RETRY_DELAY_MS, doubling) instead of the
+    // generic 250ms schedule, and their own cap (ARGUS_QUOTA_RETRIES). The
+    // generic maxRetries budget is untouched, so a 0 here only disables quota
+    // retries while normal 429/5xx retries keep their own count.
+    quotaRetries: nonNegativeInt(process.env.ARGUS_QUOTA_RETRIES, 2),
+    quotaRetryDelayMs: positiveInt(process.env.ARGUS_QUOTA_RETRY_DELAY_MS, 10_000, 1),
     maxSteps: positiveInt(process.env.ARGUS_MAX_STEPS, 100),
     maxToolResultChars: positiveInt(process.env.ARGUS_MAX_TOOL_RESULT_CHARS, 50_000, 500),
     // Bound cumulative tool output inside one active turn; next-turn

@@ -32,13 +32,15 @@ export function formatChars(n) {
 
 /**
  * Compact token summary, e.g. "↑1.6K ↓120". `↑` = prompt (input) tokens,
- * `↓` = completion (output) tokens; reasoning and cached tokens appear only
- * when the provider reported them.
+ * `↓` = completion (output) tokens; `✚` = tokens newly written into a context
+ * cache, `≡` = tokens served from the cache; reasoning appears only when the
+ * provider reported it.
  */
 export function formatTokens(u) {
   if (!u || !Number.isFinite(u.prompt_tokens) || !Number.isFinite(u.completion_tokens)) return null;
   const parts = [`↑${formatChars(u.prompt_tokens)}`, `↓${formatChars(u.completion_tokens)}`];
   if (u.reasoning_tokens > 0) parts.push(`✶${formatChars(u.reasoning_tokens)}`);
+  if (u.cache_creation_input_tokens > 0) parts.push(`✚${formatChars(u.cache_creation_input_tokens)}`);
   if (u.cached_tokens > 0) parts.push(`≡${formatChars(u.cached_tokens)}`);
   return parts.join(" ");
 }

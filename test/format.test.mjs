@@ -25,6 +25,11 @@ test("formatTokens: prompt/completion with optional reasoning + cached", () => {
     formatTokens({ total_tokens: 2_000, prompt_tokens: 1_000, completion_tokens: 1_000, reasoning_tokens: 400, cached_tokens: 300 }),
     "↑1.0K ↓1.0K ✶400 ≡300"
   );
+  assert.equal(
+    formatTokens({ total_tokens: 3_600, prompt_tokens: 1_600, completion_tokens: 1_000, cache_creation_input_tokens: 1_600, cached_tokens: 300 }),
+    "↑1.6K ↓1.0K ✚1.6K ≡300",
+    "cache creation renders between reasoning and cached read"
+  );
 });
 
 test("summarize: prefers stdout, then numbered read text/content, then ok payload", () => {
