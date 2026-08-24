@@ -53,6 +53,15 @@ export function blockLines(block, width) {
       }, contentWidth);
       return pieces.map((ln, idx) => styleText("│", { fg: block.ok ? theme.good : theme.bad, bold: true }) + " " + ln);
     }
+    case "confirm": {
+      // A structured, distinct confirmation block for high-risk actions (e.g. a
+      // dangerous bash command). Rendered as a warning box in the transcript so
+      // decisions stay auditable, without repeating the live y/n hint (which
+      // the layout's confirm row shows while the decision is pending).
+      const contentWidth = Math.max(1, width - 4);
+      const box = renderSimple(block.text, { fg: theme.bad, bold: true }, contentWidth);
+      return box.map((ln) => styleText("⚠", { fg: theme.bad, bold: true }) + " " + ln);
+    }
     case "timing": {
       const usage = formatTokens(block.usage);
       return renderSimple(`  ◷ ${block.summary}${usage ? ` · ${usage}` : ''}`, { fg: theme.dim, dim: true }, width);

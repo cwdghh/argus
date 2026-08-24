@@ -829,3 +829,83 @@ test("/help documents /name and /new <name>", async () => {
   assert.ok(t.blocks.at(-1).text.includes("/name <name>"));
   assert.ok(t.blocks.at(-1).text.includes("/new [<name>]"));
 });
+
+test("separator: blank between distinct kinds, but tool call and its result stay paired", () => {
+  const t = new MinimalTui({ model: "m" });
+  t.width = 40;
+  t.height = 20;
+  t.pushBlock({ kind: "user", text: "first" });
+  t.pushBlock({ kind: "thinking", text: "plan" });
+  t.pushBlock({ kind: "tool", name: "read", args: { path: "a.txt" } });
+  t.pushBlock({ kind: "result", ok: true, summary: "1 lines" });
+  t.append("assistant", "done");
+  const lines = t.transcriptLines().map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
+  // tool -> result are a pair and are NOT separated; other kind changes get a
+  // blank line: user->thinking->tool have blanks, tool->result none,
+  // result->assistant blank.
+  assert.deepEqual(lines, [
+    "❯ first",
+    "",
+    "│ plan",
+    "",
+    "│ ⚙ read({\"path\":\"a.txt\"})",
+    "│ ✓ 1 lines",
+    "",
+    "done",
+  ]);
+});
+
+test("separator: two consecutive tool/result pairs each keep their own result", () => {
+  const t = new MinimalTui({ model: "m" });
+  t.width = 40;
+  t.height = 20;
+  t.pushBlock({ kind: "tool", name: "bash", args: { command: "ls" } });
+  t.pushBlock({ kind: "result", ok: true, summary: "src" });
+  t.pushBlock({ kind: "tool", name: "read", args: { path: "a" } });
+  t.pushBlock({ kind: "result", ok: false, summary: "no such file" });
+  const lines = t.transcriptLines().map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
+  assert.deepEqual(lines, [
+    "│ ⚙ bash({\"command\":\"ls\"})",
+    "│ ✓ src",
+    "",
+    "│ ⚙ read({\"path\":\"a\"})",
+    "│ ✗ no such file",
+  ]);
+});
+
+test("confirm mode: distinct row + affordance, button resolves, block recorded", async () => {
+  const t = new MinimalTui({ model: "m" });
+  t.width = 50;
+  t.height = 16;
+  const p = t.confirm({ tool: "bash", cwd: "/x", command: "rm -rf /x", reason: "recursive remove" });
+  assert.equal(t.mode, "confirm");
+  assert.ok(t.pendingConfirm);
+  const frame = t.buildFrame().map((r) => r.replace(/\x1b\[[0-9;]*m/g, ""));
+  // height 16: confirm row at height-3 = 13, affordance at height-2 = 14,
+  // footer at height-1 = 15 (all 0-indexed).
+  assert.ok(frame[13]?.includes("⚠ bash in /x: rm -rf /x"), "confirm row shows tool + cwd + command");
+  assert.ok(frame[14]?.includes("[y] approve"), "confirm row shows y/n affordance");
+  assert.ok(t.blocks.some((b) => b.kind === "confirm" && /bash in \/x: rm -rf \/x/.test(b.text)), "confirm block recorded");
+  t.insertText("y");
+  assert.equal(await p, true);
+  assert.equal(t.pendingConfirm, null);
+});
+
+test("Enter during a pending confirm stays in confirm mode", async () => {
+  const t = new MinimalTui({ model: "m" });
+  t.confirm("rm -rf /x");
+  const before = t.blocks.length;
+  t.editor.buffer = "oops";
+  await t.submit();
+  assert.ok(t.pendingConfirm, "a pending confirm stays pending");
+  assert.equal(t.mode, "confirm");
+  assert.equal(t.blocks.length, before, "no user/submit block added while confirming");
+});
+
+test("footer shows confirm phase distinctly", () => {
+  const t = new MinimalTui({ model: "m" });
+  t.width = 60;
+  t.mode = "confirm";
+  const f = t.footer().replace(/\x1b\[[0-9;]*m/g, "");
+  assert.ok(f.startsWith("confirm"), "footer names the confirm phase");
+});

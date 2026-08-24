@@ -93,7 +93,11 @@ escape/CSI decoding), `suggestions.mjs` (`@path` + `/command` popups),
 `frames.mjs` (status/footer/header text), `commands.mjs` (the local command
 table + `/help` text), `layout.mjs` (full-frame assembly), and `lifecycle.mjs`
 (raw-mode startup, render clock, git polling, theme detection, shutdown). Each
-is unit-testable without a terminal. Shared, frontend-neutral helpers live
+is unit-testable without a terminal. Transcript blocks keep distinct phases
+legible: a blank line separates blocks whose kind changes (thinking, tool,
+confirm, assistant), except a tool call and its own result, which stay paired,
+and pending high-risk confirmations render as a distinct `confirm` block plus a
+dedicated confirm row in the layout. Shared, frontend-neutral helpers live
 outside the TUI: `src/format.mjs` (durations/tokens/result summaries),
 `src/transcript.mjs` (block folding), and `src/session/` (persistence).
 

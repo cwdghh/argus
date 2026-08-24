@@ -4,6 +4,33 @@ Dated changelog, **newest first** (this file is a log — never edit entries in 
 
 ---
 
+#### 2026-08-24 — TUI: distinct block separation + first-class confirm mode
+
+**Status: ✅ done**
+
+- **Block separation:** `transcriptLines()` now inserts a blank line whenever
+  the block kind changes (user → thinking → tool → assistant), so thinking,
+  tool calls, confirmations, and responses never visually blend. A tool call
+  and its own result stay **paired** (no separator between them), and every new
+  user prompt still gets its turn divider rail.
+- **Confirm mode is now a distinct phase:**
+  - A pending high-risk action renders in a dedicated warning row at
+    `height - 3` (tool + cwd + command) with an explicit affordance row
+    `[y] approve · [n] deny · [Esc] cancel` at `height - 2`.
+  - The footer status names the phase (`confirm — y/n · Esc`) instead of
+    reusing the working spinner.
+  - `confirm()` records the pending question as a dedicated `confirm` block in
+    the transcript; the agent's `approval` event records the decision as a
+    `result` block, keeping approvals auditable.
+  - `submit()` no-ops while a confirmation is pending (Enter can't start a
+    nested turn); Enter during confirm resolves y/n via `insertText`.
+- Added unit tests: separator pairing, confirm row/affordance/block, Enter
+  during confirm, footer confirm phase. Real agent-loop mock test confirms the
+  full `user → tool → confirm → approved → result → assistant → timing` flow.
+
+Verified in this session: `node --check` on `src/tui*.mjs` + test; `npm test`
+**249/249 pass**; live mock transcript matches the intended layout.
+
 #### 2026-08-24 — doc: how to find tool failures in saved sessions
 
 **Status: ✅ done**

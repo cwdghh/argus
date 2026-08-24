@@ -126,34 +126,26 @@ export class MinimalTui {
 
   transcriptLines() {
     const out = [];
-    let seen = false;
     let lastKind = null;
     for (const block of this.blocks) {
-      if (block.kind === "user" && seen) {
-        const width = Math.min(20, Math.max(4, this.width - 4));
-        out.push(
-          styleText("│", { fg: theme.rail }) +
-            "  " +
-            styleText("─".repeat(width), { fg: theme.rail })
-        );
-      }
-      // Before tool calls or thinking blocks, strip trailing blank lines
-      // (the model's text output may end with natural newlines) and insert
-      // exactly one blank separator line for visual clarity.
-      if (seen && (block.kind === "tool" || block.kind === "thinking")) {
-        while (out.length > 0 && stripAnsi(out[out.length - 1]).trim() === "") {
-          out.pop();
+      // A turn divider separates one user prompt from the previous turn.
+      if (block.kind === "user" && lastKind !== null) {
+        while (out.length > 0 && stripAnsi(out[out.length - 1]).trim() === "") out.pop();
+        if (out.length > 0) {
+          const railWidth = Math.min(20, Math.max(4, this.width - 4));
+          out.push(styleText("│", { fg: theme.rail }) + "  " + styleText("─".repeat(railWidth), { fg: theme.rail }));
         }
-        if (out.length > 0) out.push("");
-      }
-      // After a thinking block, add a blank line before the assistant's response.
-      if (lastKind === "thinking" && block.kind === "assistant") {
-        while (out.length > 0 && stripAnsi(out[out.length - 1]).trim() === "") {
-          out.pop();
+      } else if (lastKind !== null && lastKind !== block.kind) {
+        // Clean separation between different kinds of blocks: thinking, tool
+        // calls, confirmations, and responses get breathing room. The one
+        // deliberate exception is a tool call and its result, which belong
+        // together and are never separated by a blank line (they keep their
+        // own rail styling to stay distinguishable).
+        if (!(lastKind === "tool" && block.kind === "result")) {
+          while (out.length > 0 && stripAnsi(out[out.length - 1]).trim() === "") out.pop();
+          if (out.length > 0) out.push("");
         }
-        if (out.length > 0) out.push("");
       }
-      seen = true;
       lastKind = block.kind;
       out.push(...blockLines(block, this.width));
     }
@@ -230,6 +222,7 @@ export class MinimalTui {
 
   async submit() {
     if (this.mode !== "idle") return;
+    if (this.pendingConfirm) return; // a confirmation is in flight; Enter submits y/n via insertText
     const text = this.editor.buffer.trim();
     if (!text) return;
     this.editor.buffer = "";
@@ -272,6 +265,9 @@ export class MinimalTui {
           this.pushBlock({ kind: "result", ok: ev.ok, summary: summarize(ev.result), durationMs });
           if (this.mode !== "aborting") this.mode = "working";
         } else if (ev.type === "approval") {
+          // The decision (approved/denied) for a pending confirmation. The
+          // pending question itself was already recorded as a `confirm` block
+          // by confirm(); this records the outcome as a result.
           this.pushBlock({
             kind: "result",
             ok: ev.approved,
@@ -713,10 +709,26 @@ export class MinimalTui {
         : { ...request, command: request?.args?.command ?? request?.command ?? "approval required" };
       this.pendingConfirm = { ...details, resolve };
       this.mode = "confirm";
+      // Keep the decision in the transcript: a distinct confirm block (see
+      // blocks.mjs) so a high-risk action is auditable even when it came from a
+      // local command (e.g. /delete) rather than the agent loop.
+      const reason = details.reason ?? "approval required";
+      const label = details.tool ?? (details.command ? "command" : "approval");
+      const cwd = details.cwd ? ` in ${details.cwd}` : "";
+      this.pushBlock({
+        kind: "confirm",
+        text: `${label}${cwd}: ${details.command ?? reason}`,
+      });
       this.dirtyRendered = true;
     });
   }
 
+  /**
+   * Resolve an in-flight confirmation and return the mode that should resume.
+   * While a confirm is pending the TUI is in `confirm` mode; the caller decides
+   * whether to return to `working` (a model turn is mid-flight) or `idle` (a
+   * local command like /delete).
+   */
   resolveConfirm(ok) {
     if (!this.pendingConfirm) return;
     const { resolve } = this.pendingConfirm;

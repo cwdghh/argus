@@ -95,9 +95,18 @@ layout: header, scrollable transcript, a bottom **editor**, and a **footer**.
   absolute line number, and `edit` accepts line ranges (`startLine`/`endLine`)
   for whole-block rewrites, insertions, and deletions without reproducing
   large old code verbatim.
-- **Block rails and separators** make the transcript scannable: thinking, tool
-  calls, and tool results are visually grouped, and each turn gets a divider.
+- **Block rails and separators** make the transcript scannable: thinking,
+  confirmations, and assistant responses are separated by a blank line, and
+  every new turn gets a divider. A tool call and its result stay visually
+  **paired** (no blank between them) so you always see request → response
+  together.
 - **Thinking / reasoning** is shown (muted, italic) while the model emits it.
+- **Confirmations are a first-class, separated phase**: a high-risk action
+  (e.g. a destructive `bash` command) renders in a distinct warning row above
+  the editor with an explicit `[y] approve · [n] deny · [Esc] cancel`
+  affordance and a footer that says `confirm — y/n · Esc`. The pending question
+  is recorded in the transcript as a `confirm` block and the decision as a
+  `result` block, so approvals stay auditable.
 - **Live working time** follows the current phase (`working`, `thinking`,
   confirmation, or aborting); completed turns and tool calls keep their timing
   in the transcript, and `/status` reports the last turn.

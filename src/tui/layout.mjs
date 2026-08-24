@@ -79,11 +79,22 @@ export function buildFrame(state) {
   let inputCol;
   let inputRow;
   if (state.pendingConfirm) {
-    const where = state.pendingConfirm.cwd ? ` in ${state.pendingConfirm.cwd}` : "";
-    rows[height - 2] = styleText(
-      `⚠ ${truncateMiddle(`${state.pendingConfirm.tool ?? "command"}${where}: ${state.pendingConfirm.command}`, Math.max(12, width - 12))}  (y/n)`,
-      { fg: theme.bad }
+    // Confirmation mode is deliberately visual and separate: a dedicated row
+    // above the editor showing the tool + cwd + command, with an explicit
+    // y / n · Esc affordance, and the editor placeholder switches to a
+    // confirm-specific hint. This keeps high-risk-bash confirmations from
+    // being mistaken for ordinary transcript content.
+    const p = state.pendingConfirm;
+    const where = p.cwd ? ` in ${truncateMiddle(p.cwd, Math.max(8, width - 44))}` : "";
+    const label = p.tool ?? "command";
+    const command = truncateMiddle(p.command ?? "", Math.max(12, width - 44));
+    rows[height - 3] = styleText(
+      `⚠ ${label}${where}: ${command}`,
+      { fg: theme.bad, bold: true }
     );
+    rows[height - 2] = styleText("   [y] approve  ·  [n] deny  ·  [Esc] cancel", { fg: theme.dim });
+    // The editor row stays put (so the caret doesn't jump); it just shows a
+    // confirm hint instead of a placeholder.
     inputCol = 0;
     inputRow = height - 2;
   } else {

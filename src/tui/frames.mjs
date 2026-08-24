@@ -24,6 +24,11 @@ const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", 
 
 /** Left-hand status text: live phase + elapsed time + real token usage. */
 export function statusText(s) {
+  if (s.mode === "confirm") {
+    // A pending high-risk confirmation is its own phase: no spinner (nothing is
+    // computing), just a clear call to decide.
+    return "confirm — y/n · Esc";
+  }
   if (s.mode !== "idle") {
     if (s.activityStartedAt == null) return s.mode;
     const elapsed = Math.max(0, s.now() - s.activityStartedAt);
