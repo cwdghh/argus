@@ -12,11 +12,11 @@ user prompt
 send full history + tool schemas to the model
    │
    ▼
-model replies (streamed): thinking, text and/or tool_calls
+model replies (streamed): thinking, text and/or one tool_call
    │
    ├─ no tool_calls ─▶ final answer, done
    │
-   └─ tool_calls ─▶ for each: validate → execute → append result as a `tool` message
+   └─ tool_call ─▶ validate → authorize → execute → append bounded `tool` result
                        │
                        └──────────────▶ loop again (model now sees the results)
 ```
@@ -28,22 +28,34 @@ Key properties:
 - **No direct model access.** The model only *requests* tools by name + JSON
   arguments; `src/tools.mjs` decides what actually runs. This is where safety
   lives.
-- **Termination policy.** The agent stops when the model replies with no tool
-  calls, or fails clearly after `ARGUS_MAX_STEPS` model calls. Truncated model
-  responses never execute partial tool calls.
-- **Runtime validation.** Tool arguments are parsed and checked against the
-  tool's required fields and primitive JSON Schema types before `execute` runs.
+- **Sequential termination policy.** The agent stops when the model replies
+  with no tool call, or fails clearly after `ARGUS_MAX_STEPS` model calls. It
+  rejects truncated calls and multi-call replies before side effects, reserves
+  the final allowed step for synthesis, and refuses a third consecutive
+  identical no-progress call.
+- **Runtime validation.** Tool arguments are checked recursively against the
+  registry schema, then by any cross-field semantic validator, before
+  authorization or execution.
+- **Structured authorization.** Model-invisible registry policy assigns each
+  tool a risk class and may request approval with the tool, arguments, cwd,
+  risk, and reason. Decisions are emitted as transcript events. The current
+  destructive-shell classifier is a best-effort accident backstop, not a
+  sandbox.
 - **Bounded requests.** Transient model errors are retried with short backoff;
   each request has an overall timeout.
-- **Bounded tool results.** Every tool result passes through one centralized
-  size cap before it is added to model history. The `read` tool also truncates
-  itself (2000 lines / 50KB) and pages with `offset`/`limit`, so a large file
-  never floods the context window in a single call.
-- **Forgiving edits.** `edit` matches exactly first, then falls back to
-  normalised matching (trailing whitespace, smart quotes, unicode dashes, CRLF)
-  and overlays changed lines back onto the file so untouched bytes are
-  preserved — the model can make precise edits without a perfect byte-level
-  copy of the old text.
+- **Bounded context growth.** Every tool result passes through a centralized
+  size cap, the active turn has a cumulative result budget, and the entire
+  outgoing request is measured before network I/O. `read` also scans files
+  with bounded memory and pages at 2000 lines / 50KB with `offset`/`limit`.
+- **Fresh range edits.** `src/tool-state.mjs` records the exact hash and line
+  coverage of successful reads within one turn. A range edit must target that
+  current coverage; filesystem mutations invalidate it, and any executed shell
+  command conservatively invalidates all read evidence.
+- **Forgiving, precise edits.** `edit` matches exactly first, then falls back
+  to normalized matching (gutters, trailing whitespace, smart punctuation,
+  Unicode spaces, and CRLF) while mapping the match back to the original
+  offsets. Only the matched span changes; unrelated bytes, BOM, and line-ending
+  style are preserved.
 - **Config as env vars.** `src/config.mjs` reads the process environment plus
   two dotenv files — the project `.env` and the global `~/.argus/.env`
   (loaded last, so it only fills gaps). Precedence is process env > project
@@ -62,7 +74,10 @@ src/main.mjs ──▶ src/tui.mjs ──▶ src/agent.mjs ──▶ src/llm.mjs
                       │  ▲
                       ▼  │
          src/read-bounds.mjs      src/edit-engine.mjs
-         (read caps)              (exact/fuzzy/range edits)
+         (streaming read window)  (exact/fuzzy/range edits)
+                      ▲                    ▲
+                      └── src/tool-state.mjs
+                          (same-turn read freshness)
 ```
 
 `src/agent.mjs` emits events (`text_delta`, `tool_call`, `tool_result`, …) so any
@@ -82,9 +97,17 @@ is unit-testable without a terminal. Shared, frontend-neutral helpers live
 outside the TUI: `src/format.mjs` (durations/tokens/result summaries),
 `src/transcript.mjs` (block folding), and `src/session/` (persistence).
 
+Session persistence is append-only. Metadata carries the initial tool-surface
+hash; each turn references the surface it used, and a complete model-visible
+schema snapshot is appended only when that hash changes. Historical requests
+remain auditable without keeping obsolete executor input shapes alive. The
+store rejects malformed interior records rather than silently dropping
+history, recovers a torn final record with a visible warning, and keeps the
+session directory/files owner-private on POSIX platforms.
+
 The TUI handles its local command set (the `COMMANDS` table in
 `src/tui/commands.mjs` — `/help`, `/status`, `/model`, `/sessions`, `/resume`,
-`/name`, `/new`, `/exit`) before invoking the loop; adding a command touches
+`/name`, `/delete`, `/new`, `/exit`) before invoking the loop; adding a command touches
 just that table. Session switches replace the transcript, model history, input
 history, cwd, and writable session handle together. Typing a bare `/` command
 or an `@path` token opens a live suggestion popup above the editor (Up/Down to

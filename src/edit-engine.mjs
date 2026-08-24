@@ -2,12 +2,11 @@
  * Pure text-edit engine for the edit tool.
  *
  * Exact matches first, then a normalised (trailing whitespace stripped,
- * quotes/dashes/spaces ASCII-folded, NFKC) fuzzy match. Fuzzy replacements
- * run in normalised space and are overlaid back onto the original content
- * line-by-line, so untouched lines keep their bytes. CRLF and a UTF-8 BOM
- * are preserved by the caller. Every replacement refers to the original
- * content and is applied bottom-up, so old strings and line numbers never
- * shift mid-batch.
+ * quotes/dashes/spaces ASCII-folded, NFKC) fuzzy match. Normalized matches are
+ * mapped back to exact original spans, so unrelated bytes on touched lines are
+ * preserved too. CRLF and a UTF-8 BOM are preserved by the caller. Every
+ * replacement refers to the original content and is applied bottom-up, so old
+ * strings and line numbers never shift mid-batch.
  */
 
 export function normalizeLineEndings(text) {
@@ -26,20 +25,11 @@ export function detectLineEnding(text) {
 }
 
 export function normalizeForFuzzy(text) {
-  return text
-    .normalize("NFKC")
-    .split("\n")
-    .map((line) => line.trimEnd())
-    .join("\n")
-    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
-    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
-    .replace(/[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g, "-")
-    .replace(/[\u00A0\u2002-\u200A\u202F\u205F\u3000]/g, " ")
-    // Tolerate `  87 | ` line-number gutters copied from a read result.
-    .replace(/^\s*\d{1,6}\s*[|│]\s*/gm, "");
+  return normalizeForFuzzyWithMap(text).text;
 }
 
 function collectMatches(content, needle) {
+  if (needle === "") throw new Error("cannot search for an empty string");
   const out = [];
   let from = 0;
   for (;;) {
@@ -48,6 +38,51 @@ function collectMatches(content, needle) {
     out.push(i);
     from = i + needle.length;
   }
+}
+
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+function foldFuzzySegment(segment) {
+  return segment
+    .normalize("NFKC")
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+    .replace(/[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g, "-")
+    .replace(/[\u00A0\u2002-\u200A\u202F\u205F\u3000]/g, " ");
+}
+
+/**
+ * Build fuzzy-normalized text with a UTF-16 offset map back to the original.
+ * The map lets a tolerant match replace only its requested original span
+ * instead of rebuilding (and normalizing) the whole touched line.
+ */
+function normalizeForFuzzyWithMap(text) {
+  let normalized = "";
+  const starts = [];
+  const ends = [];
+  let base = 0;
+  const lines = text.split("\n");
+
+  const append = (value, start, end) => {
+    normalized += value;
+    for (let i = 0; i < value.length; i++) {
+      starts.push(start);
+      ends.push(end);
+    }
+  };
+
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex];
+    const gutter = line.match(/^\s*\d{1,6}\s*[|│]\s*/u)?.[0] ?? "";
+    const trimmed = line.slice(gutter.length).trimEnd();
+    for (const { segment, index } of graphemeSegmenter.segment(trimmed)) {
+      const start = base + gutter.length + index;
+      append(foldFuzzySegment(segment), start, start + segment.length);
+    }
+    if (lineIndex < lines.length - 1) append("\n", base + line.length, base + line.length + 1);
+    base += line.length + 1;
+  }
+  return { text: normalized, starts, ends };
 }
 
 function splitLinesWithEndings(content) {
@@ -63,22 +98,6 @@ function lineSpans(content) {
   });
 }
 
-function replacementLineRange(lines, index, length) {
-  const end = index + length;
-  let startLine = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (index >= lines[i].start && index < lines[i].end) {
-      startLine = i;
-      break;
-    }
-  }
-  if (startLine === -1) throw new Error("replacement is outside the file content");
-  let endLine = startLine;
-  while (endLine < lines.length && lines[endLine].end < end) endLine++;
-  if (endLine >= lines.length) throw new Error("replacement is outside the file content");
-  return { startLine, endLine: endLine + 1 };
-}
-
 function applyReplacements(content, replacements) {
   let result = content;
   const sorted = [...replacements].sort((a, b) => a.index - b.index);
@@ -89,47 +108,67 @@ function applyReplacements(content, replacements) {
   return result;
 }
 
-/**
- * Apply replacements matched against the normalised `baseContent`, writing back
- * onto `originalContent` so unchanged line blocks keep their exact bytes. The
- * two contents must have the same line count (normalisation never changes it).
- */
-function applyWithOverlay(originalContent, baseContent, replacements) {
-  const originalLines = splitLinesWithEndings(originalContent);
-  const baseLines = lineSpans(baseContent);
-  const groups = [];
-  for (const r of [...replacements].sort((a, b) => a.index - b.index)) {
-    const range = replacementLineRange(baseLines, r.index, r.length);
-    const current = groups[groups.length - 1];
-    if (current && range.startLine < current.endLine) {
-      current.endLine = Math.max(current.endLine, range.endLine);
-      current.replacements.push(r);
-      continue;
-    }
-    groups.push({ ...range, replacements: [r] });
-  }
-  let originalIndex = 0;
-  let result = "";
-  for (const g of groups) {
-    result += originalLines.slice(originalIndex, g.startLine).join("");
-    const startOffset = baseLines[g.startLine].start;
-    const endOffset = baseLines[g.endLine - 1].end;
-    result += applyReplacements(
-      baseContent.slice(startOffset, endOffset),
-      g.replacements.map((r) => ({ ...r, index: r.index - startOffset }))
-    );
-    originalIndex = g.endLine;
-  }
-  result += originalLines.slice(originalIndex).join("");
-  return result;
-}
-
 /** Number of lines in an LF-normalised string (a single trailing \n is not a line). */
 function contentLineCount(content) {
   if (content === "") return 0;
   const lines = content.split("\n");
   if (lines[lines.length - 1] === "" && lines.length > 1) return lines.length - 1;
   return lines.length;
+}
+
+const READ_GUTTER_RE = /^\s*(\d{1,6})\s*│\s?/u;
+
+/**
+ * Return the displayed line numbers when every nonblank line looks copied
+ * from read.numberedText. A null result means the text is ordinary file text.
+ */
+function numberedReadGutters(text) {
+  const lines = normalizeLineEndings(text).split("\n").filter((line) => line.trim() !== "");
+  if (lines.length === 0) return null;
+  const numbers = [];
+  for (const line of lines) {
+    const match = line.match(READ_GUTTER_RE);
+    if (!match) return null;
+    numbers.push(Number(match[1]));
+  }
+  return numbers;
+}
+
+function consecutiveFrom(numbers, start) {
+  return numbers.every((number, index) => number === start + index);
+}
+
+function gutterLeakError(content, op) {
+  const replacementNumbers = numberedReadGutters(op.new);
+  if (!replacementNumbers) return null;
+
+  if (typeof op.old === "string") {
+    const selectorNumbers = numberedReadGutters(op.old);
+    // An exact old match means the gutters really exist in the file. When the
+    // numbered selector only works through fuzzy normalization, matching
+    // gutters in new are almost certainly copied display metadata.
+    if (selectorNumbers && !content.includes(op.old)) {
+      return "replacement text appears copied from read.numberedText; remove the ‘N │’ line prefixes from new";
+    }
+    return null;
+  }
+
+  const start = op.startLine;
+  const end = op.endLine ?? start;
+  const inserting = end === start - 1;
+  if (!consecutiveFrom(replacementNumbers, start)) return null;
+
+  if (inserting) {
+    // There is no original selection to distinguish copied display gutters
+    // from intentionally inserted numbered data. Do not guess and block it.
+    return null;
+  }
+
+  const originalLines = normalizeLineEndings(content).split("\n").slice(start - 1, end);
+  const originalIsNumberedData = originalLines.length > 0 && originalLines.every((line) => READ_GUTTER_RE.test(line));
+  return originalIsNumberedData
+    ? null
+    : "replacement text appears copied from read.numberedText; remove the ‘N │’ line prefixes from new";
 }
 
 /**
@@ -214,19 +253,29 @@ export function applyEditsToContent(content, edits, all) {
     }
   }
 
-  let usedFuzzy = false;
-  for (const op of contentOps) {
-    if (collectMatches(content, op.old).length === 0) {
-      usedFuzzy = true;
-      break;
-    }
+  for (const op of [...contentOps, ...rangeOps]) {
+    const error = gutterLeakError(content, op);
+    if (error) return { error };
   }
-  const base = usedFuzzy ? normalizeForFuzzy(content) : content;
 
+  let usedFuzzy = false;
+  let fuzzyBase = null;
   const replacements = [];
   for (const op of contentOps) {
-    const needle = usedFuzzy ? normalizeForFuzzy(op.old) : op.old;
-    const matches = collectMatches(base, needle);
+    let needle = op.old;
+    let matches = collectMatches(content, needle).map((index) => ({ index, length: needle.length }));
+    if (matches.length === 0) {
+      usedFuzzy = true;
+      fuzzyBase ??= normalizeForFuzzyWithMap(content);
+      needle = normalizeForFuzzy(op.old);
+      if (needle === "") {
+        return { error: "old string becomes empty after fuzzy normalization; copy more surrounding text from a fresh read" };
+      }
+      matches = collectMatches(fuzzyBase.text, needle).map((index) => ({
+        index: fuzzyBase.starts[index],
+        length: fuzzyBase.ends[index + needle.length - 1] - fuzzyBase.starts[index],
+      }));
+    }
     if (matches.length === 0) {
       return {
         error:
@@ -242,12 +291,12 @@ export function applyEditsToContent(content, edits, all) {
           "or set all=true to replace every occurrence",
       };
     }
-    for (const m of matches) {
-      replacements.push({ index: m, length: needle.length, new: op.new });
+    for (const match of matches) {
+      replacements.push({ index: match.index, length: match.length, new: op.new });
     }
   }
   for (const op of rangeOps) {
-    replacements.push(rangeOpToReplacement(base, op));
+    replacements.push(rangeOpToReplacement(content, op));
   }
 
   const sorted = [...replacements].sort((a, b) => a.index - b.index);
@@ -257,10 +306,7 @@ export function applyEditsToContent(content, edits, all) {
     }
   }
 
-  const newContent = usedFuzzy
-    ? applyWithOverlay(content, base, sorted)
-    : applyReplacements(base, sorted);
+  const newContent = applyReplacements(content, sorted);
   if (newContent === content) return { error: "replacement produced identical content" };
   return { newContent, usedFuzzy, replacements: sorted.length };
 }
-

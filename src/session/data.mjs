@@ -4,7 +4,8 @@
  * `sessionData` rebuilds the on-screen transcript and exact model history
  * from a session's raw turns; `sessionConfig` picks the safe, credential-
  * free config subset to persist with each turn. Pure functions with one
- * home each, so the TUI and headless mode can never drift apart.
+ * home each, so the TUI and headless mode can never drift apart. Recovery
+ * warnings from a torn final JSONL record travel with the reconstructed data.
  */
 export function sessionData(data) {
   const blocks = [];
@@ -13,7 +14,13 @@ export function sessionData(data) {
     if (Array.isArray(turn.blocks)) blocks.push(...turn.blocks);
     if (Array.isArray(turn.messages)) history.push(...turn.messages);
   }
-  return { blocks, history, cwd: data?.meta?.cwd ?? null, model: data?.meta?.model ?? null };
+  return {
+    blocks,
+    history,
+    cwd: data?.meta?.cwd ?? null,
+    model: data?.meta?.model ?? null,
+    warnings: Array.isArray(data?.meta?.warnings) ? data.meta.warnings : [],
+  };
 }
 
 /**
@@ -30,6 +37,6 @@ export function sessionConfig(config) {
     maxRetries: config.maxRetries,
     maxSteps: config.maxSteps,
     maxToolResultChars: config.maxToolResultChars,
+    maxTurnToolResultChars: config.maxTurnToolResultChars,
   };
 }
-

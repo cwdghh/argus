@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createMockServer } from "./helpers/mock-llm.mjs";
 import { runTurn, executeToolCall, accumulateUsage, canonicalToolCall } from "../src/agent.mjs";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -156,6 +156,11 @@ test("canonicalToolCall normalizes argument formatting", () => {
   const b = { function: { name: "bash", arguments: '{ "command": "true" }' } };
   assert.equal(canonicalToolCall(a), canonicalToolCall(b), "whitespace in JSON does not defeat the guard");
   assert.notEqual(canonicalToolCall(a), canonicalToolCall({ function: { name: "read", arguments: "{}" } }));
+  assert.equal(
+    canonicalToolCall({ function: { name: "edit", arguments: '{"path":"x","edits":[{"new":"y","old":"x"}]}' } }),
+    canonicalToolCall({ function: { name: "edit", arguments: '{"edits":[{"old":"x","new":"y"}],"path":"x"}' } }),
+    "object key order does not evade semantic identity",
+  );
 });
 
 test("an identical repeated tool call stops the turn instead of looping", async (t) => {
@@ -167,9 +172,67 @@ test("an identical repeated tool call stops the turn instead of looping", async 
   t.after(() => srv.close());
   await assert.rejects(
     runTurn(config(srv), [], "go", () => {}),
-    /repeated the same tool call 3 times \(bash\); this looks like a loop/,
+    /repeated the same no-progress tool call 3 times \(bash\); this looks like a loop/,
   );
   assert.equal(srv.calls(), 3, "stopped on the third identical request");
+});
+
+test("identical reads separated by other work do not trigger the no-progress guard", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "argus-repeat-progress-"));
+  writeFileSync(join(dir, "a.txt"), "a\n");
+  const sequence = ["read", "bash", "read", "bash", "read"];
+  const srv = await createMockServer((i) => {
+    if (i >= sequence.length) return [{ content: "done" }];
+    const name = sequence[i];
+    const args = name === "read" ? { path: "a.txt" } : { command: "true" };
+    return [{ tool_calls: [{ index: 0, id: `c${i}`, function: { name, arguments: JSON.stringify(args) } }] }];
+  });
+  t.after(async () => {
+    await srv.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  assert.equal((await runTurn(config(srv), [], "inspect", () => {}, { cwd: dir })).finalText, "done");
+});
+
+test("a provider response with multiple tool calls is rejected before side effects", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "argus-multi-call-"));
+  const srv = await createMockServer(() => [{ tool_calls: [
+    { index: 0, id: "c1", function: { name: "write", arguments: '{"path":"a.txt","content":"a"}' } },
+    { index: 1, id: "c2", function: { name: "write", arguments: '{"path":"b.txt","content":"b"}' } },
+  ] }]);
+  t.after(async () => {
+    await srv.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  await assert.rejects(runTurn(config(srv), [], "write", () => {}, { cwd: dir }), /returned 2 tool calls/);
+  assert.equal(existsSync(join(dir, "a.txt")), false);
+  assert.equal(existsSync(join(dir, "b.txt")), false);
+});
+
+test("the final allowed model step cannot perform an orphaned mutation", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "argus-final-step-"));
+  const srv = await createMockServer(() => [{
+    tool_calls: [{ index: 0, id: "c1", function: { name: "write", arguments: '{"path":"a.txt","content":"a"}' } }],
+  }]);
+  t.after(async () => {
+    await srv.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  await assert.rejects(runTurn(config(srv), [], "write", () => {}, { cwd: dir, maxSteps: 1 }), /no follow-up model step remains/);
+  assert.equal(existsSync(join(dir, "a.txt")), false);
+});
+
+test("cumulative tool output is bounded inside an active turn", async (t) => {
+  const srv = await createMockServer((i) => {
+    if (i > 2) return [{ content: "unexpected" }];
+    const command = `printf ${String(i).repeat(700)}`;
+    return [{ tool_calls: [{ index: 0, id: `c${i}`, function: { name: "bash", arguments: JSON.stringify({ command }) } }] }];
+  });
+  t.after(() => srv.close());
+  await assert.rejects(
+    runTurn(config(srv), [], "large", () => {}, { maxToolResultChars: 500, maxTurnToolResultChars: 700 }),
+    /tool-result budget/,
+  );
 });
 
 test("persistent cwd: cd then pwd", async (t) => {

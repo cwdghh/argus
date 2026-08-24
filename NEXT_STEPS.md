@@ -1,150 +1,70 @@
 # NEXT_STEPS.md — candidate directions for argus
 
-**Purpose:** a short list of concrete next steps, grouped by impact and
-complexity. This is a planning reference — not a commitment. Pick whichever
-direction fits the current goals.
+**Purpose:** a short list of concrete work that has not shipped, ranked by
+likely value. This is a planning reference, not a commitment. Shipped work
+belongs in `PROGRESS.md`; current design questions belong in `GAPS.md`.
 
-See `GAPS.md` for the broader design territory and open questions.
-
-## Where history lives
-
-PROGRESS.md is the running changelog (newest first). This file only holds
-*what's left to do*, ranked; a step that ships moves to PROGRESS.md as ✅
-done and is removed here (or kept as a pointer to a related idea). The Gap
-sections below point at GAPS.md numbers; check GAPS.md first — a numbered
-gap may have been resolved since this file was last touched.
-
-## Scheduled next: tool-design discussion
-
-**Bridge (2026-08-18, reopened 2026-08-23):** the canonical tool-set
-discussion is **in progress** — per-tool status, removal candidates, and the
-decision log D1–D15 live in `docs/tool-surface.md` (`GAPS.md` #12 and
-`docs/tools.md` point there); `PROGRESS.md` has the 🚧 in-discussion entry.
-After the decisions, land the first contract-touching features in order: the
-read-before-edit freshness guard (item 2 below, the deliberately deferred
-direction) and a behavioral eval that exercises tool *choice*.
-`/session delete` (item 5) is tool-independent and can land any time.
----
-
-## High impact, moderate complexity
-
-### 1. Parallel tool execution
-
-- **What:** run independent tool calls concurrently instead of sequentially.
-- **Why:** common patterns (reading several files, running several reads before
-  a write) finish much faster.
-- **Considerations:**
-  - How to order results so the model can still reason about them clearly?
-  - Should the model opt in (e.g. an explicit parallel flag), or should the
-    agent decide automatically?
-  - Safety: parallel `bash` calls share the same shell cwd — is that a problem?
-
-### 2. Read-before-edit freshness guard (stale-line protection)
-
-- **What:** track a per-file "read after last modification" stamp in the
-  agent loop and have `edit` (especially range mode) refuse to run on a file
-  whose content the model hasn't seen since it last changed: *"re-read
-  first — line numbers must come from the most recent read."*
-- **Why:** range-mode line numbers and content-mode `old` strings are only
-  trustworthy when fresh. A stale-but-successful edit silently corrupts a
-  file; an error that says "re-read" is cheap by comparison. Numbered reads
-  make the re-read cheap, so the guard mostly enforces good behavior.
-- **Considerations:**
-  - Bookkeeping: a monotonically increasing sequence stamped on `read`
-    (ok), on `edit`/`write` (we know what we wrote), and a global
-    "unknown write" bump on every `bash` call — conservative, but forces
-    re-reads after every shell command.
-  - Does a *partial* read (one `offset`/`limit` page) count as fresh for
-    edits inside that window, or is a whole-file read required?
-  - Escape hatch: `force: true`, or keep it a soft rule (prompt + error
-    messages, the current state). The guard should be a knob, not a law.
-  - Rejected alternative for now: per-edit verification anchors (an
-    `expect` field) — they burden every edit for a safety net that rarely
-    fires. See `GAPS.md` #11 for the full trade-off.
-
-### 3. Desktop notifications for long tasks
-
-- **What:** when a turn takes longer than a threshold (e.g. 30s), send a
-  desktop notification when it completes.
-- **Why:** useful when you switch to another window while waiting for the
-  model or a long-running tool.
-- **Considerations:**
-  - Cross-platform: macOS, Linux, and Windows each have their own mechanism.
-  - Should the threshold be configurable?
-
----
+The canonical four-tool surface and its loop/freshness policy were completed on
+2026-08-24. See `docs/tool-surface.md`; do not reopen it here without behavioral
+evidence.
 
 ## Practical improvements
 
-### 4. Session deletion
+### 1. Broader behavioral evals
 
-- **What:** `/session delete <name>` for housekeeping.
-- **Why:** `/sessions` already lists sessions, but there's no way to clean
-  up old ones without manually deleting files.
-- **Considerations:**
-  - Confirmation before delete?
-  - Should delete accept multiple names or a glob?
+- **What:** grow beyond the opt-in `npm run eval:tools` surface checks into a
+  small set of coding tasks with automated outcomes and recorded provider
+  baselines.
+- **Why:** deterministic tests protect the implementation and the existing
+  evaluator protects basic tool choice, but neither measures general coding
+  quality after prompt or model changes.
+- **Considerations:** keep real-API cost explicit; choose tasks that predict
+  real usefulness; avoid provider-specific score theater.
 
-### 5. Behavioral evals
+### 2. Desktop notifications for long tasks
 
-- **What:** a small suite of coding tasks ("fix this bug", "add this feature",
-  "explain this code") with automated success criteria.
-- **Why:** the current test suite covers regression well, but doesn't test
-  actual coding quality. Evals catch quality regressions when changing the
-  system prompt or model.
-- **Considerations:**
-  - Which tasks actually predict useful coding performance?
-  - Should evals run against the real API or a mock?
-  - One high-value task: does the model pick content vs range edits
-    correctly, copy line numbers from a numbered read, and recover cleanly
-    from fuzzy-fallback edits? That directly protects the edit-reliability
-    work.
+- **What:** notify when a turn exceeding a configurable threshold completes.
+- **Why:** useful after switching away from a long model or test run.
+- **Considerations:** macOS/Linux/Windows mechanisms differ; keep terminal-only
+  identity and failure behavior simple.
 
-### 6. Smarter context compaction
+## Larger design directions
 
-- **What:** model-generated summaries for older turns, instead of deterministic
-  truncation.
-- **Why:** preserves more relevant context in long sessions.
-- **Considerations:**
-  - Adds latency and cost for the summarization call.
-  - A hybrid approach (deterministic for recent turns, model-generated for
-    older ones) might balance cost and quality.
+### 3. Smarter context summaries
 
----
+- **What:** optionally use model-generated summaries for older turns instead of
+  only deterministic digests.
+- **Why:** may retain intent and decisions better in very long sessions.
+- **Considerations:** adds latency, cost, and a second model call whose failure
+  must not damage the append-only source history.
 
-## Nice-to-have
+### 4. Native multi-provider support
 
-### 7. Multi-provider support
+- **What:** support a non-OpenAI-compatible provider such as Anthropic, or add
+  a small provider registry.
+- **Why:** expands endpoint choice beyond the already broad compatible API.
+- **Considerations:** provider-specific message/tool/usage semantics can erode
+  the project's minimal, auditable loop.
 
-- **What:** native Anthropic support (or a provider registry) beyond the
-  current OpenAI-compatible protocol.
-- **Why:** expands the user base to Anthropic users.
-- **Considerations:**
-  - Requires maintaining provider-specific message formats.
-  - The abstraction layer needs careful design to stay minimal.
+### 5. Transcript replay tests
 
-### 8. Transcript replay as tests
+- **What:** replay sanitized real-session traces through a deterministic model
+  fixture.
+- **Why:** preserves real call-shape regressions that hand-written cases may
+  miss. Tool-surface hashes and snapshots now make historical traces precise.
+- **Considerations:** strip secrets and unstable paths; separate deterministic
+  protocol replay from live-model behavioral evaluation.
 
-- **What:** save real sessions and replay them as tests.
-- **Why:** catches regressions in actual usage patterns, not just mock
-  scenarios. The session JSONL already stores everything needed.
-- **Considerations:**
-  - Real sessions depend on the model, so replay would need a recorded
-    response trace or a deterministic mock.
+### 6. Process sandbox
 
-### 9. Process sandbox
-
-- **What:** run shell tools in a sandbox (containers, seccomp, etc.) instead
-  of on the host.
-- **Why:** improves safety for destructive commands.
-- **Considerations:**
-  - Adds significant complexity.
-  - May conflict with argus's minimal philosophy.
-
----
+- **What:** run shell commands inside an isolation boundary rather than directly
+  on the host.
+- **Why:** materially stronger safety than the current approval backstop.
+- **Considerations:** containers/seccomp/platform differences add substantial
+  complexity and may conflict with the dependency-free, host-native design.
 
 ## How to use this file
 
-When starting a new session, pick one item and move it to `PROGRESS.md` as
-"⏳ planned". When it's done, mark it "✅ done" in `PROGRESS.md` and remove it
-from here (or leave it as a reference for similar future work).
+Choose one item only after checking its related gap and current code. When it
+ships, append the verified work to `PROGRESS.md` and remove it here; do not keep
+duplicate status narratives.

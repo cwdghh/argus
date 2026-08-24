@@ -5,8 +5,8 @@
  * stripped to its essentials:
  *
  *   1. Send the whole history + tool schemas to the LLM.
- *   2. If the reply contains tool calls, execute each one and append the
- *      results to the conversation as `tool` messages.
+ *   2. If the reply contains one tool call, validate/authorize/execute it and
+ *      append its bounded result as a `tool` message.
  *   3. Go back to step 1. The model now sees the tool outputs.
  *   4. When the model replies with plain text and no tool calls, we're done.
  *
@@ -20,9 +20,10 @@
  * reply stops, in-flight tools get the signal, and the loop returns early with
  * `{ aborted: true }`.
  */
-import { streamChat } from "./llm.mjs";
+import { buildBody, streamChat } from "./llm.mjs";
 import { findTool, tools, validateToolArgs } from "./tools.mjs";
-import { maybeCompact } from "./compact.mjs";
+import { COMPACT_DEFAULTS, maybeCompact } from "./compact.mjs";
+import { createToolState } from "./tool-state.mjs";
 
 /**
  * Run one user prompt through the tool-calling loop.
@@ -35,7 +36,11 @@ import { maybeCompact } from "./compact.mjs";
  *   signal?: AbortSignal,
  *   cwd?: string,
  *   confirm?: (cmd: string) => Promise<boolean>,
+ *   authorize?: (request: object) => Promise<boolean>,
+ *   maxSteps?: number,
  *   maxToolResultChars?: number,
+ *   maxTurnToolResultChars?: number,
+ *   maxRequestChars?: number,
  *   compactAtTokens?: number,
  *   compactAtChars?: number,
  *   keepTurns?: number,
@@ -47,10 +52,15 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
   const { signal } = opts;
   let cwd = opts.cwd || process.cwd();
   const confirm = opts.confirm || null;
+  const authorize = opts.authorize || null;
   const toolList = tools;
-  const maxSteps = opts.maxSteps ?? config.maxSteps ?? 25;
+  const maxSteps = opts.maxSteps ?? config.maxSteps ?? 100;
   const maxToolResultChars = opts.maxToolResultChars ?? config.maxToolResultChars ?? 50_000;
+  const maxTurnToolResultChars = opts.maxTurnToolResultChars ?? config.maxTurnToolResultChars ?? 400_000;
+  const maxRequestChars = opts.maxRequestChars ?? COMPACT_DEFAULTS.compactAtChars;
+  const toolState = createToolState();
   let steps = 0;
+  let turnToolResultChars = 0;
 
   // Everything created during this turn (assistant replies + tool results).
   const turnMessages = [{ role: "user", content: userMessage }];
@@ -75,11 +85,9 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
   });
   if (compacted) onEvent({ type: "compacted" });
 
-  // Guard against degenerate loops: a model that keeps requesting the same
-  // tool call never "stops generating". Refuse after the third identical
-  // (name + arguments) call so a runaway loop ends quickly instead of
-  // grinding through ARGUS_MAX_STEPS.
-  const toolCallCounts = new Map();
+  // Guard only consecutive calls that produce the same result. Legitimate
+  // rereads separated by a mutation are progress, not a loop.
+  let repeatStreak = null;
 
   try {
     while (true) {
@@ -87,9 +95,17 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
         throw new Error(`agent stopped after ${maxSteps} model steps (ARGUS_MAX_STEPS)`);
       }
       steps++;
+      const outgoingMessages = [...sendHistory, ...turnMessages];
+      const outgoingChars = requestPayloadChars(config, outgoingMessages, toolList);
+      if (outgoingChars > maxRequestChars) {
+        throw new Error(
+          `agent stopped before sending ${outgoingChars} characters; the active request exceeds the ` +
+            `${maxRequestChars}-character context safety limit`
+        );
+      }
       const { message: reply, finishReason, usage: stepUsage } = await streamAssistant(
         config,
-        [...sendHistory, ...turnMessages],
+        outgoingMessages,
         toolList,
         onEvent,
         signal
@@ -107,10 +123,13 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
         throw new Error("model response was truncated by its context/output limit; no partial tool calls were executed");
       }
 
-      // The assistant message becomes part of the conversation.
-      turnMessages.push(reply);
-
       const toolCalls = reply.tool_calls ?? [];
+      if (toolCalls.length > 1) {
+        throw new Error(`provider returned ${toolCalls.length} tool calls in one model step; argus requires exactly one`);
+      }
+      // The assistant message becomes part of the conversation only after its
+      // tool-call shape is known to be protocol-safe.
+      turnMessages.push(reply);
       if (toolCalls.length === 0) {
         // No tools requested -> the model gave its final answer.
         onEvent({ type: "assistant_end", text: reply.content ?? "" });
@@ -121,28 +140,47 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
       // `tool` message. The model does not actually run anything itself.
       for (const call of toolCalls) {
         const repeatKey = canonicalToolCall(call);
-        const repeats = (toolCallCounts.get(repeatKey) ?? 0) + 1;
-        toolCallCounts.set(repeatKey, repeats);
-        if (repeats >= 3) {
+        if (repeatStreak?.callKey === repeatKey && repeatStreak.count >= 2) {
           throw new Error(
-            `agent stopped: the model repeated the same tool call ${repeats} times ` +
+            `agent stopped: the model repeated the same no-progress tool call 3 times ` +
               `(${call?.function?.name ?? "(missing name)"}); this looks like a loop — ` +
               "refusing to keep generating"
+          );
+        }
+        if (steps >= maxSteps) {
+          throw new Error(
+            `agent stopped after ${maxSteps} model steps (ARGUS_MAX_STEPS) before executing another tool; ` +
+              "no follow-up model step remains to report its result"
+          );
+        }
+        const remainingToolChars = maxTurnToolResultChars - turnToolResultChars;
+        if (remainingToolChars < 500) {
+          throw new Error(
+            `agent stopped before another tool call: this turn reached its ${maxTurnToolResultChars}-character tool-result budget`
           );
         }
         const { result, cwd: nextCwd } = await executeToolCall(call, {
           cwd,
           signal,
           confirm,
-          maxToolResultChars,
+          authorize,
+          maxToolResultChars: Math.min(maxToolResultChars, remainingToolChars),
+          toolState,
           onEvent,
         });
         cwd = nextCwd;
+        const serializedResult = JSON.stringify(result);
+        turnToolResultChars += serializedResult.length;
         turnMessages.push({
           role: "tool",
           tool_call_id: call.id,
-          content: JSON.stringify(result),
+          content: serializedResult,
         });
+        const resultKey = stableStringify(result);
+        repeatStreak =
+          repeatStreak?.callKey === repeatKey && repeatStreak.resultKey === resultKey
+            ? { callKey: repeatKey, resultKey, count: repeatStreak.count + 1 }
+            : { callKey: repeatKey, resultKey, count: 1 };
 
         // Stop early if aborted (e.g. while a tool was running).
         if (signal?.aborted) {
@@ -245,14 +283,14 @@ export function canonicalToolCall(call) {
   const name = call?.function?.name ?? "";
   let args = call?.function?.arguments;
   try {
-    args = JSON.stringify(JSON.parse(args ?? "{}"));
+    args = stableStringify(JSON.parse(args ?? "{}"));
   } catch {
     args = String(args ?? "").trim();
   }
   return `${name}\u0000${args}`;
 }
 
-export async function executeToolCall(call, { cwd, signal, confirm, maxToolResultChars, onEvent = () => {} }) {
+export async function executeToolCall(call, { cwd, signal, confirm, authorize, maxToolResultChars, toolState, onEvent = () => {} }) {
   const toolName = call?.function?.name ?? "";
   const rawArguments = call?.function?.arguments;
   const tool = findTool(toolName);
@@ -278,7 +316,30 @@ export async function executeToolCall(call, { cwd, signal, confirm, maxToolResul
       result = { error: true, message: validationError };
     } else {
       try {
-        result = await tool.execute(args, { signal, cwd, confirm });
+        let approved = false;
+        const reason = tool.approval?.(args) ?? null;
+        if (reason) {
+          const request = { tool: tool.name, args, cwd, risk: tool.risk, reason };
+          const decide = authorize ?? (confirm ? ({ args: requestedArgs }) => confirm(requestedArgs.command ?? requestedArgs) : null);
+          if (!decide) {
+            result = { error: true, message: `blocked: ${tool.name} requires approval (${reason})` };
+          } else {
+            approved = await decide(request);
+            onEvent({ type: "approval", ...request, approved });
+            if (!approved) result = { error: true, message: `denied: ${tool.name} was not approved (${reason})` };
+          }
+        }
+        if (!result) {
+          result = await tool.execute(args, {
+            signal,
+            cwd,
+            confirm,
+            authorize,
+            approved,
+            maxResultChars: maxToolResultChars,
+            toolState,
+          });
+        }
       } catch (err) {
         result = { error: true, message: `tool threw: ${err.message}` };
       }
@@ -297,7 +358,7 @@ export async function executeToolCall(call, { cwd, signal, confirm, maxToolResul
 }
 
 /** Keep any tool—present or future—from flooding the next model request. */
-function boundToolResult(result, maxChars) {
+function boundToolResult(result, maxChars = 50_000) {
   let serialized;
   try {
     serialized = JSON.stringify(result);
@@ -308,19 +369,65 @@ function boundToolResult(result, maxChars) {
   if (serialized.length <= maxChars) return result;
 
   let preview = serialized.slice(0, Math.max(0, maxChars - 300));
+  const context = {
+    ...(typeof result?.path === "string" ? { path: result.path } : {}),
+    ...(typeof result?.cwd === "string" ? { cwd: result.cwd } : {}),
+    ...(Number.isInteger(result?.nextOffset) ? { nextOffset: result.nextOffset } : {}),
+  };
+  // A very long path/cwd must not defeat the cap it is meant to help explain.
+  // Keep exact continuation context when it is reasonably small; otherwise
+  // prefer a useful result preview and the hard size guarantee.
+  for (const key of ["path", "cwd"]) {
+    if (JSON.stringify(context[key] ?? "").length > maxChars / 3) delete context[key];
+  }
   let bounded;
-  do {
+  for (;;) {
     bounded = {
       ...(result?.error ? { error: true } : {}),
-      ...(typeof result?.cwd === "string" ? { cwd: result.cwd } : {}),
+      ...context,
       truncated: true,
       originalChars: serialized.length,
       message: `tool result exceeded ${maxChars} characters; use a narrower read or command`,
       preview,
     };
-    if (JSON.stringify(bounded).length > maxChars) preview = preview.slice(0, Math.floor(preview.length * 0.8));
-  } while (JSON.stringify(bounded).length > maxChars && preview.length > 0);
-  return bounded;
+    const excess = JSON.stringify(bounded).length - maxChars;
+    if (excess <= 0) return bounded;
+    if (preview.length > 0) {
+      preview = preview.slice(0, Math.max(0, preview.length - excess - 8));
+      continue;
+    }
+    if (Object.hasOwn(context, "path")) {
+      delete context.path;
+      continue;
+    }
+    if (Object.hasOwn(context, "cwd")) {
+      delete context.cwd;
+      continue;
+    }
+    // Config validation keeps this limit >= 500, so the minimal object fits.
+    return { ...(result?.error ? { error: true } : {}), truncated: true };
+  }
+}
+
+function stableValue(value) {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableValue(value[key])]));
+  }
+  return value;
+}
+
+function stableStringify(value) {
+  return JSON.stringify(stableValue(value));
+}
+
+function requestPayloadChars(config, messages, toolList) {
+  return JSON.stringify(buildBody({
+    model: config.model,
+    systemPrompt: config.systemPrompt,
+    messages,
+    tools: toolList,
+  })).length;
 }
 
 /**

@@ -673,6 +673,52 @@ test("/name renames the current session and repoints the handle", async () => {
   assert.deepEqual(t.sessionNames, ["new", "old"], "the completion cache refreshes after a rename");
 });
 
+test("/delete confirms, protects the active session, and refreshes completion", async () => {
+  const deleted = [];
+  const confirmations = [];
+  const t = new MinimalTui(
+    { model: "m" },
+    {
+      sessionName: "active",
+      sessionNames: ["active", "old"],
+      deleteSession: async (name, active) => {
+        deleted.push([name, active]);
+        return name;
+      },
+      listSessionNames: async () => ["active"],
+    },
+  );
+  t.confirm = async (request) => {
+    confirmations.push(request);
+    return true;
+  };
+
+  await t.runCommand("/delete active");
+  assert.match(t.blocks.at(-1).text, /cannot delete the active session/);
+  assert.deepEqual(deleted, []);
+
+  await t.runCommand("/delete old");
+  assert.deepEqual(deleted, [["old", "active"]]);
+  assert.match(confirmations[0].reason, /cannot be undone/);
+  assert.equal(t.blocks.at(-1).summary, "deleted session old; it cannot be recovered");
+  assert.deepEqual(t.sessionNames, ["active"]);
+
+  t.confirm = async () => false;
+  await t.runCommand("/delete another");
+  assert.deepEqual(deleted, [["old", "active"]]);
+  assert.equal(t.blocks.at(-1).summary, "session deletion cancelled: another");
+});
+
+test("Ctrl-C cancels a local confirmation without arming force-quit", async () => {
+  const t = new MinimalTui({ model: "m" });
+  const decision = t.confirm({ tool: "session delete", args: { command: "old" } });
+  t.handleCtrlC();
+  assert.equal(await decision, false);
+  assert.equal(t.pendingConfirm, null);
+  assert.equal(t.aborting, false);
+  assert.equal(t.mode, "working");
+});
+
 test("/name tolerates trailing whitespace and joins multi-word input", async () => {
   let called = [];
   const t = new MinimalTui(

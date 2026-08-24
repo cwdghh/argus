@@ -1,6 +1,6 @@
 /**
  * Live suggestions for the prompt editor: slash commands while the input is a
- * bare `/...`, saved-session names after `/resume `, and `@path` entries while
+ * bare `/...`, saved-session names after `/resume ` or `/delete `, and `@path` entries while
  * the caret sits right after an `@token`.
  *
  * Pure functions over plain input state: the TUI recomputes its `suggestion`
@@ -46,11 +46,11 @@ export function computeSuggestion({ buffer, cursor, mode, cwd, sessions, prev })
       : null;
   }
 
-  // Session names after "/resume ", e.g. "/resume work-". The token is the
-  // text between the space and the caret; an empty token lists every session.
-  const resume = /^\/resume\s+([^\s]*)$/.exec(before);
-  if (resume && Array.isArray(sessions)) {
-    const typed = resume[1];
+  // Session names after "/resume " or "/delete ". The token is the text
+  // between the space and the caret; an empty token lists every session.
+  const sessionCommand = /^\/(?:resume|delete)\s+([^\s]*)$/.exec(before);
+  if (sessionCommand && Array.isArray(sessions)) {
+    const typed = sessionCommand[1];
     const items = sessions.filter((name) => name.startsWith(typed)).map((name) => ({ label: name }));
     if (!items.length) return null;
     return {

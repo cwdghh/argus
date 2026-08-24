@@ -69,19 +69,18 @@ export function getConfig() {
     maxRetries: nonNegativeInt(process.env.ARGUS_MAX_RETRIES, 2),
     maxSteps: positiveInt(process.env.ARGUS_MAX_STEPS, 100),
     maxToolResultChars: positiveInt(process.env.ARGUS_MAX_TOOL_RESULT_CHARS, 50_000, 500),
+    // Bound cumulative tool output inside one active turn; next-turn
+    // compaction cannot help until that turn finishes.
+    maxTurnToolResultChars: positiveInt(process.env.ARGUS_MAX_TURN_TOOL_RESULT_CHARS, 400_000, 1_000),
     // Keep only the N most recent saved sessions (the active one is never
     // pruned); 0 keeps everything. Pruning runs on TUI startup.
     sessionKeep: nonNegativeInt(process.env.ARGUS_SESSION_KEEP, 0),
     // Optional system prompt that shapes the agent's behaviour.
     systemPrompt:
       process.env.ARGUS_SYSTEM_PROMPT ??
-      "You are a careful coding agent. You can read files, write files, edit files, " +
-        "and run shell commands to help the user. Before changing a repository, read and follow " +
+      "You are a careful coding agent. Before changing a repository, read and follow " +
         "its instruction files (for example AGENTS.md). Inspect relevant files before editing; " +
-        "copy line numbers from read output for startLine/endLine edits. Use edit with edits[] " +
-        "(content form {old, new} for small changes; range form {startLine, endLine, new} for " +
-        "whole-block rewrites, insertions, or deletions); keep write for whole new files. bash keeps its working directory across calls. " +
-        "Treat @path mentions as file references: read them before relying on their contents. " +
+        "treat @path mentions as file references: read them before relying on their contents. " +
         "Make small focused changes, preserve unrelated user work, run relevant checks, " +
         "and report results honestly. Prefer tools over guessing. Keep answers concise.",
   };
@@ -100,7 +99,7 @@ export function validateConfig(config) {
     throw new Error(`ARGUS_BASE_URL must use http or https: ${config.baseUrl}`);
   }
   if (url.hostname.endsWith("aliyuncs.com") && (!config.apiKey || config.apiKey === "sk-your-key-here")) {
-    throw new Error("ARGUS_API_KEY is required for the configured Alibaba Cloud endpoint");
+    throw new Error("ARGUS_API_KEY is required for the configured Alibaba Cloud endpoint; set it in .env or your environment");
   }
   return config;
 }

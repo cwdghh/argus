@@ -4,6 +4,152 @@ Dated changelog, **newest first** (this file is a log — never edit entries in 
 
 ---
 
+#### 2026-08-24 — numbered-read/edit boundary validated on live model
+
+**Status: ✅ implemented and measured on `refine/argus-tool-surface-v2`**
+
+Tested whether line gutters in `read` confuse the configured model's current
+selector-based `edit` calls, without first introducing the proposed typed-edit
+redesign.
+
+- Renamed the rendered read-result field from generic `content` to
+  `numberedText`. Tool wording now states that `N │ ` prefixes are selection
+  metadata: `old` may copy them, while `new` contains literal file text only.
+- Kept old result formatting compatible with historical `content` payloads.
+- Added conservative, atomic gutter-leak detection. It rejects strong evidence
+  that displayed prefixes entered replacement text, but does not silently
+  rewrite `new`; exact files containing numbered text and ambiguous numbered
+  insertions remain legal.
+- Added regression coverage for copied numbered selectors, leaked content and
+  range replacements, batch atomicity, legitimate numbered files, and result
+  summarization.
+- Extended the paid evaluator with named-task filtering, successful argument
+  traces, zero-invalid-call enforcement, and a less-cued multiline edit task.
+  Functional `bash` verification is allowed for that task rather than being
+  misclassified as bad tool choice.
+- Against `deepseek-v4-flash-0731`, content and range edits passed with clean
+  arguments. The uncued multiline task passed on **3/3 independent runs** with
+  exact outcomes and **0 invalid calls**; every `old` and `new` omitted read
+  gutters. One initial report said 2/3 only because the harness disallowed the
+  model's sensible post-edit `bash` verification; the file outcome and edit
+  call were already correct, and the policy was corrected before both reruns.
+
+Verified in this session: full `node --check`; `git diff --check`; `npm test`
+(**242/242 pass**); one paid three-task edit run; and two additional paid
+uncued-edit runs. The evidence says numbered lines do not currently confuse
+this model on content/range/multiline edits; uncued insertion, deletion, and
+mixed-batch choice remain the next comparison for a typed-operation proposal.
+
+#### 2026-08-24 — live tool-choice baseline and role-boundary refinement
+
+**Status: ✅ measured; one provider-specific outcome miss remains**
+
+Ran the opt-in tool-choice evaluator against the configured
+`deepseek-v4-flash-0731` provider and used the trace evidence to refine the
+model-visible contract.
+
+- Made each structured text tool's boundary with `bash` explicit: ordinary
+  text reads use `read`, new complete files use `write`, targeted changes use
+  `edit`, and `bash` owns search/listing/build/test/other CLI work.
+- Clarified that `write.content` is byte-exact and must itself contain a
+  requested final newline, including a concrete escaped-newline example.
+- Corrected the evaluator to require the intended tool sequence as a
+  subsequence while allowing task-specific verification calls. This prevents
+  a sensible post-edit `read` from being counted as a failure, while any
+  off-contract tool still fails tool choice.
+- The final live run passed content edit, fresh range edit, and shell search.
+  File creation chose `write` with valid arguments but the configured model
+  omitted the requested trailing newline, so the exact file outcome failed:
+  **3/4 pass, 4/4 intended primary-tool choice, 0 invalid calls**. Repeated
+  wording refinements did not change that provider behavior, so it remains
+  measurement rather than a hidden evaluator relaxation.
+- The standing system prompt remains 59 words / 406 characters. The four bare
+  model-visible tool definitions now serialize to 3,365 characters (read 660,
+  write 739, edit 1,391, bash 575); the added 282 characters are explicit role
+  boundaries and exact-content guidance.
+
+Verified in this session: `node --check` for all source/eval/test modules;
+`git diff --check`; `npm test` (**240/240 pass**, twice after the evaluator
+changes); and three post-refinement paid/provider evaluator runs (each final
+state **3/4**, with the trailing-newline outcome as the remaining miss).
+
+#### 2026-08-24 — product-readiness pass: session safety, cleanup, and CLI smoke
+
+**Status: ✅ done**
+
+Audited startup, headless/TUI operation, session integrity, packaging, safety,
+and first-use documentation after the canonical tool-surface work.
+
+- Added confirmed `/delete <name>` session cleanup with exact-name validation,
+  active-session protection, `/delete` name completion, immediate completion
+  refresh, and an explicit irreversible-deletion result.
+- Made the session store private by default (`0700` directory, `0600` newly
+  written/resumed transcripts on POSIX platforms) instead of relying on the
+  process umask.
+- Stopped treating every session read failure as "not found." Interior JSONL
+  corruption now fails with its line number; a torn final record is ignored
+  with a visible TUI/headless recovery warning; `/sessions` degrades per file
+  rather than failing the whole listing.
+- Fixed Ctrl-C during a local confirmation so it cancels cleanly instead of
+  leaving a stale force-quit state. Aligned `/status`'s fallback request timeout
+  with the 600-second configured default and made missing-key guidance point to
+  `.env`/the environment.
+- Added a full CLI subprocess test through config loading, HTTP/SSE streaming,
+  stdout/stderr separation, and clean exit. Updated session/command docs and
+  removed shipped session deletion from `NEXT_STEPS.md`.
+
+Verified in this session: interactive TUI startup, `/help`, and `/exit` in a
+fresh isolated home; `npm pack --dry-run --json` (bin executable, `.env`
+excluded); full `node --check`; `git diff --check`; and `npm test`
+(**240/240 pass**). The opt-in paid/provider-backed tool-choice eval was not
+run, so no live-model quality baseline is claimed.
+
+#### 2026-08-24 — canonical four-tool surface completed and hardened
+
+**Status: ✅ done**
+
+Resolved the pending tool-surface decisions D1–D15 without adding a default
+tool or runtime dependency. `read`, `write`, `edit`, and `bash` now have one
+validated shape and one specific job; `docs/tool-surface.md` records the
+rationale and `docs/tools.md` owns the current contract.
+
+- Removed legacy top-level `edit` inputs. Recursive schema validation now
+  enforces nested requirements, unknown-field rejection, array bounds, and
+  numeric/string constraints before I/O; semantic validation owns cross-field
+  edit rules.
+- Made fuzzy edits exact-span preserving with a grapheme-aware normalized
+  offset map, rejected empty normalized needles, isolated exact/fuzzy matching
+  per batch item, and fixed the empty-needle infinite loop.
+- Added bounded-memory `read` scanning, structured line metadata/pagination,
+  safe oversized-line errors, final serialized-size fitting, and structured
+  filesystem failures.
+- Added same-turn range freshness (`src/tool-state.mjs`): exact file hashes and
+  displayed line coverage are required; partial pages remain partial; writes
+  invalidate their path and executed shell commands invalidate all evidence.
+- Hardened the loop: provider multi-call replies are rejected before effects,
+  the last model step is reserved for synthesis, identical no-progress calls
+  stop on the third consecutive result, complete outgoing request size is
+  measured, and active turns have a cumulative tool-result budget.
+- Added model-invisible risk classes, centralized structured authorization,
+  auditable TUI/headless decisions, a line-continuation-resistant destructive
+  shell backstop, and distinct shell timeout vs user-abort results.
+- Versioned the model-visible tool surface in append-only sessions with a hash
+  per turn and a schema snapshot on change. Removed a duplicate session module
+  header and persisted/displayed the new turn-result limit.
+- Reduced the default prompt from 119 words / 791 characters to 59 words / 406
+  characters by leaving tool mechanics in descriptions. The complete tool
+  wire surface is now 3,083 characters (read 646, write 562, edit 1,373, bash
+  502).
+- Added the opt-in `npm run eval:tools` real-provider evaluator for content
+  edit, fresh range edit, shell search, and new-file tool choice. It uses
+  isolated temporary workspaces and is intentionally outside the offline test
+  suite.
+
+Verified in this session: `git diff --check`; `node --check` for all source,
+session, TUI, eval, and test modules; `npm test` (**234/234 pass**). The
+provider-backed evaluator was syntax-checked but not run, so no paid/model
+quality baseline is claimed.
+
 #### 2026-08-24 — tool-surface discussion brief for fresh-session continuity
 
 **Status: 🚧 in discussion**

@@ -45,7 +45,7 @@ export function formatTokens(u) {
 
 /**
  * One-line summary of a tool result for transcript blocks and stderr logs.
- * Prefers the most informative field (stdout first line, read content first
+ * Prefers the most informative field (stdout first line, read text first
  * line), falls back to the `ok` payload, and never throws on weird values.
  */
 export function summarize(result) {
@@ -55,8 +55,9 @@ export function summarize(result) {
     const first = String(result.stdout).trim().split("\n")[0];
     return first ? `stdout: ${first.slice(0, 80)}${first.length > 80 ? "…" : ""}` : "ok (no output)";
   }
-  if (result.content != null) {
-    const c = String(result.content).trim();
+  const readText = result.numberedText ?? result.content;
+  if (readText != null) {
+    const c = String(readText).trim();
     return c ? `${c.split("\n")[0].slice(0, 80)}${c.length > 80 ? "…" : ""}` : "ok";
   }
   if (result.ok) {

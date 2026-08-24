@@ -30,7 +30,7 @@ makes a fact appear twice, one of the two mentions must become a pointer.
 | `PROGRESS.md` | Dated changelog, newest first | every real change (append an entry) |
 | `GAPS.md` | Open design questions, one numbered section per gap | a question is resolved, refined, or scheduled |
 | `NEXT_STEPS.md` | Concrete candidate steps, ranked by impact | a step is taken, superseded, or added |
-| `docs/tool-surface.md` | The canonical tool-set discussion: per-tool status, removal candidates, decision log | a tool-surface decision lands or changes |
+| `docs/tool-surface.md` | Canonical tool-set decisions, admission rule, and rationale | a tool-surface decision lands or changes |
 
 Everything under `docs/archive/` is frozen history; everything else is a living document.
 
@@ -52,7 +52,7 @@ owner's copy and turn the other mention into a pointer.
 | History (dates, what shipped) | `PROGRESS.md` | GAPS status blocks **point at** PROGRESS dates, short |
 | Current design state (resolved / open) | `GAPS.md` | `NEXT_STEPS.md` points at gap numbers, short |
 | Next actions, ranked | `NEXT_STEPS.md` | — |
-| Tool-surface discussion state | `docs/tool-surface.md` | `GAPS.md` #12 points here |
+| Tool-surface design state | `docs/tool-surface.md` | `GAPS.md` #12 points here |
 | The self-updating workflow | `docs/self-updating.md` | — |
 
 ## Reading order at bootstrap
@@ -66,7 +66,7 @@ A fresh session reads before touching anything:
 
 Then consult by topic: `GAPS.md` for current design state, `NEXT_STEPS.md` for
 what to do next, `docs/tool-surface.md` for the canonical tool-set
-discussion, `PROGRESS.md` for what already happened (newest first),
+decisions, `PROGRESS.md` for what already happened (newest first),
 README for the user view, `docs/*` for specifics (e.g. `docs/interrupt-resume.md`
 for the interrupt→continue design).
 

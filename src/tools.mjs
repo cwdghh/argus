@@ -1,11 +1,14 @@
 /**
- * The tools the agent can call. Each tool is the same shape:
+ * The tools the agent can call. Registry entries have this shape:
  *
  *   {
  *     name:        string        – unique name the model references
  *     description: string        – tells the model when/how to use it
  *     parameters:  JSON Schema   – describes/validates the arguments
- *     execute:     (args) => any – runs the tool, returns a JSON-serialisable value
+ *     risk:        string        – model-invisible policy classification
+ *     validate:    (args) => ?string  – optional semantic validation
+ *     approval:    (args) => ?string  – optional approval reason
+ *     execute:     (args, ctx) => any – returns a JSON-serialisable value
  *   }
  *
  * The schema is the contract between the model and your code: the model only
@@ -14,9 +17,10 @@
  * This file is the registry + the shell/fs execution layer. The pure engines
  * it delegates to live beside it:
  *   - src/edit-engine.mjs — exact/fuzzy/range text editing
- *   - src/read-bounds.mjs — line/byte bounds + truncation for read
+ *   - src/read-bounds.mjs — bounded-memory scanning + line/byte caps
+ *   - src/tool-state.mjs — same-turn range-edit freshness (owned by the loop)
  *
- * See docs/tools.md for the full contract and how to add tools.
+ * See docs/tools.md for the full contract and change workflow.
  */
 import { readFile, writeFile } from "node:fs/promises";
 import { exec } from "node:child_process";
@@ -24,7 +28,7 @@ import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { applyEditsToContent, detectLineEnding, normalizeLineEndings, restoreLineEndings } from "./edit-engine.mjs";
-import { formatBytes, truncateRead } from "./read-bounds.mjs";
+import { formatBytes, readFileWindow } from "./read-bounds.mjs";
 
 const execAsync = promisify(exec);
 // Patterns that are dangerous enough to require confirmation before running.
@@ -43,88 +47,140 @@ const DESTRUCTIVE_PATTERNS = [
 ];
 
 function isDestructive(command) {
-  return DESTRUCTIVE_PATTERNS.some((re) => re.test(command));
+  const joined = String(command).replace(/\\\r?\n/g, " ");
+  return DESTRUCTIVE_PATTERNS.some((re) => re.test(joined));
+}
+
+function fitReadResult({ file, lines, startDisplay, totalLines, endsWithNewline, maxChars = 50_000 }) {
+  const gutter = String(Math.max(1, totalLines)).length;
+  const build = (count) => {
+    const endDisplay = startDisplay + count - 1;
+    const hasMore = startDisplay - 1 + count < totalLines;
+    let numberedText = lines
+      .slice(0, count)
+      .map((line, i) => String(startDisplay + i).padStart(gutter) + " │ " + line)
+      .join("\n");
+    if (hasMore) {
+      numberedText = numberedText.trimEnd() +
+        `\n\n[Showing lines ${startDisplay}-${endDisplay} of ${totalLines}. Use offset=${endDisplay + 1} to continue.]`;
+    } else if (endsWithNewline && count > 0) {
+      numberedText += "\n";
+    }
+    return {
+      path: file,
+      numberedText,
+      startLine: startDisplay,
+      endLine: endDisplay,
+      totalLines,
+      ...(hasMore ? { truncated: true, nextOffset: endDisplay + 1 } : {}),
+    };
+  };
+
+  let low = 1;
+  let high = lines.length;
+  let best = null;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const candidate = middle > 0 ? build(middle) : null;
+    if (candidate && JSON.stringify(candidate).length <= maxChars) {
+      best = candidate;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return best ?? {
+    error: true,
+    path: file,
+    message: `line ${startDisplay} cannot fit within the ${maxChars}-character tool-result limit; use bash to inspect a byte range`,
+  };
 }
 
 export const tools = [
   {
     name: "read",
+    risk: "read-only",
     description:
-      "Read a file and return its contents as text, with every line prefixed by its absolute " +
-      "1-indexed line number (copy these for startLine/endLine edits). Large files are truncated " +
-      "to at most 2000 lines or 50KB; pass offset/limit to page through big files instead of " +
-      "reading them whole. Paths are relative to the current working directory.",
+      "Read a text file as bounded numberedText with absolute 1-indexed line prefixes. " +
+      "The prefixes select ranges and are not file content. Use offset/limit and nextOffset to page. " +
+      "Paths are relative to the current working directory. Use this instead of bash for text files.",
     parameters: {
       type: "object",
       properties: {
-        path: { type: "string", description: "Path to the file to read" },
+        path: { type: "string", minLength: 1, description: "Path to the file to read" },
         offset: { type: "integer", minimum: 1, description: "1-indexed first line to read (default 1)" },
         limit: { type: "integer", minimum: 1, description: "Maximum number of lines to read" },
       },
       required: ["path"],
+      additionalProperties: false,
+    },
+    validate({ path }) {
+      return path.trim() ? null : "read argument path must not be blank";
     },
     async execute({ path, offset, limit }, ctx = {}) {
       const file = resolve(ctx.cwd || process.cwd(), path);
-      const text = await readFile(file, "utf8");
-      const allLines = text === "" ? [] : text.split("\n");
-      if (allLines[allLines.length - 1] === "" && allLines.length > 1) allLines.pop();
-      const totalLines = allLines.length;
-      if (totalLines === 0) return { path: file, content: "" };
+      let window;
+      try {
+        window = await readFileWindow(file, { offset, limit });
+      } catch (err) {
+        return { error: true, path: file, message: `cannot read ${file}: ${err.message}`, ...(err.code ? { code: err.code } : {}) };
+      }
+      const totalLines = window.totalLines;
+      if (totalLines === 0) {
+        ctx.toolState?.recordReadHash(file, window.hash, 0, 0, 0);
+        return { path: file, numberedText: "", startLine: 0, endLine: 0, totalLines: 0 };
+      }
 
-      const start = offset ? Math.max(0, offset - 1) : 0;
-      if (start >= allLines.length) {
+      const startDisplay = offset ?? 1;
+      if (startDisplay > totalLines) {
         return { error: true, path: file, message: "offset " + offset + " is beyond the end of the file (" + totalLines + " lines)" };
       }
-      let window = allLines.slice(start);
-      if (limit !== undefined) window = window.slice(0, limit);
-
-      const endsWithNewline = text.endsWith("\n");
-      const windowText = window.join("\n");
-      const t = truncateRead(windowText);
-      const startDisplay = start + 1;
-      const endDisplay = startDisplay + t.outputLines - 1;
-      let content;
-      const notes = [];
-      if (t.firstLineExceedsLimit) {
-        content =
-          "[Line " + startDisplay + " is " + formatBytes(Buffer.byteLength(window[0] ?? "", "utf8")) +
-          ", over the 50KB read limit. Use bash to read it in chunks, e.g.: sed -n '" + startDisplay + "p' " + path + " | head -c 50000]";
-      } else {
-        const gutter = String(Math.max(1, totalLines)).length;
-        content = t.lines
-          .map((line, i) => String(startDisplay + i).padStart(gutter) + " │ " + line)
-          .join("\n");
-        if (t.truncated) {
-          notes.push("[Showing lines " + startDisplay + "-" + endDisplay + " of " + totalLines + ". Use offset=" + (endDisplay + 1) + " to continue.]");
-        } else if (limit !== undefined && start + window.length < totalLines) {
-          const remaining = totalLines - (start + window.length);
-          notes.push("[" + remaining + " more line" + (remaining === 1 ? "" : "s") + " in the file. Use offset=" + (start + window.length + 1) + " to continue.]");
-        } else if (endsWithNewline && start + window.length >= totalLines) {
-          content += "\n"; // reproduce the file's final newline
-        }
-        if (notes.length > 0) content = content.trimEnd() + "\n\n" + notes.join("\n");
+      if (window.firstLineExceedsLimit) {
+        return {
+          error: true,
+          path: file,
+          message:
+            `line ${startDisplay} is ${formatBytes(window.firstLineBytes)}, ` +
+            "over the 50KB line limit; use bash with a safely quoted path to inspect byte ranges",
+        };
       }
-      const result = { path: file, content };
-      if (t.truncated) {
-        result.truncated = true;
-        result.nextOffset = endDisplay + 1;
+      const result = fitReadResult({
+        file,
+        lines: window.lines,
+        startDisplay,
+        totalLines,
+        endsWithNewline: window.endsWithNewline,
+        maxChars: ctx.maxResultChars,
+      });
+      if (!result.error && ctx.toolState) {
+        ctx.toolState.recordReadHash(file, window.hash, result.startLine, result.endLine, result.totalLines);
       }
       return result;
     },
   },
   {
     name: "write",
+    risk: "filesystem-write",
     description:
-      "Write text content to a new file. Existing files are protected unless `overwrite` is true. " +
-      "Use this for full-file changes or new files. For small precise changes, prefer edit.",
+      "Create a text file from byte-exact complete content, including any requested final newline. " +
+      "Existing files are protected unless overwrite=true. " +
+      "Use this instead of bash redirection or heredocs for text files; use edit for targeted changes " +
+      "to an existing file.",
     parameters: {
       type: "object",
       properties: {
-        path: { type: "string", description: "Path of the file to write" },
-        content: { type: "string", description: "Full text content to write" },
+        path: { type: "string", minLength: 1, description: "Path of the file to write" },
+        content: {
+          type: "string",
+          description: "Exact full text. Include requested final newlines in the string; for example, a one-line file uses content: \"text\\n\"",
+        },
         overwrite: { type: "boolean", description: "Allow replacing an existing file (default: false)" },
       },
       required: ["path", "content"],
+      additionalProperties: false,
+    },
+    validate({ path }) {
+      return path.trim() ? null : "write argument path must not be blank";
     },
     async execute({ path, content, overwrite = false }, ctx = {}) {
       const file = resolve(ctx.cwd || process.cwd(), path);
@@ -134,76 +190,75 @@ export const tools = [
         if (err.code === "EEXIST") {
           return { error: true, message: `file already exists: ${file}; use edit or set overwrite=true` };
         }
-        throw err;
+        return { error: true, path: file, message: `cannot write ${file}: ${err.message}`, ...(err.code ? { code: err.code } : {}) };
       }
+      ctx.toolState?.recordMutation(file);
       return { ok: true, path: file, bytes: Buffer.byteLength(content) };
     },
   },
   {
     name: "edit",
+    risk: "filesystem-write",
     description:
-      "Edit a file in one canonical shape: edits[] holds one or more targeted replacements, " +
-      "applied atomically against the original file (bottom-up, so they never shift each " +
-      "other). Each item is content form ({old, new}: exact replace, tolerant of trailing " +
-      "whitespace, line numbers, smart quotes and dashes; old must be unique unless all=true) " +
-      "or range form ({startLine, endLine, new}: replace inclusive 1-indexed lines from the " +
-      "most recent read; endLine = startLine - 1 inserts before startLine; new='' deletes). " +
-      "Use write for whole new files.",
+      "Apply an atomic edits[] batch to an existing file. Each item uses exactly one selector: " +
+      "{old,new} replaces unique content (all=true replaces every match), or " +
+      "{startLine,endLine,new} replaces freshly read inclusive lines. endLine=startLine-1 inserts; " +
+      "new='' deletes. old may include read's line prefixes; new must contain only file text. " +
+      "Exact content falls back to whitespace/punctuation-tolerant matching. Use " +
+      "this instead of shell text-rewrite commands.",
     parameters: {
       type: "object",
       properties: {
-        path: { type: "string", description: "Path of the file to edit" },
+        path: { type: "string", minLength: 1, description: "Path of the file to edit" },
         edits: {
           type: "array",
           description: "One or more targeted replacements, applied atomically in one call (content and/or range form)",
           items: {
             type: "object",
             properties: {
-              old: { type: "string", minLength: 1, description: "Content form: text to find (unique in the file unless all=true)" },
-              new: { type: "string", description: "Replacement text (content or range form)" },
+              old: { type: "string", minLength: 1, description: "File text to find; numberedText prefixes copied from read are accepted" },
+              new: { type: "string", description: "Replacement file text only; never include read's line-number prefixes" },
               startLine: { type: "integer", minimum: 1, description: "Range form: first line to replace (1-indexed, from a read)" },
-              endLine: { type: "integer", minimum: 1, description: "Range form: last line to replace (default startLine; startLine-1 inserts before startLine)" },
+              endLine: { type: "integer", minimum: 0, description: "Range form: last line to replace (default startLine; startLine-1 inserts before startLine)" },
             },
+            required: ["new"],
+            additionalProperties: false,
           },
+          minItems: 1,
         },
         all: { type: "boolean", description: "Replace every occurrence of old (default: false)" },
       },
-      required: ["path"],
+      required: ["path", "edits"],
+      additionalProperties: false,
+    },
+    validate(args) {
+      if (!args.path.trim()) return "edit argument path must not be blank";
+      for (let i = 0; i < args.edits.length; i++) {
+        const item = args.edits[i];
+        const hasOld = Object.hasOwn(item, "old");
+        const hasStart = Object.hasOwn(item, "startLine");
+        if (hasOld === hasStart) return `edit argument edits[${i}] must provide exactly one of old or startLine`;
+        if (!Object.hasOwn(item, "new")) return `edit argument edits[${i}] is missing required argument: new`;
+        if (hasStart && item.endLine !== undefined && item.endLine !== item.startLine - 1 && item.endLine < item.startLine) {
+          return `edit argument edits[${i}].endLine must be startLine - 1 (insert) or >= startLine`;
+        }
+      }
+      return null;
     },
     async execute(args, ctx = {}) {
       const file = resolve(ctx.cwd || process.cwd(), args.path);
-      const edits = [];
-      if (Array.isArray(args.edits)) {
-        for (const e of args.edits) {
-          if (!e || typeof e !== "object") continue;
-          const item = {};
-          if (typeof e.old === "string") item.old = e.old;
-          if (typeof e.new === "string") item.new = e.new;
-          if (typeof e.startLine === "number") item.startLine = e.startLine;
-          if (typeof e.endLine === "number") item.endLine = e.endLine;
-          if (typeof item.old === "string" || typeof item.startLine === "number") edits.push(item);
-        }
-      }
-      if (typeof args.old === "string" && typeof args.new === "string") edits.push({ old: args.old, new: args.new });
-      if (typeof args.startLine === "number") {
-        edits.push({
-          startLine: args.startLine,
-          endLine: typeof args.endLine === "number" ? args.endLine : undefined,
-          new: typeof args.new === "string" ? args.new : "",
-        });
-      }
-      if (edits.length === 0) {
-        return { error: true, message: "edit requires old/new, startLine/endLine, or edits[] in " + file };
-      }
+      const edits = args.edits.map((item) => ({ ...item }));
       let raw;
       try {
         raw = await readFile(file, "utf8");
       } catch (err) {
-        return { error: true, message: "cannot read " + file + ": " + err.message };
+        return { error: true, path: file, message: "cannot read " + file + ": " + err.message, ...(err.code ? { code: err.code } : {}) };
       }
       const bom = raw.startsWith("\uFEFF") ? "\uFEFF" : "";
       const body = bom ? raw.slice(1) : raw;
       const ending = detectLineEnding(body);
+      const freshnessError = ctx.toolState?.validateRangeEdit(file, raw, edits);
+      if (freshnessError) return { error: true, path: file, message: freshnessError };
       const result = applyEditsToContent(normalizeLineEndings(body), edits, args.all === true);
       if (result.error) {
         return { error: true, path: file, message: "edit failed in " + file + ": " + result.error };
@@ -211,8 +266,9 @@ export const tools = [
       try {
         await writeFile(file, bom + restoreLineEndings(result.newContent, ending), "utf8");
       } catch (err) {
-        return { error: true, message: "cannot write " + file + ": " + err.message };
+        return { error: true, path: file, message: "cannot write " + file + ": " + err.message, ...(err.code ? { code: err.code } : {}) };
       }
+      ctx.toolState?.recordMutation(file);
       const out = { ok: true, path: file, replacements: result.replacements };
       if (result.usedFuzzy) out.fuzzy = true;
       return out;
@@ -220,30 +276,52 @@ export const tools = [
   },
   {
     name: "bash",
+    risk: "shell",
     description:
-      "Run a shell command and return its stdout and stderr. Use this to inspect the " +
-      "environment, list files, run builds, or any command-line task. The working " +
-      "directory persists across calls: use cd to move around and it is remembered. " +
-      "Destructive commands (recursive rm, dd, mkfs, shutdown, ...) require approval.",
+      "Run one shell command for search, listing, environment inspection, builds, tests, or other CLI work. " +
+      "Do not use shell commands to read, create, or edit text files when read/write/edit applies. " +
+      "Returns bounded stdout/stderr; cd changes the working directory for later tools. The timeout " +
+      "is 60 seconds. A best-effort destructive-command backstop requires approval.",
     parameters: {
       type: "object",
       properties: {
-        command: { type: "string", description: "The shell command to run" },
+        command: { type: "string", minLength: 1, description: "The shell command to run" },
       },
       required: ["command"],
+      additionalProperties: false,
+    },
+    validate({ command }) {
+      return command.trim() ? null : "bash argument command must not be blank";
+    },
+    approval({ command }) {
+      return isDestructive(command) ? "command matched the destructive-shell backstop" : null;
     },
     async execute({ command }, ctx = {}) {
       const cwd = ctx.cwd || process.cwd();
       const cmd = String(command).trim();
 
-      if (isDestructive(cmd)) {
-        if (ctx.confirm) {
+      if (isDestructive(cmd) && !ctx.approved) {
+        const request = {
+          tool: "bash",
+          args: { command },
+          cwd,
+          risk: "shell",
+          reason: "command matched the destructive-shell backstop",
+        };
+        if (ctx.authorize) {
+          const ok = await ctx.authorize(request);
+          if (!ok) return { error: true, message: `denied: destructive command not approved: ${cmd.slice(0, 80)}` };
+        } else if (ctx.confirm) {
           const ok = await ctx.confirm(command);
           if (!ok) return { error: true, message: `denied: destructive command not approved: ${cmd.slice(0, 80)}` };
         } else {
           return { error: true, message: `blocked: destructive command requires approval: ${cmd.slice(0, 80)}` };
         }
       }
+
+      // A shell command can mutate any path even when it exits non-zero. Once
+      // execution is authorized, conservatively invalidate every read stamp.
+      ctx.toolState?.invalidateAll();
 
       // Ask the shell for its final cwd, rather than trying to parse `cd`
       // syntax. This handles quotes and compound commands without polluting
@@ -253,7 +331,7 @@ export const tools = [
       try {
         const { stdout, stderr } = await execAsync(wrapped, {
           cwd,
-          timeout: 60_000,
+          timeout: ctx.timeoutMs ?? 60_000,
           maxBuffer: 1024 * 1024,
           shell: process.env.SHELL || "/bin/sh",
           ...(ctx.signal ? { signal: ctx.signal } : {}),
@@ -264,6 +342,9 @@ export const tools = [
         // execAsync throws on non-zero exit OR on abort; surface either cleanly.
         if (err.name === "AbortError") {
           return { error: true, aborted: true, message: "command aborted" };
+        }
+        if (err.killed && err.signal) {
+          return { error: true, timeout: true, message: `command timed out after ${ctx.timeoutMs ?? 60_000}ms` };
         }
         const parsed = extractCwd(err.stderr ?? "", marker);
         return {
@@ -298,31 +379,51 @@ function extractCwd(stderr, marker) {
   return { stderr: before + after, cwd: cwd || null };
 }
 
-/** Minimal runtime validation for the simple JSON Schemas used by tools. */
-export function validateToolArgs(tool, args) {
-  if (!args || typeof args !== "object" || Array.isArray(args)) {
-    return `${tool.name} arguments must be a JSON object`;
+function validateSchemaValue(value, schema, label) {
+  const expected = schema?.type;
+  const valid =
+    expected === "array"
+      ? Array.isArray(value)
+      : expected === "object"
+        ? value !== null && typeof value === "object" && !Array.isArray(value)
+        : expected === "integer"
+          ? Number.isInteger(value)
+          : expected == null || typeof value === expected;
+  if (!valid) return `${label} must be ${expected}`;
+
+  if (typeof value === "string" && schema.minLength != null && value.length < schema.minLength) {
+    return `${label} must not be empty`;
   }
-  const schema = tool.parameters ?? {};
-  for (const name of schema.required ?? []) {
-    if (!(name in args)) return `${tool.name} is missing required argument: ${name}`;
+  if (typeof value === "number" && schema.minimum != null && value < schema.minimum) {
+    return `${label} must be at least ${schema.minimum}`;
   }
-  for (const [name, value] of Object.entries(args)) {
-    const expected = schema.properties?.[name]?.type;
-    if (!expected) continue;
-    const valid =
-      expected === "array"
-        ? Array.isArray(value)
-        : expected === "object"
-          ? value !== null && typeof value === "object" && !Array.isArray(value)
-          : expected === "integer"
-            ? Number.isInteger(value)
-            : typeof value === expected;
-    if (!valid) return `${tool.name} argument ${name} must be ${expected}`;
-    const minLength = schema.properties?.[name]?.minLength;
-    if (typeof value === "string" && minLength != null && value.length < minLength) {
-      return `${tool.name} argument ${name} must not be empty`;
+  if (Array.isArray(value)) {
+    if (schema.minItems != null && value.length < schema.minItems) return `${label} must contain at least ${schema.minItems} item`;
+    for (let i = 0; i < value.length; i++) {
+      const error = validateSchemaValue(value[i], schema.items ?? {}, `${label}[${i}]`);
+      if (error) return error;
+    }
+  }
+  if (expected === "object") {
+    for (const name of schema.required ?? []) {
+      if (!Object.hasOwn(value, name)) return `${label} is missing required argument: ${name}`;
+    }
+    for (const [name, child] of Object.entries(value)) {
+      const childSchema = schema.properties?.[name];
+      if (!childSchema) {
+        if (schema.additionalProperties === false) return `${label} has unknown argument: ${name}`;
+        continue;
+      }
+      const error = validateSchemaValue(child, childSchema, `${label}.${name}`);
+      if (error) return error;
     }
   }
   return null;
+}
+
+/** Validate the model's arguments against the advertised schema and semantics. */
+export function validateToolArgs(tool, args) {
+  const error = validateSchemaValue(args, tool.parameters ?? { type: "object" }, `${tool.name} arguments`);
+  if (error) return error;
+  return tool.validate?.(args) ?? null;
 }

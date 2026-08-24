@@ -87,7 +87,7 @@ test("suggestions: popup rows keep a constant height with a status row", () => {
   assert.match(plain.at(-1), /more|matches/);
 });
 
-test("suggestions: saved-session names complete /resume tokens", () => {
+test("suggestions: saved-session names complete /resume and /delete tokens", () => {
   const sessions = ["work-edit-1", "work-edit-2", "ai-lab"];
   const s = computeSuggestion({ buffer: "/resume wo", cursor: 10, mode: "idle", cwd: "/", sessions, prev: null });
   assert.equal(s.kind, "session");
@@ -104,7 +104,11 @@ test("suggestions: saved-session names complete /resume tokens", () => {
   const mid = computeSuggestion({ buffer: "/resume work-ed", cursor: 15, mode: "idle", cwd: "/", sessions, prev: null });
   assert.deepEqual(mid.items.map((i) => i.label), ["work-edit-1", "work-edit-2"]);
 
-  // Only /resume gets session names; other commands and missing lists do not.
+  const deleting = computeSuggestion({ buffer: "/delete wo", cursor: 10, mode: "idle", cwd: "/", sessions, prev: null });
+  assert.equal(deleting.kind, "session");
+  assert.deepEqual(deleting.items.map((i) => i.label), ["work-edit-1", "work-edit-2"]);
+
+  // Only session-targeting commands get names; other commands and missing lists do not.
   assert.equal(computeSuggestion({ buffer: "/model gpt", cursor: 10, mode: "idle", cwd: "/", sessions, prev: null }), null);
   assert.equal(computeSuggestion({ buffer: "/resume wo", cursor: 10, mode: "idle", cwd: "/", prev: null }), null);
   assert.equal(computeSuggestion({ buffer: "/resume wo x", cursor: 12, mode: "idle", cwd: "/", sessions, prev: null }), null);

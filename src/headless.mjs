@@ -31,13 +31,15 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
   let lastUsage = null;
   if (session) {
     const loaded = await loadSession(session.name);
-    const { history: saved, cwd: savedCwd, model, blocks: savedBlocks } = sessionData(loaded);
+    const { history: saved, cwd: savedCwd, model, blocks: savedBlocks, warnings } = sessionData(loaded);
     history = saved;
     activeCwd = cwd ?? savedCwd ?? process.cwd();
     if (savedCwd) session.lastCwd = savedCwd;
+    if (loaded?.meta?.toolSurfaceHash) session.lastToolSurfaceHash = loaded.meta.toolSurfaceHash;
     // Honor a persisted per-session model override (e.g. set by /model).
     if (model) config = { ...config, model };
     lastUsage = [...savedBlocks].reverse().find((block) => block.kind === "timing")?.usage ?? null;
+    for (const warning of warnings) writeErr(`warning: ${warning}\n`);
   }
 
   // Build display blocks alongside events (mirrors the TUI) so a turn saved to
@@ -72,6 +74,10 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
         } else if (ev.type === "tool_result") {
           push({ kind: "result", ok: ev.ok, summary: summarize(ev.result) });
           writeErr(`   ${ev.ok ? "✓" : "✗"} ${summarize(ev.result)}\n`);
+        } else if (ev.type === "approval") {
+          const summary = `${ev.approved ? "approved" : "denied"} ${ev.tool} in ${ev.cwd}: ${ev.reason}`;
+          push({ kind: "result", ok: ev.approved, summary });
+          writeErr(`   ${ev.approved ? "✓" : "✗"} ${summary}\n`);
         } else if (ev.type === "compacted") {
           writeErr("… earlier context compacted\n");
         }

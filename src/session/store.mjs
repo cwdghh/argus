@@ -4,43 +4,31 @@
  * Sessions are stored as append-only JSONL files under ~/.argus/sessions
  * (override the base dir with the ARGUS_HOME env var, e.g. for tests):
  *
- *   {"type":"meta","version":1,"tools":[...]}          <- written once
- *   {"type":"turn","config":{...},"messages":[...],"blocks":[...]}  <- per turn
+ *   {"type":"meta","version":1,"tools":[...],"toolSurfaceHash":"..."}
+ *   {"type":"tools","hash":"...","tools":[...]}      <- when schemas change
+ *   {"type":"turn","toolSurfaceHash":"...",...}        <- per turn
  *
  * Why JSONL: each turn is one line, so nothing is lost and requests can be
  * reconstructed exactly. For a turn, `config` (baseUrl/model/systemPrompt) +
- * `messages` (verbatim) + the meta `tools` schemas uniquely determine every
- * request that turn made. `blocks` additionally preserves the on-screen
- * transcript (incl. thinking) so a session resumes exactly as it looked.
- *
- * The API key is never written to disk.
- *
- * This module owns the filesystem layer. Sibling modules:
- *   - ./resume.mjs — folder-scoped default-session resolution
- *   - ./data.mjs   — turn/session reconstruction + persisted config shape
- *   - ./index.mjs  — the public facade everything else imports
- */
-/**
- * Session persistence for argus.
- *
- * Sessions are stored as append-only JSONL files under ~/.argus/sessions
- * (override the base dir with the ARGUS_HOME env var, e.g. for tests):
- *
- *   {"type":"meta","version":1,"tools":[...]}          <- written once
- *   {"type":"turn","config":{...},"messages":[...],"blocks":[...]}  <- per turn
- *
- * Why JSONL: each turn is one line, so nothing is lost and requests can be
- * reconstructed exactly. For a turn, `config` (baseUrl/model/systemPrompt) +
- * `messages` (verbatim) + the meta `tools` schemas uniquely determine every
- * request that turn made. `blocks` additionally preserves the on-screen
- * transcript (incl. thinking) so a session resumes exactly as it looked.
+ * `messages` (verbatim) + the turn's tool-surface hash uniquely determine the
+ * request surface. `blocks` preserves the on-screen transcript (including
+ * thinking and approvals) so a session resumes exactly as it looked.
  *
  * The API key is never written to disk.
  */
-import { mkdir, readdir, readFile, appendFile, stat, rm, access, rename, open } from "node:fs/promises";
+import { mkdir, readdir, readFile, appendFile, stat, rm, access, rename, open, chmod } from "node:fs/promises";
 import { join, basename } from "node:path";
+import { createHash } from "node:crypto";
 import { argusHome } from "../config.mjs";
 import { tools } from "../tools.mjs";
+
+export function toolSurfaceSnapshot() {
+  return tools.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters }));
+}
+
+export function toolSurfaceHash(snapshot = toolSurfaceSnapshot()) {
+  return createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
+}
 
 export function sessionsDir() {
   // Resolve lazily so `.env` loaded by the standalone executable is honored.
@@ -86,7 +74,15 @@ export function newSessionName(date = new Date()) {
 }
 
 async function ensureDir() {
-  await mkdir(sessionsDir(), { recursive: true });
+  const dir = sessionsDir();
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  // Session transcripts can contain source code and tool output. Do not rely
+  // on the process umask to keep the store private.
+  await chmod(dir, 0o700);
+}
+
+async function appendJsonLine(file, value) {
+  await appendFile(file, JSON.stringify(value) + "\n", { encoding: "utf8", mode: 0o600 });
 }
 
 /** List sessions (name, file, mtime, size), newest first. */
@@ -119,7 +115,12 @@ export async function sessionSummaries(limit = 20) {
   const listed = (await listSessions()).slice(0, Math.max(0, limit));
   return Promise.all(
     listed.map(async (item) => {
-      const loaded = await loadSession(item.name);
+      let loaded;
+      try {
+        loaded = await loadSession(item.name);
+      } catch (err) {
+        return { name: item.name, mtime: item.mtime, size: item.size, turns: 0, lastPrompt: "", error: err.message };
+      }
       const turns = loaded?.turns ?? [];
       let lastPrompt = "";
       for (let i = turns.length - 1; i >= 0 && !lastPrompt; i--) {
@@ -153,6 +154,20 @@ export async function pruneSessions(keep, { exclude } = {}) {
     }
   }
   return removed;
+}
+
+/** Delete one saved session by exact name, never the explicitly excluded one. */
+export async function deleteSession(name, { exclude } = {}) {
+  const safe = sanitizeName(name);
+  if (!safe) throw new Error(nameError(name) ?? `invalid session name: ${name}`);
+  if (safe === exclude) throw new Error(`cannot delete the active session: ${safe}`);
+  try {
+    await rm(sessionFilePath(safe));
+  } catch (err) {
+    if (err.code === "ENOENT") throw new Error(`session not found: ${safe}`);
+    throw err;
+  }
+  return safe;
 }
 
 /**
@@ -221,26 +236,39 @@ export async function renameSession(oldName, nextName, handle = null) {
  * what was visible, `history` is the exact message list the model needs, and
  * `cwd`/`model` are the session's persisted meta (null when unset).
  */
-/** Load a session: { meta, turns }. Returns null if it doesn't exist. */
+/** Load a session: { meta, turns }. Returns null only when it doesn't exist. */
 export async function loadSession(name) {
   let text;
   try {
     text = await readFile(sessionFilePath(name), "utf8");
-  } catch {
-    return null;
+  } catch (err) {
+    if (err.code === "ENOENT") return null;
+    throw new Error(`cannot load session ${name}: ${err.message}`);
   }
   const meta = {};
   const turns = [];
-  for (const line of text.split("\n")) {
+  const lines = text.split("\n");
+  let lastRecord = lines.length - 1;
+  while (lastRecord >= 0 && !lines[lastRecord].trim()) lastRecord--;
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
     if (!line.trim()) continue;
     let obj;
     try {
       obj = JSON.parse(line);
-    } catch {
-      continue; // skip corrupt lines
+    } catch (err) {
+      if (index === lastRecord) {
+        meta.warnings = [...(meta.warnings ?? []), `ignored incomplete final session record at line ${index + 1}`];
+        continue;
+      }
+      throw new Error(`session ${name} is corrupt at line ${index + 1}: ${err.message}`);
     }
     if (obj.type === "meta") Object.assign(meta, obj);
     else if (obj.type === "turn") turns.push(obj);
+    else if (obj.type === "tools") {
+      meta.tools = obj.tools;
+      meta.toolSurfaceHash = obj.hash;
+    }
     else if (obj.type === "cwd") meta.cwd = obj.cwd;
     else if (obj.type === "model") meta.model = obj.model;
   }
@@ -259,6 +287,7 @@ export class Session {
     this.metaWritten = false;
     this.lastCwd = opts.initialCwd ?? null;
     this.lastModel = opts.initialModel ?? null;
+    this.lastToolSurfaceHash = opts.initialToolSurfaceHash ?? null;
     this.writeQueue = Promise.resolve();
   }
 
@@ -282,7 +311,7 @@ export class Session {
     this.lastCwd = cwd;
     return this.enqueue(async () => {
       await this.ensureMeta();
-      await appendFile(this.file, JSON.stringify({ type: "cwd", cwd }) + "\n", "utf8");
+      await appendJsonLine(this.file, { type: "cwd", cwd });
     });
   }
 
@@ -292,7 +321,7 @@ export class Session {
     this.lastModel = model;
     return this.enqueue(async () => {
       await this.ensureMeta();
-      await appendFile(this.file, JSON.stringify({ type: "model", model }) + "\n", "utf8");
+      await appendJsonLine(this.file, { type: "model", model });
     });
   }
 
@@ -301,22 +330,38 @@ export class Session {
     await ensureDir();
     try {
       await stat(this.file);
-    } catch {
+      await chmod(this.file, 0o600);
+    } catch (err) {
+      if (err.code !== "ENOENT") throw err;
+      const snapshot = toolSurfaceSnapshot();
+      const hash = toolSurfaceHash(snapshot);
       const meta = {
         type: "meta",
         version: 1,
-        tools: tools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })),
+        tools: snapshot,
+        toolSurfaceHash: hash,
       };
-      await appendFile(this.file, JSON.stringify(meta) + "\n", "utf8");
+      await appendJsonLine(this.file, meta);
+      this.lastToolSurfaceHash = hash;
     }
     this.metaWritten = true;
+  }
+
+  async ensureToolSurface() {
+    const snapshot = toolSurfaceSnapshot();
+    const hash = toolSurfaceHash(snapshot);
+    if (hash === this.lastToolSurfaceHash) return hash;
+    await appendJsonLine(this.file, { type: "tools", hash, tools: snapshot });
+    this.lastToolSurfaceHash = hash;
+    return hash;
   }
 
   /** Append one turn: { config, messages, blocks }. */
   async appendTurn(turn) {
     return this.enqueue(async () => {
       await this.ensureMeta();
-      await appendFile(this.file, JSON.stringify({ type: "turn", ...turn }) + "\n", "utf8");
+      const currentToolSurface = await this.ensureToolSurface();
+      await appendJsonLine(this.file, { ...turn, type: "turn", toolSurfaceHash: currentToolSurface });
     });
   }
 }

@@ -1,314 +1,91 @@
-# Tool surface — canonical tool set & usage (discussion brief)
+# Tool surface — canonical decisions
 
-**Status: in discussion (2026-08-24).** This file is the single source of
-truth for the ongoing decision about *which* tools argus exposes to the model
-and *how the model is told to use them*. A decision is recorded in the
-decision log below **before** any code changes; once a row is `decided`, the
-change ships with its tests and doc updates in the same commit.
+**Status: decided and implemented (2026-08-24).** This file owns the answer to
+which tools argus exposes to the model and the design rules for that surface.
+`docs/tools.md` owns the executable contract; this file records the rationale.
 
-Owner: this file. Pointers: `GAPS.md` #12, `NEXT_STEPS.md` #1, `docs/tools.md`
-(`docs/tools.md` is the contract — *what the code does today*; this file is
-*what we are deciding*).
+## The surface
 
-**Fresh-session start here:** read this file top to bottom, then `docs/tools.md`
-(the current contract) and `src/tools.mjs` (schemas + execute). The immediate
-open thread — the approval checklist — is `Next session — where we left off`
-at the bottom; the `Draft proposal` above it is what that checklist walks
-through.
+Argus exposes exactly four tools:
 
-## How to use this tracker
+| Tool | Specific job | Why it stays distinct |
+|------|--------------|-----------------------|
+| `read` | Bounded, line-numbered text inspection | Gives `edit` auditable line references without shell quoting or unbounded output. |
+| `write` | Create a complete file, with explicit overwrite opt-in | Makes whole-file creation simple and protects existing files by default. |
+| `edit` | Atomic targeted changes to an existing text file | Preserves surrounding content and offers exact/fuzzy content edits plus fresh line-range edits. |
+| `bash` | Search, listing, builds, tests, and other CLI work | Covers the open-ended command surface without adding a model schema for every utility. |
 
-- Every unresolved question is a row in the decision log (`D#`), status `open`.
-- To resolve one, flip the row to `decided` with a date and one-line rationale,
-  then implement (tests + docs in the same change).
-- Don't retell answers here in `GAPS.md` or anywhere else — point at the row.
-- This file is a live doc: keep it under ~400 lines; move superseded stretches
-  to `docs/archive/` when it grows (see `docs/self-updating.md`).
+The set is deliberately small. A new default tool must materially improve at
+least one of model reliability, context cost, safety, or transcript
+auditability, and must be measurably better than composing the four existing
+tools. Convenience alone is not enough because every schema is sent on every
+model request.
 
-## Background — how this discussion started
+## Design rules
 
-The goal is a canonical, minimal tool surface: **which tools argus exposes,
-and how the model is told to use them** — so we can (a) delete functionality
-the model never uses, (b) minimize the per-request prompt burden ("heavy
-burden to the models"), and (c) keep tools simple enough that degenerate loops
-are easy to stop. The user discussed this with argus on 2026-08-23; this file
-records the whole discussion so a new session with fresh context can continue
-it without re-deriving context.
-
-Timeline:
-- **2026-08-23 (commits `885e43a`, `3def44c`):** status audit of the 4-tool
-  set + this tracker; then the first concrete proposal — schemas for `read`,
-  `write`, `edit`, `bash`, removal candidates, and a decision-log mapping
-  D5–D13. Both commits are pushed to `origin/main`.
-- **2026-08-24 (this write-up):** the discussion is written down end-to-end so
-  it can resume in a fresh session. **Nothing beyond D1–D4 is decided yet; the
-  proposal is awaiting user review.**
-
-Prior decisions that shape this discussion (D1–D4, already decided — details
-in `PROGRESS.md`, 2026-08-23): the set stays exactly four tools; one tool per
-model step (`parallel_tool_calls: false`); the loop stops after 3 identical
-tool calls; `edit` exposes only the canonical `edits[]` shape.
-
-## Current state (snapshot 2026-08-23)
-
-Exactly **four** model-visible tools, stable since argus started. The set is
-test-enforced (`test/tools.test.mjs` asserts the `tools` array is exactly
-`["read", "write", "edit", "bash"]`); no tool has been added or removed.
-
-| Tool | Model-visible schema | Returns | Safety | Told to be used for |
-|------|----------------------|---------|--------|---------------------|
-| `read` | `path` (req), `offset?`, `limit?` | numbered lines `N │ text`, bounded at 2000 lines / 50KB, `truncated`/`nextOffset` + continue notice; `{error}` for bad offset / oversized single line | read-only, no gate | inspecting files; paging big ones; copy line numbers for `edit` |
-| `write` | `path` (req), `content` (req), `overwrite?` | `{ok, path, bytes}`; `{error, message}` when the file exists | refuses overwrite unless `overwrite: true` | new files / whole-file replaces |
-| `edit` | `path` (req), `edits[]`, `all?` | `{ok, path, replacements}` (+ `fuzzy`); `{error}` with actionable message | atomic bottom-up apply; ambiguous `old` errors unless `all`; overlapping edits rejected; CRLF/BOM preserved | precise content swaps; line-range rewrites, inserts, deletes |
-| `bash` | `command` (req) | `{stdout, stderr, cwd}`; `{error}` on non-zero exit; `{aborted}` on timeout | 60s timeout, 1MB buffer, destructive-pattern gate (TUI confirm / headless block), cwd persists across calls | everything else: env inspection, listings, builds, git |
-
-The full contract (schema, result shapes, examples, edge cases) is
-`docs/tools.md`; the model's only documentation is each tool's `description`
-plus the system prompt (`src/config.mjs`) — that is exactly the text a
-decision here can make heavier or lighter.
-
-### Where the "ways to use them" live today
-
-- **Tool descriptions** (`src/tools.mjs`): each tool tells the model when/how
-  to use it (e.g. `read` → "copy these numbers for startLine/endLine edits";
-  `edit` → "content form for small changes, range form for whole-block
-  rewrites"; `write` → "prefer edit for precise changes").
-- **System prompt** (`src/config.mjs`): re-states the tool list and retells the
-  `edit` and `bash` usage guidance that the tool descriptions already carry
-  (see candidate **R2** below).
-- **Loop-level rules** (`src/agent.mjs`, `src/llm.mjs`): one tool per model
-  step (`parallel_tool_calls: false`), a stop guard after 3 identical tool
-  calls, a per-result cap (`ARGUS_MAX_TOOL_RESULT_CHARS`), and `maxSteps`.
-
-## Removal / simplification candidates
-
-Things that may be "used" only by code, not by the model, or that cost tokens
-without earning them. Each maps to an open decision below.
-
-- **R1 — legacy top-level `edit` fields.** The model-visible schema has exposed
-  only the canonical `edits[]` shape since 2026-08-23, but `execute` still
-  tolerates top-level `old`/`new`/`startLine`/`endLine`, and
-  `test/tools.test.mjs` has an explicit "edit legacy old/new still works" test.
-  The model cannot produce these today; the only argument to keep them is
-  replay of old saved transcripts. → D5.
-- **R2 — system-prompt duplication.** The system prompt retells the tool list,
-  the `edit` content-vs-range guidance, and the `bash` cwd persistence fact —
-  all already in the tool descriptions. Removing the retold sentences is a
-  small, low-risk prompt-token win (the "heavy burden to the models" concern
-  in the discussion brief). → D13.
-- **R3 — `/exit` / `/quit` alias (adjacent, not a model tool).** Both TUI
-  commands stop argus identically. Harmless convenience; noted only so the
-  surface audit is complete. → D15.
-
-## The bar (what earns a tool a place)
-
-Candidate tests from `GAPS.md` #12 — still open, and the crux of this
-discussion:
-
-- (a) measurably reduces model error,
-- (b) saves context tokens vs the `bash` equivalent,
-- (c) adds a capability `bash` can't do safely,
-- (d) makes the transcript more auditable.
-
-Which of these do we actually want to enforce, and how do we measure them
-(e.g. a behavioral eval that exercises tool *choice*)? → D6, D14.
-
-## Draft proposal (2026-08-23 — awaiting your review)
-
-**Recommended set: `read`, `write`, `edit`, `bash` — unchanged names, no
-additions.** Anything that looks like a new tool either duplicates one of
-these or belongs at the loop level. Four principles shape the schemas:
-
-1. **One canonical shape per tool** — no legacy fields, no aliases (D5, D10).
-2. **Fewest parameters that cover real use.** Every optional knob is surface
-   the model pays for on *every* request; extra knobs are the "heavy burden"
-   we are removing (D7).
-3. **`error: true` is the failure signal.** Success returns the natural
-   payload — no mandatory `ok` flag on read/bash (it would be pure overhead);
-   mutating tools (write/edit) keep `ok: true`. Bounded results follow the
-   `read` pattern: a truncation flag, the continuation handle, and a
-   human-readable "how to continue" note (D9).
-4. **Tool descriptions are the single source of usage guidance.** The system
-   prompt stops retelling them (D13).
-
-### read — risk: read-only
-
-```js
-{
-  name: "read",
-  description: "Read a file and return its text with every line prefixed by its absolute 1-indexed line number — copy those numbers for edit's startLine/endLine. Output is bounded at 2000 lines or 50KB; pass offset/limit to page through large files. Paths are relative to the working directory.",
-  parameters: {
-    type: "object",
-    properties: {
-      path:   { type: "string", description: "File to read" },
-      offset: { type: "integer", minimum: 1, description: "1-indexed first line to return (default: 1)" },
-      limit:  { type: "integer", minimum: 1, description: "Maximum lines to return (default: up to the 2000-line / 50KB bound)" },
-    },
-    required: ["path"],
-  },
-}
-```
-
-Result: `{ path, content }` — numbered lines, bounded at 2000 lines / 50KB;
-`{ path, content, truncated: true, nextOffset: N }` plus a `[..Use offset=N to
-continue.]` note when cut short; `{ error: true, path, message }` on failure.
-(No schema change — read already models the result-shape contract.)
-
-### write — risk: mutating
-
-```js
-{
-  name: "write",
-  description: "Create a new file with the given content. Refuses to overwrite an existing file unless overwrite=true; use edit for precise changes to existing files.",
-  parameters: {
-    type: "object",
-    properties: {
-      path:      { type: "string", description: "Path of the file to create" },
-      content:   { type: "string", description: "Full text content to write" },
-      overwrite: { type: "boolean", description: "Allow replacing an existing file (default: false)" },
-    },
-    required: ["path", "content"],
-  },
-}
-```
-
-Result: `{ ok: true, path, bytes }`; `{ error: true, message }` when the file
-exists (with the overwrite hint). (No change from today.)
-
-### edit — risk: mutating (canonical, legacy removed)
-
-```js
-{
-  name: "edit",
-  description: "Apply one or more targeted replacements to an existing file in a single atomic call. edits[] mixes content mode ({old, new}: exact replace, tolerant of trailing whitespace and unicode punctuation; old must be unique unless all=true) and range mode ({startLine, endLine, new}: replace inclusive 1-indexed lines copied from a read; endLine = startLine - 1 inserts before startLine; new = '' deletes).",
-  parameters: {
-    type: "object",
-    properties: {
-      path: { type: "string", description: "File to edit" },
-      edits: {
-        type: "array",
-        description: "Targeted replacements, applied atomically bottom-up in one call",
-        items: {
-          type: "object",
-          properties: {
-            old:       { type: "string", minLength: 1, description: "Content mode: text to replace (must be unique unless all=true)" },
-            new:       { type: "string", description: "Replacement text (content or range mode)" },
-            startLine: { type: "integer", minimum: 1, description: "Range mode: first line to replace (1-indexed, from a read)" },
-            endLine:   { type: "integer", minimum: 1, description: "Range mode: last line (default startLine; startLine-1 inserts before startLine)" },
-          },
-        },
-      },
-      all: { type: "boolean", description: "Replace every occurrence of old (default: false)" },
-    },
-    required: ["path"],
-  },
-}
-```
-
-Result: `{ ok: true, path, replacements }` (+ `fuzzy: true` on a relaxed
-match); `{ error: true, path, message }` with an actionable message.
-
-**Proposed change (R1/D5):** delete the legacy top-level
-`old`/`new`/`startLine`/`endLine` tolerance in `execute` and the
-"edit legacy old/new still works" test — the schema is the only entry point.
-
-### bash — risk: shell (destructive-pattern gate stays as backstop)
-
-```js
-{
-  name: "bash",
-  description: "Run a shell command and return its stdout and stderr. The working directory persists across calls (cd is remembered). Destructive commands (recursive rm, dd, mkfs, shutdown, ...) require approval. 60s timeout.",
-  parameters: {
-    type: "object",
-    properties: {
-      command: { type: "string", description: "The shell command to run" },
-    },
-    required: ["command"],
-  },
-}
-```
-
-Result: `{ stdout, stderr, cwd }`; `{ error: true, stdout, stderr, message,
-cwd }` on non-zero exit; `{ error: true, aborted: true, message }` on timeout.
-(No change.)
-
-### Registry-level (model-invisible) change — risk declaration (D8)
-
-Add per-tool `risk: "read-only" | "mutating" | "shell"` in the registry only
-(not in the model-visible schema). The safety gate (GAPS #2) can then route on
-declared risk instead of pattern-matching shell text; `bash` keeps the
-destructive-pattern gate as the backstop regardless.
-
-### Evaluated, not recommended now
-
-| Candidate | Verdict | Why |
-|-----------|---------|-----|
-| `grep` / `search` | ⏸ not now | `bash` covers it; a structured tool can't beat the current result cap without evidence. Revisit after the tool-choice eval (D14) if bash-grep causes measurable errors. |
-| `ls` / `glob` / `find` | ⏸ not now | Listing via `bash` is bounded by the result cap; too little value to add schema to every request. |
-| `patch` (unified diff) | ✖ no | `edit` already covers precise changes; a second editing tool doubles the surface. |
-| `ask` (model → user) | ⏸ separate feature | Genuinely useful, but it is human-in-the-loop work tied to interrupt/continue (`docs/interrupt-resume.md`), not this tool-surface round. |
-| parallel tool calls | ⏸ loop-level | Keep `parallel_tool_calls: false`; parallelism is D11, a loop concern, not a schema concern. |
-
-### Decisions this proposal answers (draft status — not yet decided)
-
-- **D5** — remove legacy top-level `edit` tolerance + its test: **proposed yes**.
-- **D6** — new search/listing tools: **proposed no** (keep four; revisit after D14 evidence).
-- **D7** — schema validation stays the minimal subset; no `enum`/`pattern`/`maxLength` beyond what exists today.
-- **D8** — per-tool risk declaration: **proposed yes** (registry-only, model-invisible).
-- **D9** — result shape: **proposed** — `error: true` is the failure signal; `read`-style truncation + continue note is the standard for bounded results; no `ok` flag on read/bash, keep it on write/edit.
-- **D10** — naming: **proposed keep** `read`/`write`/`edit`/`bash` (most familiar to models; renaming is churn with no payoff).
-- **D11** — freshness guard stays loop-level (a "re-read first" refusal error when it lands); no schema change.
-- **D12** — model-visible metadata (size/timeout hints): **proposed no** for now — every hint adds tokens; the bounded-result contract already protects context.
-- **D13** — de-duplicate system prompt: **proposed yes** (tighter prompt; all tool usage lives in descriptions).
+1. **One canonical input shape.** The schema and recursive runtime validation
+   agree. There are no hidden model-call aliases or legacy executor shapes.
+2. **One tool per model step.** The provider receives the sequential hint and
+   the loop rejects a multi-call reply before recording it or running a side
+   effect.
+3. **Descriptions own tool mechanics.** The system prompt carries repository
+   behavior, not a second copy of parameter and result guidance. Each
+   description also states its boundary with `bash`, so ordinary text-file
+   reads and mutations remain attributable to the structured tools.
+4. **Failures are data.** Tool failures return `{ error: true, message, ... }`
+   so the model can recover. Mutating successes keep `ok: true`; `read` and
+   `bash` return their natural payloads.
+5. **Output is bounded twice.** Every result has a per-result character cap,
+   and every active turn has a cumulative tool-result budget. `read` also has
+   line and byte bounds with structured pagination.
+6. **Safety metadata is model-invisible.** Registry entries classify risk as
+   `read-only`, `filesystem-write`, or `shell`. Approval requests contain the
+   tool, arguments, cwd, risk, reason, and decision. The destructive shell
+   classifier remains explicitly best-effort, not a security boundary.
+7. **Line edits require evidence.** A range edit is allowed only after the
+   same turn read the affected lines from the exact current file contents.
+   Writes invalidate that path; any executed shell command invalidates all
+   read stamps. Read results call their rendered field `numberedText` so its
+   `N │ ` gutters are visibly metadata: selectors may copy them, replacements
+   must not.
+8. **Sessions preserve the historical surface.** Each turn records a stable
+   tool-surface hash, and a schema snapshot is appended when the surface
+   changes. Old executor compatibility code is therefore unnecessary for
+   auditability.
 
 ## Decision log
 
-| # | Question | Status |
-|---|----------|--------|
-| D1 | Keep the default set at exactly four (`read`, `write`, `edit`, `bash`)? | **decided** (2026-08-23 review) — the constraint is hard (AGENTS.md) and test-enforced; revisit only if a candidate passes the bar (D6). |
-| D2 | One tool per model step (`parallel_tool_calls: false`)? | **decided** 2026-08-23 — sequential, audit-friendly; landed with the loop fix. |
-| D3 | Stop the loop after 3 identical tool calls? | **decided** 2026-08-23 — same name + canonical args (incl. JSON arg order); landed with the loop fix. |
-| D4 | `edit` exposes only the canonical `edits[]` shape to the model? | **decided** 2026-08-23 — one way to call `edit`; `execute` still tolerant (see D5). |
-| D5 | Remove the legacy top-level `edit` tolerance (execute + test)? | **open** — removal candidate R1. Keep only if old-transcript replay matters; otherwise delete the dead path and its test. |
-| D6 | Add a search/listing tool (`grep` / `ls` / `glob`), or keep the four and let `bash` cover the rest? | **open** — evaluate candidates against the bar. |
-| D7 | Extend schema validation (`enum`, `pattern`, `maxLength`)? | **open** — current subset: required fields, primitive/array/object/integer types, string `minLength`. |
-| D8 | Per-tool risk declaration feeding the safety gate (GAPS #2)? | **open** — read-only / mutating / destructive, instead of pattern-matching shell text. |
-| D9 | Standardize the result-shape contract (error convention, truncation notice, "how to continue")? | **open** — `read` already models it; should the contract require it of every tool? |
-| D10 | Naming policy (`bash` vs `run`/`shell`, `edit` vs `patch`)? | **open** — familiar names may matter to model reliability. |
-| D11 | Read-before-edit freshness guard + parallel execution: loop-level state or tool-aware contract? | **open** — first *contract-touching* feature to implement after this discussion (NEXT_STEPS #2). |
-| D12 | Model-visible metadata (result-size / timeout hints)? | **open** — currently only `name`/`description`/`parameters` are visible. |
-| D13 | De-duplicate the system prompt (drop retold tool guidance)? | **open** — removal candidate R2; low-risk token win. |
-| D14 | Add a behavioral eval that exercises tool *choice*? | **open** — protects the `edit` contract and measures how the contract reads to real models. |
-| D15 | Collapse the `/exit` and `/quit` alias? | **open** — adjacent, user-facing only; low priority. |
+| # | Decision | Resolution |
+|---|----------|------------|
+| D1 | Default set | **Decided 2026-08-23:** keep exactly `read`, `write`, `edit`, `bash`; test-enforced. |
+| D2 | Calls per model step | **Decided 2026-08-24:** exactly one; reject provider violations before side effects. |
+| D3 | Repetition guard | **Decided 2026-08-24:** refuse the third consecutive identical call with the same result. Work between repeated calls resets the streak. |
+| D4 | Model-visible `edit` shape | **Decided 2026-08-23:** canonical `edits[]` only. |
+| D5 | Legacy top-level `edit` fields | **Decided 2026-08-24:** remove them from validation, execution, and tests. Session schema snapshots preserve history without executable aliases. |
+| D6 | Search/list tools | **Decided 2026-08-24:** do not add them; `bash` owns this job until behavioral evidence shows a material deficit. |
+| D7 | Schema validation | **Decided 2026-08-24:** recursively enforce the advertised minimal subset (`type`, `required`, `additionalProperties`, `items`, `minItems`, `minimum`, `minLength`) and use semantic validators for cross-field rules. |
+| D8 | Risk declaration | **Decided 2026-08-24:** add model-invisible risk classes and structured authorization requests. Keep the shell pattern gate as a backstop. |
+| D9 | Result convention | **Decided 2026-08-24:** structured errors; natural success payloads; structured continuation for bounded results; distinct timeout and abort states. |
+| D10 | Names | **Decided 2026-08-24:** keep the familiar four names; renaming adds churn without evidence of better tool choice. |
+| D11 | Freshness and parallelism | **Decided 2026-08-24:** same-turn range freshness is loop-scoped state; execution remains sequential. |
+| D12 | Extra model-visible metadata | **Decided 2026-08-24:** keep essential bounds in descriptions; do not add a second metadata protocol. |
+| D13 | Prompt duplication | **Decided 2026-08-24:** remove repeated tool mechanics from the default system prompt (119 words to 59). |
+| D14 | Tool-choice evaluation | **Decided 2026-08-24:** keep an opt-in real-model evaluator for content edit, range edit, uncued numbered-read editing, shell search, and file creation. The harness is shipped; provider baselines are measurements, not test-suite claims. |
+| D15 | `/exit` and `/quit` | **Decided 2026-08-24:** retain the harmless user-facing alias; it costs the model nothing. |
 
-## Next session — where we left off (pending approvals)
+## Evaluated alternatives
 
-Nothing is decided beyond D1–D4. The first move in the next session:
+| Candidate | Outcome | Reason |
+|-----------|---------|--------|
+| `grep`, `search`, `ls`, `glob`, `find` | Not added | `bash` already owns open-ended CLI inspection; no measured benefit justifies permanent schema cost. |
+| unified-diff `patch` | Not added | Duplicates `edit` and creates two competing mutation contracts. |
+| model-to-user `ask` | Separate feature | It belongs to interrupt/continue and human-in-the-loop design, not filesystem/tool surface design. |
+| parallel tool calls | Not added | Sequential execution is easier to authorize, audit, and couple to freshness state. |
 
-1. Walk the **Draft proposal** above with the user, item by item.
-2. Flip the matching decision-log rows to `decided` (date + one-line
-   rationale) only when the user agrees, then implement with tests + docs in
-   the same change.
-3. The explicit approvals the user still owes:
+## How to revisit
 
-| # | Proposal | Awaiting |
-|---|----------|----------|
-| — | Keep the 4-tool set (`read`/`write`/`edit`/`bash`), no additions | approve / revise |
-| D5 | Delete the legacy top-level `edit` tolerance + its test | yes / no |
-| D8 | Registry-only `risk` declaration per tool (model-invisible) | yes / no |
-| D9 | Result convention: `error: true` = failure; no `ok` flag on read/bash; `read`-style truncation notes | yes / no / amend |
-| D13 | Shrink the system prompt (~110 → ~25 words; tool usage lives in descriptions) | yes / no |
-| D6, D7, D10, D11, D12 | Proposal answers (no new search tools; minimal validation; keep names; freshness guard is loop-level; no model-visible metadata) | confirm / revisit |
-
-4. After the surface is decided, the next contract-touching features in order:
-   read-before-edit freshness guard (NEXT_STEPS #2), behavioral eval for tool
-   choice (D14). `/session delete` can land any time (NEXT_STEPS #5).
-
-## Standing notes
-
-- `/session delete` is tool-independent housekeeping and can land any time —
-  it does not need to wait for this discussion (NEXT_STEPS #5).
-- The 2026-08-23 loop-fix context (runaway generation) is recorded in
-  `PROGRESS.md` and `GAPS.md` #12 status; the raw problem was never reproduced
-  against a real provider, so the guard covers identical-call loops only — if
-  the "model won't stop" symptom recurs, capture a real transcript first.
+Run `npm run eval:tools` with a configured provider to collect tool traces and
+task outcomes. If a recurring failure cannot be fixed by improving an existing
+description or schema, document the evidence here before proposing a fifth
+tool. The evaluator is opt-in and may incur provider cost; the normal test
+suite remains deterministic and offline.

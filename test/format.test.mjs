@@ -27,10 +27,11 @@ test("formatTokens: prompt/completion with optional reasoning + cached", () => {
   );
 });
 
-test("summarize: prefers stdout, then content, then ok payload", () => {
+test("summarize: prefers stdout, then numbered read text/content, then ok payload", () => {
   assert.equal(summarize({ error: true, message: "boom" }), "boom");
   assert.equal(summarize({ stdout: "hello world\nnext\n" }), "stdout: hello world");
   assert.equal(summarize({ stdout: "" }), "ok (no output)");
+  assert.equal(summarize({ numberedText: "12 │ line one\n13 │ line two" }), "12 │ line one");
   assert.equal(summarize({ content: "line one\nline two" }), "line one");
   assert.equal(summarize({ ok: true, matched: 3 }), "matched: 3 — ok");
   assert.equal(summarize({ ok: true }), "ok");

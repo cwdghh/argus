@@ -9,7 +9,8 @@
   "description": "A minimal terminal coding agent built to understand how agents work. Dependency-free.",
   "scripts": {
     "start": "node --env-file-if-exists=.env src/main.mjs",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "eval:tools": "node --env-file-if-exists=.env eval/tool-choice.mjs"
   },
   "engines": {
     "node": ">=22.9.0"

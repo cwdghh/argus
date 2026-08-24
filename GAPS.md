@@ -28,10 +28,11 @@ questions are deliberately unresolved — we'll discuss them.
 
 ## 2. Tool execution policy (permission / safety gate)
 
-> **Status: partially resolved (2026-08-11)** — destructive shell patterns ask
-> for confirmation in the TUI and are blocked headlessly. File replacement and
-> ambiguous edits require explicit intent. This remains a best-effort gate, not
-> a sandbox or comprehensive shell policy.
+> **Status: partially resolved (2026-08-24)** — tools declare model-invisible
+> risk classes; policy triggers produce structured authorization requests and
+> persisted decisions. Destructive shell patterns ask for TUI confirmation and
+> are blocked headlessly. This remains a best-effort gate, not a sandbox or
+> comprehensive shell policy.
 
 - **What:** file tools and ordinary shell commands run immediately; a small set
   of destructive shell patterns requires a human check in the TUI.
@@ -40,20 +41,22 @@ questions are deliberately unresolved — we'll discuss them.
 - **pi's approach (conceptual):** `beforeToolCall` / `afterToolCall` hooks that
   can allow, block, or rewrite tool calls; containerized/sandboxed execution.
 - **Open questions for argus:**
-  - Ask before every tool, or only "risky" ones (e.g. `bash` vs `read_file`)?
-  - Allowlist/denylist by tool name or by pattern?
+  - Should policy become user-configurable by risk class, tool, or path?
   - Should argus support a sandbox, or stay host-native deliberately?
 
 ## 3. Parallel tool execution
+
+> **Status: deliberately omitted (2026-08-24)** — argus requires exactly one
+> tool call per model step and rejects provider violations before side effects.
+> Sequential execution keeps authorization, cwd, freshness, and audit order
+> unambiguous. Revisit only with measured latency evidence that justifies a new
+> concurrency contract.
 
 - **What:** we run tool calls one at a time, in order.
 - **Why it matters:** independent calls (e.g. read three files) could run
   concurrently and finish faster.
 - **pi's approach (conceptual):** sequential vs parallel modes, with ordering
   caveats around correctness.
-- **Open questions for argus:**
-  - Do we value simplicity (sequential) more than speed?
-  - If parallel, how do we order results so the model can still reason?
 
 ## 4. Context management (compaction / truncation)
 
@@ -76,9 +79,11 @@ questions are deliberately unresolved — we'll discuss them.
 > (`ARGUS_COMPACT_TOKENS`, default 200_000, fed by `nextContextTokens` from the
 > last turn's usage); `ARGUS_COMPACT_AT` (chars) survives only as a
 > pre-first-usage safety net. Repeated compactions now carry earlier summaries
-> forward instead of silently forgetting them. Remaining: a single oversized
-> turn still cannot be compacted (bounded by the tool-result cap and read
-> caps), and summaries are terse digests, not semantic rewrites.
+> forward instead of silently forgetting them.
+> **2026-08-24:** active turns now have a cumulative tool-result budget in
+> addition to per-result/read bounds, and the complete outgoing request is
+> measured before network I/O. Summaries remain terse deterministic digests,
+> not semantic rewrites.
 
 - **What:** recent history is sent verbatim; older turns are compacted into a
   deterministic summary after a configurable character budget.
@@ -105,23 +110,24 @@ questions are deliberately unresolved — we'll discuss them.
   store the transcript.
 > **2026-08-16:** automatic retention is resolved via `ARGUS_SESSION_KEEP` (prune
 > on TUI startup, newest-first by mtime, active session always preserved), and
-> `/sessions` now reports file sizes. Manual deletion/renaming commands remain
-> an open question.
+> `/sessions` now reports file sizes.
 > **2026-08-17:** naming is resolved — `/name <name>` renames the current
 > session (a pure file move: the name lives only in the filename), `/new <name>`
-> names a session at creation, and `/resume` completes saved-session names in
+> names a session at creation, and session-targeting commands complete saved names in
 > the editor popup, so a large session collection stays navigable. Rejected
 > names (spaces, non-ASCII, >249 chars) report the reason; the destination is
 > reserved with O_EXCL so a rename can never clobber an existing session; and
 > renaming a just-created `/new` session (no file on disk yet) is a pure
-> handle repoint. Manual deletion (`/session delete`) remains open.
+> handle repoint.
 > **2026-08-17:** the auto-resume default is now folder-scoped — starting
 > without `--session`/`--new` picks the newest session whose cwd is the
 > current folder or a subfolder (newest 20 considered), and falls back to a
 > fresh session rather than another repo's latest.
+> **2026-08-24:** `/delete <name>` adds confirmed exact-name cleanup, refuses
+> the active session, and updates completion immediately. Session directories
+> and newly written transcript files use owner-only POSIX permissions.
 
 - **Open questions for argus:**
-  - Do we need `/session delete` / `/session rename` on top of retention?
   - When would JSONL stop being sufficient and justify SQLite?
 
 ## 6. Multi-provider abstraction
@@ -144,6 +150,10 @@ questions are deliberately unresolved — we'll discuss them.
 > **2026-08-17:** timeouts were relaxed for reasoning models that think a long
 > time before the first byte or between chunks — request timeout 600s, stream
 > idle 300s by default, both configurable and mirrored in `.env.example`.
+> **2026-08-24:** schema validation is recursive, provider multi-call replies
+> are refused before side effects, the last model step is reserved for result
+> synthesis, repeated no-progress calls are bounded, and active-turn result
+> growth has a cumulative cap.
 
 - **What:** expected failures have bounded handling, but malformed provider
   streams and subprocess isolation remain limited.
@@ -186,29 +196,31 @@ questions are deliberately unresolved — we'll discuss them.
 
 > **Status: resolved for regression testing (2026-08-11)** — the dependency-free
 > mock-LLM suite covers the loop, tools, aborts, sessions, headless mode, safety,
-> compaction, CLI parsing, retries/timeouts, and TUI behavior. Behavioral evals
-> of model quality are still open.
+> compaction, CLI parsing, retries/timeouts, and TUI behavior.
+> **2026-08-24:** an opt-in provider-backed tool-choice evaluator now exercises
+> content edit, fresh range edit, shell search, and new-file creation in
+> isolated temporary workspaces. Broader coding-quality benchmarks and
+> transcript replay remain open.
 
-- **What:** deterministic integration tests exercise a scripted local SSE model;
-  there is not yet a behavioral eval suite for answer quality.
+- **What:** deterministic integration tests exercise a scripted local SSE
+  model; `npm run eval:tools` supplies a small real-model surface eval, but not
+  a general answer-quality benchmark.
 - **Why it matters:** the loop's behavior is subtle; evals catch regressions.
 - **pi's approach (conceptual):** a full eval harness and conformance tests.
 - **Open questions for argus:**
   - Do we want a way to replay saved transcripts as tests?
   - Which behavioral evals would actually predict useful coding performance?
-  - An eval that checks whether the model picks content vs range edits
-    correctly, copies line numbers from a numbered read, and recovers from
-    fuzzy-fallback edits would exercise the edit-reliability work directly.
+  - Which additional tasks and provider baselines predict useful coding
+    performance without turning the small repo into an eval framework?
 
 ## 10. Model catalog / configuration
 
 > **Status: partially resolved (2026-08-16)** — `/model <name>` switches the
 > model at runtime; the override is stored per session and restored on resume,
 > and `/new` falls back to the `ARGUS_MODEL` env default.
-> **2026-08-17:** settled the prompt-vs-docs split — JSON tool schemas travel
-> with every request in the tools payload, compact behavioral tool rules
-> (read-before-edit, content vs range edits) live in the default system
-> prompt, and long usage documentation stays in `docs/`. The prompt is still
+> **2026-08-24:** settled the prompt-vs-tools split — JSON tool schemas and
+> their descriptions own tool mechanics; the default system prompt carries
+> repository behavior without repeating edit/bash usage. The prompt remains
 > plain text from env/fallback, not a versioned artifact.
 > **2026-08-17:** config gained a third source — global defaults in
 > `~/.argus/.env` (same variables/format as the project `.env`, loaded last
@@ -226,12 +238,17 @@ questions are deliberately unresolved — we'll discuss them.
 
 ## 11. File editing reliability & freshness
 
-> **Status: partially resolved (2026-08-17)** — `edit` is now exact→fuzzy,
+> **Status: resolved at the current design level (2026-08-24)** — `edit` is exact→fuzzy,
 > batches atomically (`edits[]`), preserves CRLF/BOM, and gained line-range
 > mode (`startLine`/`endLine`/`new`) for whole-block rewrites, insertions, and
-> deletions; `read` numbers every line so the model copies numbers instead of
-> counting. Stale-line protection and a deterministic read-before-edit guard
-> remain open.
+> deletions. Range edits require same-turn hash-and-line coverage from `read`;
+> partial reads authorize only their displayed range, mutations invalidate the
+> path, and any executed shell command invalidates all evidence.
+> **2026-08-24 experiment:** the rendered read field is now named
+> `numberedText`; copied gutters remain accepted in `old`, while strong evidence
+> of gutters leaking into `new` is rejected before the atomic batch mutates.
+> Three uncued live-model trials produced clean selector/replacement text and
+> exact outcomes with zero invalid calls.
 
 - **What:** editing is the highest-frequency and highest-risk tool. Two
   failure modes dominated: (a) the model's `old` text doesn't match the file
@@ -243,8 +260,8 @@ questions are deliberately unresolved — we'll discuss them.
 - **Resolving (a) — content mode:** exact match first, then a normalized fuzzy
   match (NFKC, ASCII folding of quotes/dashes/spaces, trailing-whitespace and
   CRLF tolerance, and `N │ ` gutter-stripping for text copied from a numbered
-  read). Only changed lines are rewritten — an overlay onto the original — so
-  untouched bytes stay identical and CRLF + UTF-8 BOM survive. The result
+  read). A normalized offset map identifies the exact original match span, so
+  unrelated punctuation/whitespace stays identical and CRLF + UTF-8 BOM survive. The result
   reports `fuzzy: true`, and failures keep the "copy from a fresh read"
   guidance.
 - **Resolving the *where* — range mode:** `startLine`/`endLine`/`new` replaces
@@ -259,34 +276,22 @@ questions are deliberately unresolved — we'll discuss them.
   edits into files above a context-size threshold are refused (a soft
   read-first stance rather than tracked state).
 - **Open questions for argus:**
-  - Should range edits require *freshness* — a deterministic guard that the
-    file was read (or written by us) since its last modification, with `bash`
-    conservatively invalidating all reads? It costs loop state and forces
-    re-reads after every shell command; numbered reads make those re-reads
-    cheap. The alternative is the current soft rule (prompt + errors).
-  - If a guard is added, does a *partial* read (one `offset`/`limit` page)
-    count as fresh for edits inside that window, or is a whole-file read
-    required?
   - Would a short verification anchor (the first line of the old block)
     ever justify its per-edit model burden, or is the guard the better
     mechanism? (`expect` was deliberately cut for now.)
-  - Does `read` need a raw mode (no gutters) for copying exact bytes into
-    `write`/heredocs, or is `edit`'s gutter-stripping enough?
+  - Does an explicit edit-operation discriminator outperform the current
+    selector shape on uncued insert/delete/mixed-batch tasks enough to justify
+    its extra field, or is the existing model behavior already sufficient?
 
 ---
 
 ## 12. Tool design — what should the tool surface be?
 
-> **Status: in discussion (2026-08-23)** — the canonical tool-set discussion
-> is tracked in `docs/tool-surface.md` (per-tool status, removal candidates,
-> decision log D1–D15); this section is a pointer, not a retelling.
->
-> Landed 2026-08-23 without changing the 4-tool set (details in `PROGRESS.md`,
-> decision log D2–D4 in `docs/tool-surface.md`): the loop refuses a third
-> identical tool call, requests set `parallel_tool_calls: false`, and `edit`
-> exposes only the canonical `edits[]` shape. Still open: `grep`/`ls`
-> candidates, risk declaration, result-shape contract, naming, prompt
-> de-duplication, and removal of the legacy `edit` tolerance.
+> **Status: resolved for the current surface (2026-08-24).** The canonical
+> four-tool decision, admission rule, and D1–D15 rationale live in
+> `docs/tool-surface.md`; the executable contract lives in `docs/tools.md`.
+> Reopen this gap only with behavioral evidence that an existing tool cannot
+> be refined to cover a recurring failure.
 
 ## Meta-question (the one we'll return to)
 

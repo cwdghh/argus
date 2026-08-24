@@ -1,13 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, readFileSync, readdirSync, utimesSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // Keep all session fixtures out of the user's real ~/.argus directory.
 process.env.ARGUS_HOME = mkdtempSync(join(tmpdir(), "argus-sess-test-"));
 
-const { Session, listSessions, loadSession, latestSessionName, latestSessionForCwd, defaultSessionName, nameError, newSessionName, pruneSessions, renameSession, sanitizeName, sessionConfig, sessionData, sessionSummaries, sessionsDir } = await import("../src/session/index.mjs");
+const { Session, deleteSession, listSessions, loadSession, latestSessionName, latestSessionForCwd, defaultSessionName, nameError, newSessionName, pruneSessions, renameSession, sanitizeName, sessionConfig, sessionData, sessionSummaries, sessionsDir, toolSurfaceHash } = await import("../src/session/index.mjs");
 
 const config = { baseUrl: "http://x", model: "mock", systemPrompt: "s" };
 
@@ -155,6 +155,29 @@ test("pruneSessions with keep <= 0 removes nothing", async () => {
   assert.ok((await listSessions()).some((entry) => entry.name === "keep-all"));
 });
 
+test("deleteSession removes only an exact inactive session", async () => {
+  const doomed = new Session("delete-me", config);
+  await doomed.appendTurn({ config, messages: [], blocks: [] });
+  const active = new Session("keep-active", config);
+  await active.appendTurn({ config, messages: [], blocks: [] });
+
+  assert.equal(await deleteSession("delete-me", { exclude: "keep-active" }), "delete-me");
+  assert.equal(existsSync(doomed.file), false);
+  assert.equal(existsSync(active.file), true);
+  await assert.rejects(deleteSession("keep-active", { exclude: "keep-active" }), /cannot delete the active session/);
+  await assert.rejects(deleteSession("missing"), /session not found/);
+  await assert.rejects(deleteSession("../outside"), /invalid session name/);
+});
+
+test("session directories and newly written transcripts are private", async () => {
+  const session = new Session("private-mode", config);
+  await session.appendTurn({ config, messages: [], blocks: [] });
+  if (process.platform !== "win32") {
+    assert.equal(statSync(sessionsDir()).mode & 0o777, 0o700);
+    assert.equal(statSync(session.file).mode & 0o777, 0o600);
+  }
+});
+
 test("sessionConfig persists exactly the turn-affecting config, never the API key", () => {
   const cfg = {
     baseUrl: "http://x",
@@ -166,6 +189,7 @@ test("sessionConfig persists exactly the turn-affecting config, never the API ke
     maxRetries: 2,
     maxSteps: 3,
     maxToolResultChars: 500,
+    maxTurnToolResultChars: 4_000,
     sessionKeep: 9,
   };
   assert.deepEqual(sessionConfig(cfg), {
@@ -176,7 +200,22 @@ test("sessionConfig persists exactly the turn-affecting config, never the API ke
     maxRetries: 2,
     maxSteps: 3,
     maxToolResultChars: 500,
+    maxTurnToolResultChars: 4_000,
   });
+});
+
+test("turns identify their exact tool surface and schema changes append a snapshot", async () => {
+  const first = new Session("surface-version", config);
+  await first.appendTurn({ config, messages: [], blocks: [] });
+  const resumed = new Session("surface-version", config, { initialToolSurfaceHash: "outdated" });
+  await resumed.appendTurn({ config, messages: [], blocks: [] });
+
+  const lines = readFileSync(resumed.file, "utf8").trim().split("\n").map(JSON.parse);
+  assert.deepEqual(lines.map((line) => line.type), ["meta", "turn", "tools", "turn"]);
+  assert.equal(lines[0].toolSurfaceHash, toolSurfaceHash());
+  assert.equal(lines[1].toolSurfaceHash, toolSurfaceHash());
+  assert.equal(lines[2].hash, toolSurfaceHash());
+  assert.equal(lines[3].toolSurfaceHash, toolSurfaceHash());
 });
 
 test("sessionData rebuilds transcript, history, and meta in one place", () => {
@@ -192,7 +231,23 @@ test("sessionData rebuilds transcript, history, and meta in one place", () => {
   assert.deepEqual(blocks.map((b) => b.kind), ["user", "assistant"]);
   assert.equal(cwd, "/w");
   assert.equal(model, "model-x");
-  assert.deepEqual(sessionData(null), { blocks: [], history: [], cwd: null, model: null });
+  assert.deepEqual(sessionData(null), { blocks: [], history: [], cwd: null, model: null, warnings: [] });
+});
+
+test("loadSession rejects interior corruption but recovers an incomplete final record", async () => {
+  const corruptFile = join(sessionsDir(), "corrupt-middle.jsonl");
+  const tornFile = join(sessionsDir(), "torn-tail.jsonl");
+  writeFileSync(corruptFile, '{"type":"meta","version":1}\nnot-json\n{"type":"turn","messages":[]}\n');
+  writeFileSync(tornFile, '{"type":"meta","version":1}\n{"type":"turn"');
+  try {
+    await assert.rejects(loadSession("corrupt-middle"), /corrupt at line 2/);
+    const recovered = await loadSession("torn-tail");
+    assert.equal(recovered.turns.length, 0);
+    assert.deepEqual(recovered.meta.warnings, ["ignored incomplete final session record at line 2"]);
+  } finally {
+    rmSync(corruptFile, { force: true });
+    rmSync(tornFile, { force: true });
+  }
 });
 
 test("ARGUS_HOME is resolved lazily after module import", () => {

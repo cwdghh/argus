@@ -69,10 +69,11 @@ export class MinimalTui {
     this.session = opts.session ?? null;
     this.newSession = opts.newSession ?? null;
     this.listSessions = opts.listSessions ?? null;
+    this.deleteSession = opts.deleteSession ?? null;
     this.resumeSession = opts.resumeSession ?? null;
     this.renameSession = opts.renameSession ?? null;
-    // Saved-session names for `/resume` completion. Refresh after any session
-    // change (rename, new, resume) via refreshSessionNames().
+    // Saved-session names for `/resume` and `/delete` completion. Refresh after
+    // any session change via refreshSessionNames().
     this.sessionNames = opts.sessionNames ?? [];
     this.listSessionNames = opts.listSessionNames ?? (async () => []);
     this.cwd = opts.initialCwd ?? process.cwd();
@@ -270,6 +271,12 @@ export class MinimalTui {
           this.activeToolStartedAt = null;
           this.pushBlock({ kind: "result", ok: ev.ok, summary: summarize(ev.result), durationMs });
           if (this.mode !== "aborting") this.mode = "working";
+        } else if (ev.type === "approval") {
+          this.pushBlock({
+            kind: "result",
+            ok: ev.approved,
+            summary: `${ev.approved ? "approved" : "denied"} ${ev.tool} in ${ev.cwd}: ${ev.reason}`,
+          });
         } else if (ev.type === "cwd_change") {
           this.cwd = ev.cwd;
           if (this.session) this.session.setCwd(ev.cwd).catch(() => {});
@@ -283,7 +290,7 @@ export class MinimalTui {
       }, {
         signal: ac.signal,
         cwd: this.cwd,
-        confirm: (cmd) => this.confirm(cmd),
+        authorize: (request) => this.confirm(request),
         // Real tokens of the context this turn will re-send (previous request's
         // prompt + its completion); feeds the 200K-token compaction trigger.
         lastTokens: nextContextTokens(this.lastTurnUsage),
@@ -396,7 +403,7 @@ export class MinimalTui {
     });
   }
 
-  /** Re-fetch the saved-session name list (used by `/resume` completion). */
+  /** Re-fetch the saved-session name list (used by session command completion). */
   async refreshSessionNames() {
     try {
       this.sessionNames = await this.listSessionNames();
@@ -680,6 +687,13 @@ export class MinimalTui {
 
   handleCtrlC() {
     if (this.mode === "idle") return this.stop();
+    // A local-command confirmation has no model turn or AbortController to
+    // cancel. Treat Ctrl-C like "no" and leave the TUI usable; otherwise the
+    // stale `aborting` flag would make the next Ctrl-C force-quit.
+    if (this.pendingConfirm && !this.abortController) {
+      this.resolveConfirm(false);
+      return;
+    }
     if (this.aborting) return this.stop(); // second press: force quit
     this.abortTurn();
   }
@@ -692,9 +706,12 @@ export class MinimalTui {
     this.dirtyRendered = true;
   }
 
-  confirm(command) {
+  confirm(request) {
     return new Promise((resolve) => {
-      this.pendingConfirm = { command, resolve };
+      const details = typeof request === "string"
+        ? { command: request }
+        : { ...request, command: request?.args?.command ?? request?.command ?? "approval required" };
+      this.pendingConfirm = { ...details, resolve };
       this.mode = "confirm";
       this.dirtyRendered = true;
     });

@@ -72,3 +72,29 @@ test("normalizeForFuzzy strips read gutters and folds punctuation", () => {
   assert.equal(normalizeForFuzzy("  42 │ const x = 1"), "const x = 1");
   assert.equal(normalizeForFuzzy("it\u2019s\u00a0fine"), "it's fine");
 });
+
+test("fuzzy matching rejects a needle that normalizes to empty", () => {
+  const result = applyEditsToContent("abc\n", [{ old: "1 │ ", new: "x" }], false);
+  assert.match(result.error, /becomes empty/);
+});
+
+test("fuzzy replacement preserves unrelated punctuation and whitespace on the touched line", () => {
+  const result = applyEditsToContent("“hello” tail—  \n", [{ old: '"hello"', new: "hi" }], false);
+  assert.equal(result.newContent, "hi tail—  \n");
+  assert.equal(result.usedFuzzy, true);
+});
+
+test("fuzzy matching normalizes combining sequences without losing original offsets", () => {
+  const result = applyEditsToContent("cafe\u0301 — keep\n", [{ old: "café -", new: "changed" }], false);
+  assert.equal(result.newContent, "changed keep\n");
+  assert.equal(result.usedFuzzy, true);
+});
+
+test("one fuzzy item does not broaden another exact item", () => {
+  const content = 'He said "hello"\nHe said “hello”\ntarget  \n';
+  const result = applyEditsToContent(content, [
+    { old: 'He said "hello"', new: "ASCII only" },
+    { old: "target\n", new: "done\n" },
+  ], false);
+  assert.equal(result.newContent, 'ASCII only\nHe said “hello”\ndone\n');
+});

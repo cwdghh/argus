@@ -11,6 +11,7 @@ import { runHeadless } from "./headless.mjs";
 import {
   Session,
   defaultSessionName,
+  deleteSession,
   loadSession,
   listSessions,
   nameError,
@@ -133,6 +134,7 @@ async function main() {
       };
     },
     listSessions: () => sessionSummaries(20),
+    deleteSession: (target, active) => deleteSession(target, { exclude: active }),
     resumeSession: async (nextName) => {
       const safe = sanitizeName(nextName);
       if (!safe) throw new Error(nameError(nextName) ?? `invalid session name: ${nextName}`);
@@ -146,11 +148,15 @@ async function main() {
 
 async function sessionState(name, config, loaded = null) {
   const data = loaded ?? (await loadSession(name));
-  const { blocks, history, cwd, model } = sessionData(data);
+  const { blocks, history, cwd, model, warnings } = sessionData(data);
   return {
     sessionName: name,
-    session: new Session(name, config, { initialCwd: data?.meta?.cwd, initialModel: data?.meta?.model }),
-    blocks,
+    session: new Session(name, config, {
+      initialCwd: data?.meta?.cwd,
+      initialModel: data?.meta?.model,
+      initialToolSurfaceHash: data?.meta?.toolSurfaceHash,
+    }),
+    blocks: [...blocks, ...warnings.map((text) => ({ kind: "error", text }))],
     history,
     cwd: cwd ?? process.cwd(),
     model,

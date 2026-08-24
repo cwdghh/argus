@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -40,6 +40,39 @@ test("CLI executes through an npm-link-style symlink", (t) => {
   symlinkSync(fileURLToPath(new URL("../src/main.mjs", import.meta.url)), linked);
   const output = execFileSync(linked, ["--help"], { encoding: "utf8" });
   assert.match(output, /argus --new\s+start a fresh TUI session/);
+});
+
+test("headless CLI runs end to end against an OpenAI-compatible stream", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "argus-cli-smoke-"));
+  const srv = await createMockServer(() => [{ content: "cli smoke ok" }]);
+  t.after(async () => {
+    await srv.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const entry = fileURLToPath(new URL("../src/main.mjs", import.meta.url));
+  const child = spawn(process.execPath, [entry, "say hello"], {
+    cwd: dir,
+    env: {
+      ...process.env,
+      ARGUS_HOME: join(dir, "home"),
+      ARGUS_BASE_URL: srv.url,
+      ARGUS_API_KEY: "",
+      ARGUS_MODEL: "mock",
+      ARGUS_MAX_RETRIES: "0",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
+  child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
+  const code = await new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", resolve);
+  });
+  assert.equal(code, 0);
+  assert.equal(stdout, "cli smoke ok\n");
+  assert.match(stderr, /❯ say hello/);
 });
 
 test("ARGUS_SESSION_KEEP defaults to 0 and parses a non-negative limit", () => {
@@ -173,11 +206,11 @@ test("edit refuses ambiguous replacements unless all=true", async () => {
   const edit = findTool("edit");
   const read = findTool("read");
   await write.execute({ path: "a.txt", content: "x x" }, { cwd: dir });
-  const ambiguous = await edit.execute({ path: "a.txt", old: "x", new: "y" }, { cwd: dir });
+  const ambiguous = await edit.execute({ path: "a.txt", edits: [{ old: "x", new: "y" }] }, { cwd: dir });
   assert.equal(ambiguous.error, true);
   assert.match(ambiguous.message, /occurs 2 times/);
-  await edit.execute({ path: "a.txt", old: "x", new: "y", all: true }, { cwd: dir });
-  assert.equal((await read.execute({ path: "a.txt" }, { cwd: dir })).content, "1 │ y y");
+  await edit.execute({ path: "a.txt", edits: [{ old: "x", new: "y" }], all: true }, { cwd: dir });
+  assert.equal((await read.execute({ path: "a.txt" }, { cwd: dir })).numberedText, "1 │ y y");
 });
 
 test("write requires an explicit opt-in to overwrite an existing file", async () => {
@@ -187,9 +220,9 @@ test("write requires an explicit opt-in to overwrite an existing file", async ()
   await write.execute({ path: "a.txt", content: "original" }, { cwd: dir });
   const protectedWrite = await write.execute({ path: "a.txt", content: "replacement" }, { cwd: dir });
   assert.equal(protectedWrite.error, true);
-  assert.equal((await read.execute({ path: "a.txt" }, { cwd: dir })).content, "1 │ original");
+  assert.equal((await read.execute({ path: "a.txt" }, { cwd: dir })).numberedText, "1 │ original");
   await write.execute({ path: "a.txt", content: "replacement", overwrite: true }, { cwd: dir });
-  assert.equal((await read.execute({ path: "a.txt" }, { cwd: dir })).content, "1 │ replacement");
+  assert.equal((await read.execute({ path: "a.txt" }, { cwd: dir })).numberedText, "1 │ replacement");
 });
 
 test("bash persists the shell's real cwd for quoted and compound cd commands", async () => {

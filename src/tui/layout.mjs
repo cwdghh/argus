@@ -79,8 +79,9 @@ export function buildFrame(state) {
   let inputCol;
   let inputRow;
   if (state.pendingConfirm) {
+    const where = state.pendingConfirm.cwd ? ` in ${state.pendingConfirm.cwd}` : "";
     rows[height - 2] = styleText(
-      `⚠ ${truncateMiddle(state.pendingConfirm.command, Math.max(12, width - 12))}  (y/n)`,
+      `⚠ ${truncateMiddle(`${state.pendingConfirm.tool ?? "command"}${where}: ${state.pendingConfirm.command}`, Math.max(12, width - 12))}  (y/n)`,
       { fg: theme.bad }
     );
     inputCol = 0;

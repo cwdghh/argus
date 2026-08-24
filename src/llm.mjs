@@ -25,7 +25,7 @@ import {
   ssePayload,
 } from "./sse.mjs";
 
-function buildBody({ model, systemPrompt, messages, tools }) {
+export function buildBody({ model, systemPrompt, messages, tools }) {
   return {
     model,
     messages: [{ role: "system", content: systemPrompt }, ...messages],

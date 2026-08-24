@@ -18,7 +18,8 @@ model. The default tool set is deliberately tiny: `read`, `write`, `edit`, `bash
 | `src/sse.mjs` | Pure SSE framing + chat-delta folding (protocol layer of `llm.mjs`) |
 | `src/tools.mjs` | Tool registry + fs/shell execution layer (`read`, `write`, `edit`, `bash`) |
 | `src/edit-engine.mjs` | Pure exact/fuzzy/range text-edit engine |
-| `src/read-bounds.mjs` | Read line/byte caps + truncation |
+| `src/read-bounds.mjs` | Bounded-memory file scanning + read line/byte caps |
+| `src/tool-state.mjs` | Same-turn read coverage/hash state for safe range edits |
 | `src/compact.mjs` | Context compaction |
 | `src/session/` | JSONL session persistence: `store.mjs` (fs + writable handle), `resume.mjs` (folder-scoped default), `data.mjs` (reconstruction) — import from `index.mjs` |
 | `src/headless.mjs` | One-shot CLI mode (no TUI) |
@@ -27,7 +28,7 @@ model. The default tool set is deliberately tiny: `read`, `write`, `edit`, `bash
 | `src/transcript.mjs` | Shared transcript block folding (used by TUI + headless) |
 | `src/theme.mjs` | Colors / styling tokens |
 | `src/config.mjs` | Env-driven config |
-| `docs/` | Architecture, tool contract, tool-surface tracker, self-updating guide |
+| `docs/` | Architecture, tool contract, tool-surface decisions, self-updating guide |
 | `docs/archive/` | Frozen history & executed one-time plans (read only when needed) |
 | `PROGRESS.md` | What we've done (append on real change) |
 | `GAPS.md` | Open design questions |
@@ -37,7 +38,7 @@ model. The default tool set is deliberately tiny: `read`, `write`, `edit`, `bash
 > `docs/self-updating.md` — the contract for how argus changes argus (fact
 > ownership, the verify/record workflow, boundaries); `docs/architecture.md` —
 > how the code fits together; `docs/tools.md` — the tool contract;
-> `docs/tool-surface.md` — the canonical tool-set discussion. README is
+> `docs/tool-surface.md` — the canonical tool-set decisions and rationale. README is
 > the user-facing view; `PROGRESS.md`/`GAPS.md`/`NEXT_STEPS.md` are the
 > current state. See `docs/self-updating.md` for the bootstrap reading order.
 
@@ -72,18 +73,27 @@ cp .env.example .env   # set ARGUS_API_KEY
 npm start
 ```
 
-## How to add a tool (in 30 seconds)
+## How to change the tool registry
 
-In `src/tools.mjs`, add one object to the `tools` array:
+Prefer refining an existing tool; `docs/tool-surface.md` defines the evidence
+required for a fifth default. Registry objects in `src/tools.mjs` look like:
 
 ```js
 {
   name: "my_tool",
+  risk: "read-only", // or filesystem-write / shell; not shown to the model
   description: "One or two sentences: when to use it, what it does.",
-  parameters: { type: "object", properties: {...}, required: [...] },
-  async execute(args) { ... return a JSON-serialisable value ... },
+  parameters: {
+    type: "object",
+    properties: {...},
+    required: [...],
+    additionalProperties: false,
+  },
+  validate(args) { ... return null or an error string ... }, // optional
+  approval(args) { ... return null or an approval reason ... }, // optional
+  async execute(args, context) { ... return a JSON-serialisable value ... },
 }
 ```
 
-That's it — the loop and TUI pick it up automatically. Update `docs/tools.md`
-and the tool list in this file if you want it to be a default.
+The loop and TUI pick it up automatically. Update `docs/tools.md`, the surface
+decision, tests, and the tool list here in the same change.

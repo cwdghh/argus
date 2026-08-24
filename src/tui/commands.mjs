@@ -25,7 +25,7 @@ export const KEY_HELP = `## Keyboard shortcuts
 - Ctrl-U / Ctrl-K — delete to the start / end
 - Ctrl-W — delete the previous word
 - Up / Down — move through the suggestion popup; recall earlier prompts otherwise
-- Tab — accept the suggested @path, /command, or /resume session name
+- Tab — accept the suggested @path, /command, or saved-session name
 - Shift+Enter — insert a newline
 - Enter — submit
 
@@ -72,8 +72,9 @@ export const COMMANDS = [
           `- Context: ${ctx == null ? "—" : formatChars(ctx)} / ${formatChars(ctxBudget)} tokens (${ctxRatio}%)\n` +
           `- Turns: ${turns}\n` +
           `- Limits: ${tui.config.maxSteps ?? 100} model steps, ${tui.config.maxRetries ?? 2} retries, ` +
-          `${tui.config.requestTimeoutMs ?? 300_000}ms/request, ` +
-          `${(tui.config.maxToolResultChars ?? 50_000).toLocaleString()} chars/tool result`,
+          `${tui.config.requestTimeoutMs ?? 600_000}ms/request, ` +
+          `${(tui.config.maxToolResultChars ?? 50_000).toLocaleString()} chars/tool result, ` +
+          `${(tui.config.maxTurnToolResultChars ?? 400_000).toLocaleString()} chars/turn`,
       });
     },
   },
@@ -123,6 +124,7 @@ export const COMMANDS = [
           const sessions = await tui.listSessions();
           const lines = sessions.map((item) => {
             const active = item.name === tui.sessionName ? "→" : "-";
+            if (item.error) return `${active} \`${item.name}\` — unavailable: ${item.error}`;
             const date = new Date(item.mtime).toLocaleString();
             const size = item.size != null ? ` · ${formatChars(item.size)}B` : "";
             const prompt = item.lastPrompt
@@ -134,6 +136,37 @@ export const COMMANDS = [
             kind: "assistant",
             text: `## Recent sessions\n\n${lines.length ? lines.join("\n") : "No saved sessions yet."}\n\nUse \`/resume <name>\` to switch.`,
           });
+        });
+      }
+    },
+  },
+  {
+    name: "/delete",
+    args: "<name>",
+    description: "permanently delete a saved, inactive session",
+    async run(tui, args) {
+      if (args.length !== 1) {
+        tui.pushBlock({ kind: "error", text: "usage: /delete <name>" });
+      } else if (!tui.deleteSession) {
+        tui.pushBlock({ kind: "error", text: "session deletion is unavailable in this frontend" });
+      } else if (args[0] === tui.sessionName) {
+        tui.pushBlock({ kind: "error", text: `cannot delete the active session: ${tui.sessionName}` });
+      } else {
+        await tui.withLocalTask(async () => {
+          const target = args[0];
+          const approved = await tui.confirm({
+            tool: "session delete",
+            args: { command: target },
+            risk: "destructive",
+            reason: `permanently deletes saved session ${target}; this cannot be undone`,
+          });
+          if (!approved) {
+            tui.pushBlock({ kind: "result", ok: false, summary: `session deletion cancelled: ${target}` });
+            return;
+          }
+          const deleted = await tui.deleteSession(target, tui.sessionName);
+          await tui.refreshSessionNames();
+          tui.pushBlock({ kind: "result", ok: true, summary: `deleted session ${deleted}; it cannot be recovered` });
         });
       }
     },

@@ -48,7 +48,9 @@ and `ARGUS_HOME` relocates the file (and your sessions).
 | `ARGUS_MAX_RETRIES` | `2` | Retries for 408/429/5xx/network failures |
 | `ARGUS_MAX_STEPS` | `100` | Maximum model calls in one turn |
 | `ARGUS_MAX_TOOL_RESULT_CHARS` | `50000` | Maximum characters returned by one tool |
-| `ARGUS_COMPACT_AT` | `300000` | History size (chars) that triggers compaction |
+| `ARGUS_MAX_TURN_TOOL_RESULT_CHARS` | `400000` | Cumulative tool-result characters allowed in one active turn |
+| `ARGUS_COMPACT_TOKENS` | `200000` | Real-token context budget that triggers compaction |
+| `ARGUS_COMPACT_AT` | `800000` | Character safety net before provider usage is available |
 | `ARGUS_COMPACT_KEEP` | `8` | Recent turns kept intact when compacting |
 | `ARGUS_SESSION_KEEP` | `0` | Keep only the newest N saved sessions on startup (`0` keeps all; the active session is never pruned) |
 
@@ -148,7 +150,9 @@ Slash commands are handled by the TUI itself, without calling the model:
 | `/model <name>` | Show or switch the model for this session (`/model` alone shows the current one) |
 | `/sessions` | List up to 20 recent sessions (turns, size, last prompt) |
 | `/resume <name>` | Switch to a saved session without restarting |
-| `/new` | Start a fresh session without restarting |
+| `/name <name>` | Rename the active session |
+| `/delete <name>` | Permanently delete a saved inactive session after confirmation |
+| `/new [name]` | Start a fresh, optionally named session without restarting |
 | `/exit`, `/quit` | Quit Argus |
 
 Use `@path` as a lightweight file reference in prompts, for example:
@@ -182,13 +186,19 @@ the root with the `ARGUS_HOME` env var; the global `~/.argus/.env` shares
 the same root). JSONL is append-only and keeps
 everything needed to reconstruct the exact requests a session made: the config
 (model, base URL, system prompt), the full `messages` (verbatim tool calls +
-results), the tool schemas, and the on-screen blocks (incl. thinking).
+results), the tool-surface hash used by each turn plus a schema snapshot when
+that surface changes, and the on-screen blocks (incl. thinking).
 Your API key is never written to disk. `/sessions` lists saved sessions
 with their turn count, file size, and last prompt.
 
 Set `ARGUS_SESSION_KEEP` to a positive number to prune everything but the
 newest sessions on startup — the session you are opening is always preserved.
 `0` (the default) keeps everything.
+
+Session directories are created with owner-only permissions and transcript
+files with owner read/write permissions on platforms that support POSIX modes.
+Use `/delete <name>` for confirmed cleanup; the active session is protected and
+deletion cannot be undone.
 
 By default `npm start` resumes the newest session that was used in (or
 below) the current folder, so each project picks up its own work instead of
@@ -204,9 +214,9 @@ npm start -- --session X  # resume/create a session named X
 
 The active session name is shown in the header.
 Use `/sessions` and `/resume <name>` to move between saved sessions from the TUI.
-Typing `/resume` followed by a space completes saved-session names in the
-editor popup — keep typing to filter, Tab accepts, and the list reflects
-renames and new sessions.
+Typing `/resume` or `/delete` followed by a space completes saved-session names
+in the editor popup — keep typing to filter, Tab accepts, and the list reflects
+renames, deletions, and new sessions.
 
 Give sessions meaningful names: `/name <name>` renames the current session
 (later turns keep writing to it), and `/new <name>` starts a named session
@@ -236,7 +246,7 @@ here is the condensed version:
 |------|--------------|
 | `src/config.mjs` | Reads configuration from the environment / `.env` |
 | `src/llm.mjs` | OpenAI-compatible chat client, incl. **streaming** + thinking (`src/sse.mjs` holds the pure SSE framing) |
-| `src/tools.mjs` | Tool registry + fs/shell layer (`read`, `write`, `edit`, `bash`); engines in `src/edit-engine.mjs` + `src/read-bounds.mjs` |
+| `src/tools.mjs` | Tool registry + fs/shell layer (`read`, `write`, `edit`, `bash`); engines in `src/edit-engine.mjs` + `src/read-bounds.mjs`, freshness in `src/tool-state.mjs` |
 | `src/agent.mjs` | **The loop**: call LLM → run requested tools → repeat |
 | `src/compact.mjs` | Context compaction (auto-summarize old turns) |
 | `src/session/` | Append-only JSONL session persistence (store / resume / data) |
@@ -272,12 +282,15 @@ shown in the footer.
 ## Safety
 
 Destructive shell commands (recursive `rm`, `dd`, `mkfs`, `shutdown`, …) are
-not run silently. In the TUI they show a `⚠ <command> (y/n)` prompt — `y`
-approves, `n`/Esc denies. Headless mode blocks them by default.
+not run silently. In the TUI they show a structured confirmation with the
+tool and working directory — `y` approves, `n`/Esc denies — and the decision
+is recorded in the transcript. Headless mode blocks them by default.
 
 File changes also prefer explicit intent: `write` creates files but refuses to
 replace an existing one unless the model passes `overwrite: true`, while `edit`
 refuses an ambiguous match unless every occurrence was explicitly requested.
+Line-range edits additionally require the same turn to have read the exact
+current content and affected lines; later mutations invalidate that evidence.
 
 The gate is deliberately small and pattern-based, not a sandbox. Review commands
 before approving them and run Argus inside a disposable workspace when working
@@ -298,12 +311,13 @@ session, or a provider that omits usage), a measured-size safety net
 unbounded growth. The footer shows how much of the 200k-token budget the most
 recent request used.
 
-Individual tool results are capped at `ARGUS_MAX_TOOL_RESULT_CHARS`. The `read`
-tool also truncates itself (2000 lines / 50KB), numbers every line, and
-reports `offset`/`limit` continuation hints, so a big file never floods the
-context window in one call and the model can reference exact lines.
-Oversized results include a marked preview so the model can retry with a
-narrower read or command instead of overflowing the active turn.
+Individual serialized tool results are capped at
+`ARGUS_MAX_TOOL_RESULT_CHARS`; their cumulative size in one active turn is
+capped at `ARGUS_MAX_TURN_TOOL_RESULT_CHARS`. The `read` tool scans with
+bounded memory, returns at most 2000 lines / 50KB, numbers every line, and
+reports structured `truncated`/`nextOffset` continuation data. Other oversized
+results retain a bounded preview plus stable fields such as `path`, `cwd`, or
+`nextOffset`, so the model can narrow its next call.
 
 ## Self-updating
 
@@ -348,3 +362,13 @@ npm test
 Covers the agent loop (tools, abort, persistent cwd), context compaction,
 headless mode, session round-trip, safety gates, retry/reliability behaviour,
 and TUI rendering and navigation.
+
+An opt-in real-provider tool-choice evaluator covers content edits, fresh range
+edits, shell search, and new-file creation in isolated temporary workspaces:
+
+```bash
+npm run eval:tools
+```
+
+It requires configured API credentials and may incur provider cost, so it is
+not part of `npm test`.
