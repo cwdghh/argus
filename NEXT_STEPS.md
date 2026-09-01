@@ -14,10 +14,8 @@ A full-repo audit (incl. `references/pi`) produced a verified, workstreamed plan
 `docs/improvements-plan.md` is the source of truth. Its top picks, in suggested
 order:
 
-1. **W4 — Session durability/scale** — torn-line recovery, streaming meta
-   scanner for resume.
-2. **W5 — Core-loop hardening** — mid-stream step retry, body built once.
-3. **W6 — Feature backlog** — interrupt→continue, render cache, structured
+1. **W5 — Core-loop hardening** — mid-stream step retry, body built once.
+2. **W6 — Feature backlog** — interrupt→continue, render cache, structured
    compaction, fallback model, steering.
 
 ## Practical improvements

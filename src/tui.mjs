@@ -358,6 +358,9 @@ export class MinimalTui {
       if (this.session) {
         try {
           await this.session.setCwd(this.cwd);
+          // Static config (incl. systemPrompt) is persisted once per session,
+          // not with every turn; appendTurn stores only the model delta.
+          await this.session.setConfig(this.config);
           await this.session.appendTurn({
             config: sessionConfig(this.config),
             messages: savedMessages,

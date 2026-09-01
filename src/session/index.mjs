@@ -10,7 +10,6 @@
 export {
   Session,
   deleteSession,
-  latestSessionName,
   listSessions,
   loadSession,
   nameError,
@@ -18,6 +17,7 @@ export {
   pruneSessions,
   renameSession,
   sanitizeName,
+  scanSessionMeta,
   sessionFilePath,
   sessionSummaries,
   sessionsDir,
@@ -25,4 +25,4 @@ export {
   toolSurfaceSnapshot,
 } from "./store.mjs";
 export { defaultSessionName, latestSessionForCwd } from "./resume.mjs";
-export { sessionConfig, sessionData } from "./data.mjs";
+export { configRecord, sessionConfig, sessionData } from "./data.mjs";

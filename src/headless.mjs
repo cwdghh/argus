@@ -124,6 +124,9 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
       durationMs: Date.now() - startedAt,
       usage: result?.usage ?? error?.usage ?? null,
     });
+    // The static config (incl. the often-large systemPrompt) is persisted once
+    // per session; the turn itself stores only the model delta.
+    await session.setConfig(config);
     await session.appendTurn({
       config: sessionConfig(config),
       messages: result?.messages ?? error?.turnMessages ?? [{ role: "user", content: prompt }],

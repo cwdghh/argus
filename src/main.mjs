@@ -83,6 +83,11 @@ async function main() {
   // Headless one-shot mode.
   if (prompt != null) {
     const session = name ? new Session(name, config) : null;
+    // Mirror the interactive housekeeping below: prune when configured, always
+    // preserving the session this run writes to (if any).
+    if (config.sessionKeep > 0) {
+      await pruneSessions(config.sessionKeep, { exclude: name ?? undefined });
+    }
     await runHeadless(config, prompt, { session });
     return;
   }

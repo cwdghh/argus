@@ -7,7 +7,7 @@ import { join } from "node:path";
 // Keep all session fixtures out of the user's real ~/.argus directory.
 process.env.ARGUS_HOME = mkdtempSync(join(tmpdir(), "argus-sess-test-"));
 
-const { Session, deleteSession, listSessions, loadSession, latestSessionName, latestSessionForCwd, defaultSessionName, nameError, newSessionName, pruneSessions, renameSession, sanitizeName, sessionConfig, sessionData, sessionSummaries, sessionsDir, toolSurfaceHash } = await import("../src/session/index.mjs");
+const { Session, configRecord, deleteSession, listSessions, loadSession, latestSessionForCwd, defaultSessionName, nameError, newSessionName, pruneSessions, renameSession, sanitizeName, scanSessionMeta, sessionConfig, sessionData, sessionSummaries, sessionsDir, toolSurfaceHash } = await import("../src/session/index.mjs");
 
 const config = { baseUrl: "http://x", model: "mock", systemPrompt: "s" };
 
@@ -22,7 +22,7 @@ test("round-trip: turn + cwd persisted, latest detected", async () => {
   assert.equal(loaded.turns.length, 2);
   assert.equal(loaded.meta.cwd, "/tmp");
   assert.equal(loaded.turns[0].messages[0].content, "hi");
-  assert.equal(await latestSessionName(), "abc");
+  assert.equal((await listSessions())[0].name, "abc");
 
   const file = readFileSync(join(process.env.ARGUS_HOME, "sessions", "abc.jsonl"), "utf8");
   const cwdLines = file.split("\n").filter((l) => l.includes('"type":"cwd"'));
@@ -178,7 +178,7 @@ test("session directories and newly written transcripts are private", async () =
   }
 });
 
-test("sessionConfig persists exactly the turn-affecting config, never the API key", () => {
+test("sessionConfig persists the model delta; configRecord the static config, never the API key", () => {
   const cfg = {
     baseUrl: "http://x",
     apiKey: "secret",
@@ -192,9 +192,9 @@ test("sessionConfig persists exactly the turn-affecting config, never the API ke
     maxTurnToolResultChars: 4_000,
     sessionKeep: 9,
   };
-  assert.deepEqual(sessionConfig(cfg), {
+  assert.deepEqual(sessionConfig(cfg), { model: "m" });
+  assert.deepEqual(configRecord(cfg), {
     baseUrl: "http://x",
-    model: "m",
     systemPrompt: "s",
     requestTimeoutMs: 42,
     maxRetries: 2,
@@ -202,6 +202,9 @@ test("sessionConfig persists exactly the turn-affecting config, never the API ke
     maxToolResultChars: 500,
     maxTurnToolResultChars: 4_000,
   });
+  assert.ok(!("apiKey" in configRecord(cfg)), "the API key never persists");
+  assert.ok(!("model" in configRecord(cfg)), "the model has its own record and can change per turn");
+  assert.ok(!("streamIdleTimeoutMs" in configRecord(cfg)) && !("sessionKeep" in configRecord(cfg)), "stream-only and host-only knobs stay out");
 });
 
 test("turns identify their exact tool surface and schema changes append a snapshot", async () => {
@@ -234,20 +237,76 @@ test("sessionData rebuilds transcript, history, and meta in one place", () => {
   assert.deepEqual(sessionData(null), { blocks: [], history: [], cwd: null, model: null, warnings: [] });
 });
 
-test("loadSession rejects interior corruption but recovers an incomplete final record", async () => {
+test("loadSession skips any torn line with a warning instead of bricking the session", async () => {
   const corruptFile = join(sessionsDir(), "corrupt-middle.jsonl");
   const tornFile = join(sessionsDir(), "torn-tail.jsonl");
-  writeFileSync(corruptFile, '{"type":"meta","version":1}\nnot-json\n{"type":"turn","messages":[]}\n');
+  const badHead = join(sessionsDir(), "bad-head.jsonl");
+  writeFileSync(corruptFile, '{"type":"meta","version":1}\nnot-json\n{"type":"turn","messages":[{"role":"user","content":"hi"}]}\n');
   writeFileSync(tornFile, '{"type":"meta","version":1}\n{"type":"turn"');
+  writeFileSync(badHead, 'garbage\n{"type":"cwd","cwd":"/x"}\n');
   try {
-    await assert.rejects(loadSession("corrupt-middle"), /corrupt at line 2/);
-    const recovered = await loadSession("torn-tail");
-    assert.equal(recovered.turns.length, 0);
-    assert.deepEqual(recovered.meta.warnings, ["ignored incomplete final session record at line 2"]);
+    const interior = await loadSession("corrupt-middle");
+    assert.equal(interior.turns.length, 1, "the valid turn after the bad line still loads");
+    assert.equal(interior.turns[0].messages[0].content, "hi");
+    assert.deepEqual(interior.meta.warnings, ["ignored unparseable session record at line 2"]);
+
+    const torn = await loadSession("torn-tail");
+    assert.equal(torn.turns.length, 0);
+    assert.deepEqual(torn.meta.warnings, ["ignored unparseable session record at line 2"]);
+
+    const head = await loadSession("bad-head");
+    assert.equal(head.meta.cwd, "/x", "the record after the bad head line still parses");
+    assert.deepEqual(head.meta.warnings, ["ignored unparseable session record at line 1"]);
   } finally {
     rmSync(corruptFile, { force: true });
     rmSync(tornFile, { force: true });
+    rmSync(badHead, { force: true });
   }
+});
+
+test("the static config is persisted once, never per turn", async () => {
+  const s = new Session("cfg-once", config);
+  await s.setConfig(config);
+  await s.appendTurn({ config: sessionConfig(config), messages: [], blocks: [] });
+  await s.appendTurn({ config: sessionConfig(config), messages: [], blocks: [] });
+
+  const lines = readFileSync(s.file, "utf8").trim().split("\n").map(JSON.parse);
+  assert.deepEqual(lines.map((line) => line.type), ["meta", "config", "turn", "turn"]);
+  assert.equal(lines[1].systemPrompt, "s", "the config record carries the prompt");
+  assert.ok(!Object.hasOwn(lines[2], "systemPrompt"), "turn records no longer re-store the prompt");
+  assert.equal(lines[2].config.model, "mock", "each turn still records which model saw it");
+
+  const loaded = await loadSession("cfg-once");
+  assert.equal(loaded.meta.config.systemPrompt, "s");
+  assert.equal(loaded.meta.config.baseUrl, "http://x");
+});
+
+test("scanSessionMeta reads only the head records, not the turns", async () => {
+  const s = new Session("head-scan", config);
+  await s.setCwd("/work");
+  await s.setConfig(config);
+  // A rich turn full of content the meta scan must never parse.
+  await s.appendTurn({
+    config: sessionConfig(config),
+    messages: [{ role: "user", content: "boom".repeat(10_000) }],
+    blocks: [{ kind: "assistant", text: "x".repeat(10_000) }],
+  });
+  const meta = await scanSessionMeta("head-scan");
+  assert.equal(meta.cwd, "/work");
+  assert.equal(meta.config.systemPrompt, "s");
+  assert.ok(!meta.warnings, "the meta scan never sees turn content");
+});
+
+test("a torn/corrupt session cannot block default-session resolution", async () => {
+  await withSessionHome(async (dir) => {
+    await mkSession(dir, "good", "/repo", 1000);
+    writeFileSync(join(dir, "corrupt-latest.jsonl"), 'garbage-mid\n{"type":"cwd","cwd":"/repo"}\n{"type":"turn"');
+    utimesSync(join(dir, "corrupt-latest.jsonl"), new Date(2000), new Date(2000));
+    // The corrupt session is newest and for the right folder; resolution must
+    // skip past it and still find a usable match (or fail cleanly).
+    const resolved = await latestSessionForCwd("/repo");
+    assert.ok(resolved === "corrupt-latest" || resolved === "good", `resolved ${resolved} without bricking`);
+  });
 });
 
 test("ARGUS_HOME is resolved lazily after module import", () => {
@@ -334,7 +393,7 @@ test("latestSessionForCwd prefers the newest session inside the folder", async (
     assert.equal(await latestSessionForCwd("/repo"), "in-root");
     assert.equal(await latestSessionForCwd("/repo/src"), "in-sub", "only sessions at/below the folder match");
     assert.equal(await latestSessionForCwd("/elsewhere"), "elsewhere");
-    assert.equal(await latestSessionName(), "elsewhere", "the plain latest-session helper is unchanged");
+    assert.equal((await listSessions())[0].name, "elsewhere", "newest overall stays elsewhere");
   });
 });
 

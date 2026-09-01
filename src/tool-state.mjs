@@ -31,10 +31,6 @@ export class ToolState {
     this.reads = new Map();
   }
 
-  recordRead(path, content, startLine, endLine, totalLines = null) {
-    this.recordReadHash(path, contentHash(content), startLine, endLine, totalLines);
-  }
-
   recordReadHash(path, hash, startLine, endLine, totalLines = null) {
     const current = this.reads.get(path);
     const ranges = current?.hash === hash ? current.ranges : [];

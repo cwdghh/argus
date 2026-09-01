@@ -27,7 +27,11 @@ test("TUI persists failed turns, including the visible error", async (t) => {
   });
   t.after(() => srv.close());
   let saved = null;
-  const session = { appendTurn: async (turn) => (saved = turn), setCwd: async () => {} };
+  const session = {
+    appendTurn: async (turn) => (saved = turn),
+    setCwd: async () => {},
+    setConfig: async () => {},
+  };
   const tui = new MinimalTui(
     { baseUrl: srv.url, apiKey: "", model: "m", systemPrompt: "s" },
     { session }
@@ -42,7 +46,11 @@ test("TUI persists its cwd even when no command changes directory", async (t) =>
   const srv = await createMockServer(() => [{ content: "ok" }]);
   t.after(() => srv.close());
   let savedCwd = null;
-  const session = { appendTurn: async () => {}, setCwd: async (cwd) => (savedCwd = cwd) };
+  const session = {
+    appendTurn: async () => {},
+    setCwd: async (cwd) => (savedCwd = cwd),
+    setConfig: async () => {},
+  };
   const tui = new MinimalTui(
     { baseUrl: srv.url, apiKey: "", model: "m", systemPrompt: "s" },
     { session, initialCwd: "/project" }

@@ -160,6 +160,9 @@ works on a resumed turn.
 
 ## W4 — Session durability & startup scale  *(medium)*
 
+> **Status: shipped 2026-09-01** — every bullet below landed with a test. See
+> the PROGRESS.md entry.
+
 - **Torn-line recovery** (`store.mjs:264`, `resume.mjs:34`): a single unparseable
   interior JSONL line throws and bricks the session — skip-and-warn interior
   lines and try/catch `latestSessionForCwd` so startup can't be blocked. Two-line

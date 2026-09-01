@@ -4,6 +4,39 @@ Dated changelog, **newest first** (this file is a log — never edit entries in 
 
 ---
 
+#### 2026-09-01 — session durability & startup scale (plan W4)
+
+**Status: ✅ done** (tests under `test/session.test.mjs`, `test/headless.test.mjs`,
+`test/polish.test.mjs`)
+
+- **Torn-line recovery:** `loadSession` is now a streaming, tolerant scan — an
+  unparseable line *anywhere* (torn final record from a crash, or interior
+  corruption) is skipped with a warning instead of throwing, so one bad append
+  can never brick a session again. `latestSessionForCwd` skips unreadable
+  sessions instead of letting a single corrupt file block TUI startup.
+- **Streaming meta scanner:** `scanSessionFile`/`scanSessionMeta` read a session
+  head-first and stop at the first turn record, so default-session resolution
+  parses a handful of leading cwd/model/config records instead of a full
+  transcript rebuild of up to 20 sessions (~2-3 orders less parse work).
+- **Memory-bounded `loadSession`:** readline streaming replaces
+  `readFile` + `split("\n")`, which held ~2× the file plus every deserialized
+  turn at once.
+- **`systemPrompt` persisted once:** a new deduped `{type:"config"}` record
+  (written by `Session#setConfig`) carries the static config — including the
+  often-large systemPrompt — once per session instead of inside every turn
+  record; turns now store only the model delta. The document header lists all
+  record types.
+- **Housekeeping & I/O:** `pruneSessions` now also runs in headless mode
+  (`ARGUS_SESSION_KEEP`, preserving the session being written), and
+  `listSessions`/`pruneSessions` issue their stats/removals concurrently.
+- **Dead exports removed:** `truncateRead` (`read-bounds.mjs`), `recordRead`
+  (`tool-state.mjs`), and `latestSessionName` (session store + index).
+
+Verified in this session: `node --test` **286/286 pass** (3 new session tests
+plus updated torn-line / config-shape expectations).
+
+---
+
 #### 2026-09-01 — tool output visibility (plan W2)
 
 **Status: ✅ done** (tests under `test/format.test.mjs`, `test/tui.test.mjs`,
