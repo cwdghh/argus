@@ -29,6 +29,7 @@ model. The default tool set is deliberately tiny: `read`, `write`, `edit`, `bash
 | `src/theme.mjs` | Colors / styling tokens |
 | `src/config.mjs` | Env-driven config |
 | `docs/` | Architecture, tool contract, tool-surface decisions, self-updating guide, debugging saved sessions |
+| `docs/improvements-plan.md` | The current implementation plan (audit-derived workstreams, ranked) — read before starting new work |
 | `docs/archive/` | Frozen history & executed one-time plans (read only when needed) |
 | `PROGRESS.md` | What we've done (append on real change) |
 | `GAPS.md` | Open design questions |
