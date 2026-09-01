@@ -30,7 +30,9 @@ test("suggestions: the highlighted row survives recomputes that shrink the list"
   };
   const s = computeSuggestion({ buffer: "/s", cursor: 2, mode: "idle", cwd: "/", prev });
   assert.equal(s.kind, "slash");
-  assert.equal(s.selected, 1, "same label keeps its highlight");
+  // /show sorts between /status and /sessions, so the preserved /sessions
+  // highlight lands at index 2 — same label, same semantics.
+  assert.equal(s.selected, 2, "same label keeps its highlight");
   const fewer = computeSuggestion({ buffer: "/st", cursor: 3, mode: "idle", cwd: "/", prev });
   assert.equal(fewer.selected, 0, "missing label clamps into the smaller list");
 });

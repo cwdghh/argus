@@ -34,11 +34,14 @@ test("headless: text -> stdout, tool -> stderr, session + cwd saved", async (t) 
   });
 
   assert.equal(out.join(""), "hello world\n", "stdout should be assistant text only");
-  assert.ok(err.join("").includes("⚙ bash"), "tool call on stderr");
+  assert.ok(err.join("").includes("⚙ bash → cd src"), "tool line uses the shared label resolver");
 
   const loaded = await loadSession("hs");
   assert.equal(loaded.turns.length, 1);
   assert.equal(loaded.meta.cwd, join(process.cwd(), "src"), "headless persists cwd");
+  const toolBlock = loaded.turns[0].blocks.find((b) => b.kind === "tool");
+  assert.equal(toolBlock.label, "bash → cd src", "the persisted block stores the resolved label, not raw args");
+  assert.equal(toolBlock.id, "c1", "the call id is persisted so /show can link the result");
 });
 
 test("headless: error -> exitCode 1 and error block saved", async (t) => {

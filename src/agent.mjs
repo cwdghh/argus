@@ -395,7 +395,7 @@ export async function executeToolCall(call, { cwd, signal, confirm, authorize, m
     argumentError = "tool arguments were not valid JSON";
   }
 
-  onEvent({ type: "tool_call", name: toolName, args, raw: rawArguments });
+  onEvent({ type: "tool_call", name: toolName, args, raw: rawArguments, id: call?.id });
 
   let result;
   if (!tool) {
@@ -439,7 +439,7 @@ export async function executeToolCall(call, { cwd, signal, confirm, authorize, m
   }
 
   result = boundToolResult(result, maxToolResultChars);
-  onEvent({ type: "tool_result", name: toolName, ok: !result?.error, result });
+  onEvent({ type: "tool_result", name: toolName, ok: !result?.error, result, id: call?.id });
 
   let nextCwd = cwd;
   if (result && typeof result.cwd === "string" && result.cwd !== cwd) {

@@ -72,6 +72,9 @@ draft survives Esc and history navigation. The existing paste test
 
 ## W2 — Tool output visibility  *(small→medium, highest-value TUI work)*
 
+> **Status: shipped 2026-09-01** — every item below landed with a test. See
+> the PROGRESS.md entry.
+
 **Files:** `src/format.mjs` (new `toolLabel` + `previewResult`), `src/tui/blocks.mjs`
 (~11-14 `formatArgs`, ~46-55 result render), `src/tui.mjs` (~259-266 tool blocks),
 `src/headless.mjs` (~73), `src/tui/frames.mjs` (~26-42 `statusText`),

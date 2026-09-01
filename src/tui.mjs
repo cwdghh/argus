@@ -34,7 +34,7 @@
  */
 import { runTurn } from "./agent.mjs";
 import { nextContextTokens } from "./compact.mjs";
-import { formatDuration, summarize } from "./format.mjs";
+import { formatDuration, previewResult, summarize, toolLabel } from "./format.mjs";
 import { appendBlock } from "./transcript.mjs";
 import { theme } from "./theme.mjs";
 import { sessionConfig } from "./session/index.mjs";
@@ -120,6 +120,9 @@ export class MinimalTui {
     this.lastTurnDurationMs = [...this.blocks].reverse().find((block) => block.kind === "timing")?.durationMs ?? null;
     this.lastTurnUsage = [...this.blocks].reverse().find((block) => block.kind === "timing")?.usage ?? null;
     this.lastClockTick = -1;
+    // The tool currently running (undefined when none), for the footer's
+    // active-tool line — separate from the turn-level spinner timer.
+    this.activeTool = null;
     this.activeToolStartedAt = null;
     // Cumulative token usage for the active turn (real provider counts, not a
     // char estimate). Reset at the start of each turn in submit().
@@ -265,12 +268,31 @@ export class MinimalTui {
           if (this.mode !== "aborting") this.mode = "working";
         } else if (ev.type === "tool_call") {
           this.activeToolStartedAt = this.now();
-          this.pushBlock({ kind: "tool", name: ev.name, args: ev.args });
+          this.activeTool = { name: ev.name, args: ev.args };
+          // Persist the resolved label, not the raw args: the payload already
+          // lives in the turn's tool message, so re-storing it here is pure
+          // JSONL amplification (W2.1). `id` lets /show link back to that
+          // message after a resume.
+          this.pushBlock({
+            kind: "tool",
+            name: ev.name,
+            label: toolLabel(ev.name, ev.args),
+            ...(ev.id ? { id: ev.id } : {}),
+          });
           if (this.mode !== "aborting") this.mode = "working";
         } else if (ev.type === "tool_result") {
           const durationMs = this.activeToolStartedAt == null ? null : this.now() - this.activeToolStartedAt;
           this.activeToolStartedAt = null;
-          this.pushBlock({ kind: "result", ok: ev.ok, summary: summarize(ev.result), durationMs });
+          this.activeTool = null;
+          const detail = previewResult(ev.result);
+          this.pushBlock({
+            kind: "result",
+            ok: ev.ok,
+            summary: summarize(ev.result),
+            durationMs,
+            ...(ev.id ? { id: ev.id } : {}),
+            ...(detail ? { detail } : {}),
+          });
           if (this.mode !== "aborting") this.mode = "working";
         } else if (ev.type === "approval") {
           // The decision (approved/denied) for a pending confirmation. The
@@ -347,6 +369,7 @@ export class MinimalTui {
       }
       this.abortController = null;
       this.aborting = false;
+      this.activeTool = null;
       this.activeToolStartedAt = null;
       this.activityStartedAt = null;
       this.mode = "idle";

@@ -4,14 +4,10 @@
  * streaming thinking/assistant text, tool calls and results, turn timing, and
  * errors. Pure functions: given a block and a width, return lines.
  */
-import { formatDuration, formatTokens } from "../format.mjs";
+import { formatDuration, formatTokens, toolLabel } from "../format.mjs";
 import { styleText } from "./renderers.mjs";
 import { markdownLines, renderSimple } from "./markdown.mjs";
 import { theme } from "../theme.mjs";
-function formatArgs(args) {
-  const s = JSON.stringify(args ?? {});
-  return s.length > 60 ? `${s.slice(0, 57)}…` : s;
-}
 
 
 export function blockLines(block, width) {
@@ -40,7 +36,10 @@ export function blockLines(block, width) {
       return markdownLines(block.text, width);
     case "tool": {
       const contentWidth = Math.max(1, width - 4);
-      const pieces = renderSimple(`⚙ ${block.name}(${formatArgs(block.args)})`, { fg: theme.tool, bold: true }, contentWidth);
+      // `label` is what new blocks persist (built from the shared toolLabel
+      // resolver); blocks written by older sessions still carry raw `args`.
+      const label = block.label ?? toolLabel(block.name ?? "", block.args ?? {});
+      const pieces = renderSimple(`⚙ ${label}`, { fg: theme.tool, bold: true }, contentWidth);
       return pieces.map((ln, idx) => styleText("│", { fg: theme.tool, bold: true }) + " " + ln);
     }
     case "result": {
@@ -49,11 +48,22 @@ export function blockLines(block, width) {
       // suppress the ✗ so an interrupt never renders "✗ ⏹ interrupted".
       const prefix = block.summary?.includes("interrupted") ? "" : `${block.ok ? "✓" : "✗"} `;
       const contentWidth = Math.max(1, width - 4);
-      const pieces = renderSimple(`${prefix}${timing}${block.summary}`, {
-        fg: block.ok ? theme.good : theme.bad,
+      const accent = block.ok ? theme.good : theme.bad;
+      const out = renderSimple(`${prefix}${timing}${block.summary}`, {
+        fg: accent,
         bold: true,
-      }, contentWidth);
-      return pieces.map((ln, idx) => styleText("│", { fg: block.ok ? theme.good : theme.bad, bold: true }) + " " + ln);
+      }, contentWidth).map((ln, idx) => styleText("│", { fg: accent, bold: true }) + " " + ln);
+      // A dimmed, multi-line preview of a large result (read snapshots, build
+      // output) rides under the summary inside the same rail.
+      if (block.detail) {
+        for (const raw of block.detail.split("\n")) {
+          const line = raw.trim();
+          if (!line) continue;
+          out.push(...renderSimple(line, { fg: theme.dim }, contentWidth)
+            .map((ln) => styleText("│", { fg: theme.dim, bold: true }) + " " + ln));
+        }
+      }
+      return out;
     }
     case "confirm": {
       // A structured, distinct confirmation block for high-risk actions (e.g. a

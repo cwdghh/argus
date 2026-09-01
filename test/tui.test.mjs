@@ -334,7 +334,7 @@ test("live suggestions: /commands filter, navigate, Tab accepts, Esc dismisses",
   t.runAction({ type: "down" });
   t.runAction({ type: "down" });
   t.insertText("s");
-  assert.deepEqual(t.suggestion.items.map((i) => i.label), ["/status", "/sessions"]);
+  assert.deepEqual(t.suggestion.items.map((i) => i.label), ["/status", "/show", "/sessions"]);
   assert.equal(t.suggestion.selected, 0, "highlight follows the previously selected command");
   t.insertText("e");
   assert.deepEqual(t.suggestion.items.map((i) => i.label), ["/sessions"]);
@@ -960,7 +960,7 @@ test("separator: blank between distinct kinds, but tool call and its result stay
     "",
     "│ plan",
     "",
-    "│ ⚙ read({\"path\":\"a.txt\"})",
+    "│ ⚙ read → a.txt",
     "│ ✓ 1 lines",
     "",
     "done",
@@ -977,12 +977,57 @@ test("separator: two consecutive tool/result pairs each keep their own result", 
   t.pushBlock({ kind: "result", ok: false, summary: "no such file" });
   const lines = t.transcriptLines().map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
   assert.deepEqual(lines, [
-    "│ ⚙ bash({\"command\":\"ls\"})",
+    "│ ⚙ bash → ls",
     "│ ✓ src",
     "",
-    "│ ⚙ read({\"path\":\"a\"})",
+    "│ ⚙ read → a",
     "│ ✗ no such file",
   ]);
+});
+
+test("result preview renders dimmed under the summary inside the same rail", () => {
+  const t = new MinimalTui({ model: "m" });
+  t.width = 40;
+  t.height = 20;
+  t.pushBlock({ kind: "result", ok: true, summary: "stdout: npm ok", detail: "build step 1\nbuild step 2\n… 4 more lines" });
+  const lines = t.transcriptLines().map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
+  assert.deepEqual(lines, ["│ ✓ stdout: npm ok", "│ build step 1", "│ build step 2", "│ … 4 more lines"]);
+});
+
+test("/show prints a block in full, including the stored tool result", async () => {
+  const t = new MinimalTui({ model: "m" });
+  t.history = [
+    { role: "user", content: "read the file" },
+    { role: "assistant", content: null, tool_calls: [{ id: "call_1", function: { name: "read", arguments: "{}" } }] },
+    { role: "tool", tool_call_id: "call_1", content: JSON.stringify({ numberedText: "1 │ one\n2 │ two" }) },
+  ];
+  t.pushBlock({ kind: "tool", name: "read", label: "read → a.txt", id: "call_1" });
+  t.pushBlock({ kind: "result", ok: true, summary: "1 │ one", detail: "1 │ one\n2 │ two", id: "call_1" });
+  await t.runCommand("/show 1");
+  const tool = t.blocks.at(-1).text;
+  assert.ok(tool.includes("## Block 1 — tool call"), "tool block header");
+  assert.ok(tool.includes("read → a.txt"), "label line");
+  assert.ok(tool.includes('"numberedText"'), "the stored result is linked back via the call id");
+  await t.runCommand("/show 2");
+  const result = t.blocks.at(-1).text;
+  assert.ok(result.includes("## Block 2 — tool result"), "result block header");
+  assert.ok(result.includes('"numberedText"'), "full stored result from the session record");
+  assert.ok(result.includes("1 │ one\n2 │ two"), "preview body");
+});
+
+test("/show validates its argument and range", async () => {
+  const missing = new MinimalTui({ model: "m" });
+  await missing.runCommand("/show");
+  assert.match(missing.blocks.at(-1).text, /usage/);
+  const notNumber = new MinimalTui({ model: "m" });
+  await notNumber.runCommand("/show abc");
+  assert.match(notNumber.blocks.at(-1).text, /whole number/);
+  const zero = new MinimalTui({ model: "m" });
+  await zero.runCommand("/show 0");
+  assert.match(zero.blocks.at(-1).text, /whole number/);
+  const outOfRange = new MinimalTui({ model: "m" });
+  await outOfRange.runCommand("/show 2");
+  assert.match(outOfRange.blocks.at(-1).text, /no block 2/);
 });
 
 test("confirm mode: distinct row + affordance, button resolves, block recorded", async () => {

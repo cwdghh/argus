@@ -36,6 +36,33 @@ test("frames: statusText shows a live spinner while working", () => {
   assert.match(s, /^. working 4\.7s$/);
 });
 
+test("frames: a tool running longer than a second names itself in the footer", () => {
+  const s = statusText({
+    ...base,
+    mode: "working",
+    now: () => 5000,
+    activityStartedAt: 300,
+    activeTool: { name: "bash", args: { command: "sleep 1" } },
+    activeToolStartedAt: 1000,
+  });
+  assert.match(s, /^. bash → sleep 1 4\.0s$/, "the tool label and its own elapsed replace the generic phase");
+});
+
+test("frames: a sub-second tool call never flickers a label", () => {
+  const s = statusText({
+    ...base,
+    mode: "working",
+    now: () => 5000,
+    activityStartedAt: 300,
+    activeTool: { name: "bash", args: { command: "ls" } },
+    activeToolStartedAt: 4800,
+  });
+  assert.match(s, /^. working 4\.7s$/);
+
+  const undefinedTool = statusText({ ...base, mode: "working", now: () => 5000, activityStartedAt: 300, activeToolStartedAt: 1000 });
+  assert.match(undefinedTool, /^. working 4\.7s$/, "no activeTool -> generic phase");
+});
+
 test("frames: footer shows tokens on the left and real context on the right", () => {
   const f = strip(
     footerText({

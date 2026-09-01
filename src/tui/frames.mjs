@@ -9,7 +9,7 @@
  *   footer() { return footerText(this); }
  */
 import { compactBudgetTokens } from "../compact.mjs";
-import { formatChars, formatDuration, formatTokens } from "../format.mjs";
+import { formatChars, formatDuration, formatTokens, toolLabel } from "../format.mjs";
 import { styleText, stripAnsi, dispWidth, truncateMiddle, truncateEnd } from "./renderers.mjs";
 import { theme } from "../theme.mjs";
 
@@ -21,6 +21,9 @@ const MODE_COLOR = () => ({
   confirm: theme.bad,
 });
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+// A tool names itself in the footer only once it has run this long — a
+// sub-second call would flicker a label without the user being able to read it.
+const ACTIVE_TOOL_DELAY_MS = 1_000;
 
 /** Left-hand status text: live phase + elapsed time + real token usage. */
 export function statusText(s) {
@@ -31,9 +34,17 @@ export function statusText(s) {
   }
   if (s.mode !== "idle") {
     if (s.activityStartedAt == null) return s.mode;
-    const elapsed = Math.max(0, s.now() - s.activityStartedAt);
+    const now = s.now();
+    const elapsed = Math.max(0, now - s.activityStartedAt);
     const spinner = SPINNER[Math.floor(elapsed / 100) % SPINNER.length];
     const tokens = formatTokens(s.turnUsage);
+    // A long-running tool reports itself in place of the generic phase:
+    // `⠋ write → src/a.mjs (content 4.1K chars) 12.3s`.
+    const toolElapsed =
+      s.activeTool && s.activeToolStartedAt != null ? Math.max(0, now - s.activeToolStartedAt) : null;
+    if (s.activeTool && toolElapsed != null && toolElapsed >= ACTIVE_TOOL_DELAY_MS && s.activeTool.name) {
+      return `${spinner} ${toolLabel(s.activeTool.name, s.activeTool.args)} ${formatDuration(toolElapsed)}${tokens ? ` · ${tokens}` : ""}`;
+    }
     return `${spinner} ${s.mode} ${formatDuration(elapsed)}${tokens ? ` · ${tokens}` : ""}`;
   }
   if (s.lastTurnDurationMs == null) return "idle";

@@ -15,7 +15,7 @@
 import { runTurn } from "./agent.mjs";
 import { nextContextTokens } from "./compact.mjs";
 import { loadSession, sessionConfig, sessionData } from "./session/index.mjs";
-import { formatDuration, summarize } from "./format.mjs";
+import { formatDuration, previewResult, summarize, toolLabel } from "./format.mjs";
 import { appendBlock } from "./transcript.mjs";
 
 export async function runHeadless(config, prompt, { session, cwd, stdout, stderr } = {}) {
@@ -69,10 +69,18 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
           writeOut(ev.delta);
           sawText = true;
         } else if (ev.type === "tool_call") {
-          push({ kind: "tool", name: ev.name, args: ev.args });
-          writeErr(`⚙ ${ev.name}(${JSON.stringify(ev.args ?? {})})\n`);
+          const label = toolLabel(ev.name, ev.args);
+          push({ kind: "tool", name: ev.name, label, ...(ev.id ? { id: ev.id } : {}) });
+          writeErr(`⚙ ${label}\n`);
         } else if (ev.type === "tool_result") {
-          push({ kind: "result", ok: ev.ok, summary: summarize(ev.result) });
+          const detail = previewResult(ev.result);
+          push({
+            kind: "result",
+            ok: ev.ok,
+            summary: summarize(ev.result),
+            ...(ev.id ? { id: ev.id } : {}),
+            ...(detail ? { detail } : {}),
+          });
           writeErr(`   ${ev.ok ? "✓" : "✗"} ${summarize(ev.result)}\n`);
         } else if (ev.type === "approval") {
           // Only approvals get their own row — a denial is already reported by

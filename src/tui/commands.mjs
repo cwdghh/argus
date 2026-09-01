@@ -11,7 +11,7 @@
  * (assistant / result / error blocks). Long-running handlers wrap work in
  * `tui.withLocalTask` so the footer shows a live "working" phase.
  */
-import { formatChars, formatDuration, formatTokens } from "../format.mjs";
+import { formatChars, formatDuration, formatTokens, toolLabel } from "../format.mjs";
 import { contextUsage } from "./frames.mjs";
 
 /** The keyboard reference shown by /keys and at the bottom of /help. */
@@ -76,6 +76,29 @@ export const COMMANDS = [
           `${(tui.config.maxToolResultChars ?? 50_000).toLocaleString()} chars/tool result, ` +
           `${(tui.config.maxTurnToolResultChars ?? 400_000).toLocaleString()} chars/turn`,
       });
+    },
+  },
+  {
+    name: "/show",
+    args: "<n>",
+    description: "print transcript block n in full (tool results and read previews)",
+    run(tui, args) {
+      if (args.length !== 1) {
+        tui.pushBlock({ kind: "error", text: "usage: /show <n> — print transcript block n in full" });
+        return;
+      }
+      const n = Number(args[0]);
+      if (!Number.isInteger(n) || n < 1) {
+        tui.pushBlock({ kind: "error", text: "usage: /show <n> — n must be a whole number (1 = first block)" });
+        return;
+      }
+      const block = tui.blocks[n - 1];
+      if (!block) {
+        const count = tui.blocks.length;
+        tui.pushBlock({ kind: "error", text: `no block ${n}: the transcript has ${count} block${count === 1 ? "" : "s"}` });
+        return;
+      }
+      tui.pushBlock({ kind: "assistant", text: formatBlock(tui, n, block) });
     },
   },
   {
@@ -256,6 +279,52 @@ export const COMMANDS = [
     },
   },
 ];
+
+/**
+ * Render one transcript block in full for /show. Blocks persisted by anything
+ * older than W2 may carry raw `args` instead of a `label`; both are handled,
+ * and when the block links to a stored tool message (`block.id`), that full
+ * result is included too — it lives in the session record whether the turn is
+ * live or resumed.
+ */
+function formatBlock(tui, n, block) {
+  const title = (t) => `## Block ${n} — ${t}\n\n`;
+  switch (block.kind) {
+    case "user":
+    case "thinking":
+    case "assistant":
+      return title(block.kind) + block.text;
+    case "confirm":
+      return title("confirmation") + block.text;
+    case "error":
+      return title("error") + block.text;
+    case "timing":
+      return title("timing") + block.summary;
+    case "tool": {
+      const label = block.label ?? toolLabel(block.name ?? "", block.args ?? {});
+      let out = title("tool call") + `- **call**: ${label}`;
+      if (block.args) out += `\n- **arguments:**\n\n\`\`\`json\n${JSON.stringify(block.args, null, 2)}\n\`\`\``;
+      return out + storedResult(tui, block.id);
+    }
+    case "result": {
+      const status = block.ok ? "ok" : "failed";
+      const timing = block.durationMs == null ? "" : ` · ${formatDuration(block.durationMs)}`;
+      let out = title("tool result") + `- **${status}**: ${block.summary}${timing}`;
+      if (block.detail) out += `\n\n### Preview\n\n${block.detail}`;
+      return out + storedResult(tui, block.id);
+    }
+    default:
+      return title(block.kind) + JSON.stringify(block, null, 2);
+  }
+}
+
+/** The full stored tool message a block links to, when one was recorded. */
+function storedResult(tui, id) {
+  if (!id) return "";
+  const message = tui.history.find((m) => m.role === "tool" && m.tool_call_id === id);
+  if (!message) return "";
+  return `\n\n### Stored result (from the session record)\n\n\`\`\`json\n${message.content}\n\`\`\``;
+}
 
 /** Name/args/description metadata for the suggestion popup and /help. */
 export const SLASH_COMMANDS = COMMANDS.map(({ name, args, description }) => ({ name, args, description }));

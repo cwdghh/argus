@@ -4,6 +4,39 @@ Dated changelog, **newest first** (this file is a log — never edit entries in 
 
 ---
 
+#### 2026-09-01 — tool output visibility (plan W2)
+
+**Status: ✅ done** (tests under `test/format.test.mjs`, `test/tui.test.mjs`,
+`test/headless.test.mjs`, `test/frames.test.mjs`, `test/suggestions.test.mjs`,
+`test/commands.test.mjs`)
+
+- **Shared `toolLabel(name, args)` resolver** in `format.mjs`: one place that
+  names a tool call — the path for `read`/`write`/`edit`, the command for
+  `bash` — and shows content-like payloads as char counts, never the payload
+  itself (`⚙ write → src/a.mjs (content 4.1K chars)`). The TUI and headless now
+  render identical tool lines, replacing the TUI's 60-char JSON truncation and
+  headless's unlimited args dump. Persisted tool blocks store the resolved
+  label instead of re-storing raw args that already live in the turn's tool
+  message, killing the JSONL write amplification.
+- **`previewResult` + `block.detail`:** a bounded ~20-line / ~2KB preview of a
+  large result (stdout, numberedText, content) rides dimmed under the result
+  summary inside the same rail, ending `… N more lines`. Paged reads strip the
+  read tool's own `[Showing …]` hint and count from `totalLines`, so the number
+  reflects the whole file, and `summarize()` now appends ` … N more lines` (or
+  ` … (truncated)`) to the compact line — a truncated read or build log is no
+  longer mistaken for the whole story.
+- **`/show <n>`:** prints transcript block n in full — label, preview, and,
+  via the tool-call id now carried on the `tool_call`/`tool_result` events, the
+  complete stored result pulled from the session record (works on resumed
+  turns too).
+- **Active-tool footer:** after a tool has run ~1s the status line names it
+  (`⠋ bash → npm run build 12.3s`) instead of the generic `working` phase;
+  sub-second calls never flicker a label.
+
+Verified in this session: `node --test` **283/283 pass** (10 new/updated tests).
+
+---
+
 #### 2026-09-01 — paste integrity + multi-line draft safety (plan W1)
 
 **Status: ✅ done**
