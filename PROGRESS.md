@@ -30,6 +30,49 @@ draft tests).
 
 ---
 
+#### 2026-09-01 — reliability batch (plan W3)
+
+**Status: ✅ done** (one test per item; see tests under `test/agent.test.mjs`,
+`test/tools.test.mjs`, `test/tui.test.mjs`, `test/reliability.test.mjs`)
+
+- **Protocol-safe histories on mid-loop guards** (`protocolSafeMessages`):
+  messages exposed via `err.turnMessages` (and the aborted-return paths) always
+  satisfy tool-call pairing — a guard throw that happens after the assistant
+  reply is pushed but before its tool executes synthesizes
+  `{error:true, message:"tool call was never executed (…)"}` results instead of
+  leaving a dangling tool_call, so persisted turns stay replayable.
+- **Interrupt double-marker:** the result-block ✗ suppression in `blocks.mjs`
+  now matches any summary containing `interrupted`, so the TUI's
+  `⏹ interrupted` no longer renders `✗ ⏹ interrupted`.
+- **Denied-approval double block:** a denied approval used to render both the
+  `approval`-event result and the `tool_result` error block; the TUI and
+  headless now record only approvals as a decision row — the denial itself is
+  reported once by the tool_result block.
+- **Ctrl-D mode guard + flush on stop:** Ctrl-D on an empty buffer only quits
+  while `mode === "idle"` (mid-turn it can no longer exit); `stopTui` awaits the
+  session write queue before `process.exit` so a just-finished turn isn't
+  dropped.
+- **bash maxBuffer + shell:** output overrunning the 1MB capture buffer is a
+  truncated success (`{stdout, stderr, truncated:true}`), not a false failure;
+  and the `{…}; $?` cwd wrapper always runs under `/bin/sh` instead of
+  `$SHELL`, which broke under fish/csh.
+- **Idle-timeout reader cancel:** `readWithIdleTimeout` now rejects *before*
+  canceling the raced `reader.read()` (settling first is what preserves the
+  error), tearing the connection down instead of leaking it for as long as the
+  server holds the stream.
+- **Atomic write/edit:** a shared temp-file + `rename()` helper (sibling dir,
+  unique `wx` temp, cleaned up on failure) replaces in-place truncation; the
+  write tool's no-overwrite protection is preserved and a failed/crashed write
+  never tears a user file.
+- **Loop detector catches alternation:** the no-progress guard keeps a rolling
+  window of (call, result) pairs, refusing both 3× identical repeats (message
+  unchanged) and an A/B/A/B two-cycle on its third repetition; a rerun
+  separated by other work (the existing guard test) still passes.
+
+Verified in this session: `node --test` **273/273 pass** (10 new tests).
+
+---
+
 #### 2026-08-24 — context cache (explicit) + automatic quota retry
 
 **Status: ✅ done**

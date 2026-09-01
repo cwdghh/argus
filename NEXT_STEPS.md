@@ -14,15 +14,12 @@ A full-repo audit (incl. `references/pi`) produced a verified, workstreamed plan
 `docs/improvements-plan.md` is the source of truth. Its top picks, in suggested
 order:
 
-1. **W3 — Reliability batch** — protocol-safe histories on mid-loop guards,
-   interrupt/deny double markers, Ctrl-D mode guard, bash maxBuffer/shell fixes,
-   non-atomic writes, write+rename.
-2. **W2 — Tool output visibility** (highest user-facing value) — per-tool label
+1. **W2 — Tool output visibility** (highest user-facing value) — per-tool label
    resolver, multi-line result previews + `/show`, active-tool footer.
-3. **W4 — Session durability/scale** — torn-line recovery, streaming meta
+2. **W4 — Session durability/scale** — torn-line recovery, streaming meta
    scanner for resume.
-4. **W5 — Core-loop hardening** — mid-stream step retry, body built once.
-5. **W6 — Feature backlog** — interrupt→continue, render cache, structured
+3. **W5 — Core-loop hardening** — mid-stream step retry, body built once.
+4. **W6 — Feature backlog** — interrupt→continue, render cache, structured
    compaction, fallback model, steering.
 
 ## Practical improvements

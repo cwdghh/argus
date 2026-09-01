@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  mkdtempSync, writeFileSync, readFileSync, rmSync,
+  chmodSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -317,4 +317,46 @@ test("edit range mode can fill an empty file", withDir(async ({ tmp, write, cont
   write("empty.txt", "");
   await edit.execute({ path: "empty.txt", edits: [{ startLine: 1, endLine: 0, new: "hello" }] }, { cwd: tmp("") });
   assert.equal(content("empty.txt"), "hello");
+}));
+
+test("bash output overflowing maxBuffer is a truncated success, not an error", withDir(async ({ dir }) => {
+  const command = `node -e ${JSON.stringify("process.stdout.write('x'.repeat(2_000_000))")}`;
+  const r = await findTool("bash").execute({ command }, { cwd: dir });
+  assert.equal(r.error, undefined, JSON.stringify(r).slice(0, 200));
+  assert.equal(r.truncated, true);
+  assert.ok(r.stdout.length <= 1024 * 1024, "captured output is clipped at maxBuffer");
+  assert.ok(r.stdout.length > 0);
+}));
+
+test("bash runs under /bin/sh regardless of the caller's SHELL", withDir(async ({ dir }) => {
+  const saved = process.env.SHELL;
+  try {
+    process.env.SHELL = "/nonexistent/shell"; // would break exec if honored
+    const r = await findTool("bash").execute({ command: 'echo "hi $0"' }, { cwd: dir });
+    assert.equal(r.error, undefined);
+    assert.match(r.stdout, /bin\/sh/, "the command actually ran under /bin/sh");
+  } finally {
+    if (saved === undefined) delete process.env.SHELL;
+    else process.env.SHELL = saved;
+  }
+}));
+
+test("write and edit are atomic: a failed write leaves the original file intact", withDir(async ({ dir, write, content }) => {
+  write("a.txt", "original");
+  chmodSync(dir, 0o500); // read-only dir: the temp write fails before any rename
+  try {
+    const r = await writeTool.execute({ path: "a.txt", content: "replacement", ensureFinalNewline: false, overwrite: true }, { cwd: dir });
+    assert.equal(r.error, true, JSON.stringify(r).slice(0, 200));
+  } finally {
+    chmodSync(dir, 0o700);
+  }
+  assert.equal(content("a.txt"), "original", "the target was never truncated");
+}));
+
+test("atomic writes leave no temp files behind", withDir(async ({ dir, write, content }) => {
+  write("a.txt", "hello");
+  await writeTool.execute({ path: "a.txt", content: "hello\n", ensureFinalNewline: true, overwrite: true }, { cwd: dir });
+  await edit.execute({ path: "a.txt", edits: [{ old: "hello", new: "world" }] }, { cwd: dir });
+  const leftovers = readdirSync(dir).filter((f) => f.startsWith(".argus-tmp-"));
+  assert.deepEqual(leftovers, []);
 }));

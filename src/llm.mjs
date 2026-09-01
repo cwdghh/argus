@@ -212,6 +212,10 @@ function abortableDelay(ms, signal) {
  * Race a reader.read() against an idle timeout. Returns `{ done, value }` on
  * success or throws if the idle timeout fires first (without aborting the
  * user's cancellation signal).
+ *
+ * When the race is lost the reader is cancelled so the underlying connection is
+ * torn down; otherwise the pending read() would leak the open body for as long
+ * as the server keeps the stream alive.
  */
 async function readWithIdleTimeout(reader, idleTimeoutMs, signal) {
   if (idleTimeoutMs == null || idleTimeoutMs <= 0) {
@@ -223,6 +227,9 @@ async function readWithIdleTimeout(reader, idleTimeoutMs, signal) {
   // Race the read against the idle timeout.
   return new Promise((resolve, reject) => {
     let settled = false;
+    const cleanup = () => {
+      combined.removeEventListener("abort", onAbort);
+    };
     const settle = (fn, val) => {
       if (settled) return;
       settled = true;
@@ -232,21 +239,24 @@ async function readWithIdleTimeout(reader, idleTimeoutMs, signal) {
 
     const onAbort = () => {
       if (settled) return;
+      // Settle the race BEFORE tearing down: cancel() resolves the pending
+      // read() as {done:true}, which would swallow the error below if it
+      // settled first.
       settled = true;
       cleanup();
-      // If the user signal aborted, propagate as an abort error.
       if (signal?.aborted) {
         reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
       } else {
         // Idle timeout fired.
         reject(new Error(`LLM stream idle timeout after ${idleTimeoutMs}ms`));
       }
+      // Cancel the pending read so the underlying connection is torn down
+      // instead of staying open for however long the server holds the stream.
+      reader.cancel().catch(() => {
+        // the request may already be gone; nothing left to tear down
+      });
     };
     combined.addEventListener("abort", onAbort, { once: true });
-
-    const cleanup = () => {
-      combined.removeEventListener("abort", onAbort);
-    };
 
     reader.read().then(
       (result) => settle(resolve, result),

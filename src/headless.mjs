@@ -75,9 +75,13 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
           push({ kind: "result", ok: ev.ok, summary: summarize(ev.result) });
           writeErr(`   ${ev.ok ? "✓" : "✗"} ${summarize(ev.result)}\n`);
         } else if (ev.type === "approval") {
-          const summary = `${ev.approved ? "approved" : "denied"} ${ev.tool} in ${ev.cwd}: ${ev.reason}`;
-          push({ kind: "result", ok: ev.approved, summary });
-          writeErr(`   ${ev.approved ? "✓" : "✗"} ${summary}\n`);
+          // Only approvals get their own row — a denial is already reported by
+          // the tool_result error block that follows (one "denied …" row).
+          if (ev.approved) {
+            const summary = `approved ${ev.tool} in ${ev.cwd}: ${ev.reason}`;
+            push({ kind: "result", ok: true, summary });
+            writeErr(`   ✓ ${summary}\n`);
+          }
         } else if (ev.type === "compacted") {
           writeErr("… earlier context compacted\n");
         } else if (ev.type === "retrying") {

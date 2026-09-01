@@ -177,6 +177,61 @@ test("an identical repeated tool call stops the turn instead of looping", async 
   assert.equal(srv.calls(), 3, "stopped on the third identical request");
 });
 
+test("an alternating A/B/A/B loop of identical pairs also stops the turn", async (t) => {
+  // A plain repeat-streak resets on every key change, so echo/true/echo/true
+  // with identical results loops forever; the rolling (call, result) window
+  // must catch the two-cycle on its third repetition.
+  const srv = await createMockServer((i) => [
+    {
+      tool_calls: [{
+        index: 0,
+        id: `c${i}`,
+        function: { name: "bash", arguments: JSON.stringify({ command: i % 2 ? "true" : "echo a" }) },
+      }],
+    },
+  ]);
+  t.after(() => srv.close());
+  await assert.rejects(
+    runTurn(config(srv), [], "go", () => {}),
+    /alternated two no-progress tool calls 3 times \(bash \/ bash\); this looks like a loop/,
+  );
+  assert.equal(srv.calls(), 7, "stopped once the alternation repeated its cycle");
+});
+
+test("no persisted turn violates tool-call pairing on a mid-loop guard", async (t) => {
+  const srv = await createMockServer(() => [
+    { tool_calls: [{ index: 0, id: "c1", function: { name: "bash", arguments: '{"command":"true"}' } }] },
+  ]);
+  t.after(() => srv.close());
+  let err;
+  try {
+    await runTurn(config(srv, { maxSteps: 2 }), [], "loop", () => {});
+  } catch (e) {
+    err = e;
+  }
+  assert.ok(err, "the max-steps guard threw");
+  assertProtocolSafe(err.turnMessages);
+  const synthesized = err.turnMessages.filter(
+    (m) => m.role === "tool" && (() => { try { return JSON.parse(m.content).error; } catch { return false; } })(),
+  );
+  assert.equal(synthesized.length, 1, "the never-executed tool_call got a synthetic error result");
+  assert.match(synthesized[0].content, /never executed/);
+});
+
+function assertProtocolSafe(msgs) {
+  for (let i = 0; i < msgs.length; i++) {
+    const m = msgs[i];
+    if (m.role !== "assistant" || !m.tool_calls) continue;
+    for (const call of m.tool_calls) {
+      const id = call.id;
+      const followed = msgs
+        .slice(i + 1)
+        .some((x) => x.role === "tool" && x.tool_call_id === id);
+      assert.ok(followed, `tool_call ${id} has a matching tool message after its assistant`);
+    }
+  }
+}
+
 test("identical reads separated by other work do not trigger the no-progress guard", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "argus-repeat-progress-"));
   writeFileSync(join(dir, "a.txt"), "a\n");

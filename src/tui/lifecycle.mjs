@@ -110,13 +110,23 @@ export function startTui(tui) {
   });
 }
 
-/** Tear down the TUI and exit: stop clocks, restore terminal modes, exit 0. */
-export function stopTui(tui) {
+/**
+ * Tear down the TUI and exit: stop clocks, flush pending session writes, restore
+ * terminal modes, exit 0.
+ */
+export async function stopTui(tui) {
   if (tui.stopped) return;
   tui.stopped = true;
   clearInterval(tui.timer);
   clearInterval(tui.gitTimer);
   tui.clearEscTimeout();
+  // Flush the queued session writes (e.g. a just-finished turn) before exit so
+  // a Ctrl-D right after Enter doesn't drop the last persisted record.
+  try {
+    await tui.session?.writeQueue?.catch?.(() => {});
+  } catch {
+    // the queue has no catch surface; non-fatal
+  }
   process.stdout.write("\x1b[?1000l\x1b[?1006l\x1b[?2004l"); // restore terminal modes
   process.stdin.setRawMode(false);
   process.stdin.pause();

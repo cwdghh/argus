@@ -121,6 +121,9 @@ works on a resumed turn.
 
 ## W3 — Reliability batch  *(small, high value)*
 
+> **Status: shipped 2026-09-01** — every bullet below landed with a test. See
+> the PROGRESS.md entry.
+
 - **Protocol-safe histories on mid-loop guards** (`agent.mjs:132-161`):
   `turnMessages.push(reply)` precedes the repeat/max-steps/result-budget guards;
   a throw leaves a dangling assistant tool_call with no matching tool message.

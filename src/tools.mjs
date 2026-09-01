@@ -22,11 +22,11 @@
  *
  * See docs/tools.md for the full contract and change workflow.
  */
-import { readFile, writeFile } from "node:fs/promises";
+import { access, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
-import { resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { applyEditsToContent, detectLineEnding, normalizeLineEndings, restoreLineEndings } from "./edit-engine.mjs";
 import { formatBytes, readFileWindow } from "./read-bounds.mjs";
 
@@ -49,6 +49,38 @@ const DESTRUCTIVE_PATTERNS = [
 function isDestructive(command) {
   const joined = String(command).replace(/\\\r?\n/g, " ");
   return DESTRUCTIVE_PATTERNS.some((re) => re.test(joined));
+}
+
+/**
+ * Write `data` to `file` atomically: write to a uniquely-named temp file in the
+ * same directory, then rename() it over the target. A crash mid-write can never
+ * leave the user's file truncated — the target only ever sees the old or the
+ * new complete content. The temp name is created with "wx" so two concurrent
+ * writers never clobber each other's scratch file.
+ *
+ * `noOverwrite` preserves the write tool's "protect existing files" promise
+ * (rename() would silently replace them); a pre-rename existence probe mirrors
+ * the old `flag: "wx"` error for callers that need it.
+ */
+async function atomicWriteFile(file, data, { noOverwrite = false } = {}) {
+  if (noOverwrite) {
+    try {
+      await access(file);
+      return { skipped: true };
+    } catch {
+      // target is free — fall through to the write
+    }
+  }
+  const dir = dirname(file);
+  const tmp = join(dir, `.argus-tmp-${basename(file)}-${randomUUID()}`);
+  try {
+    await writeFile(tmp, data, { encoding: "utf8", flag: "wx" });
+    await rename(tmp, file);
+    return {};
+  } catch (err) {
+    await rm(tmp, { force: true }).catch(() => {});
+    throw err;
+  }
 }
 
 function fitReadResult({ file, lines, startDisplay, totalLines, endsWithNewline, maxChars = 50_000 }) {
@@ -187,11 +219,11 @@ export const tools = [
       const file = resolve(ctx.cwd || process.cwd(), path);
       const output = ensureFinalNewline && !content.endsWith("\n") ? content + "\n" : content;
       try {
-        await writeFile(file, output, { encoding: "utf8", flag: overwrite ? "w" : "wx" });
-      } catch (err) {
-        if (err.code === "EEXIST") {
+        const { skipped } = await atomicWriteFile(file, output, { noOverwrite: !overwrite });
+        if (skipped) {
           return { error: true, message: `file already exists: ${file}; use edit or set overwrite=true` };
         }
+      } catch (err) {
         return { error: true, path: file, message: `cannot write ${file}: ${err.message}`, ...(err.code ? { code: err.code } : {}) };
       }
       ctx.toolState?.recordMutation(file);
@@ -273,7 +305,7 @@ export const tools = [
         return { error: true, path: file, message: "edit failed in " + file + ": " + result.error };
       }
       try {
-        await writeFile(file, bom + restoreLineEndings(result.newContent, ending), "utf8");
+        await atomicWriteFile(file, bom + restoreLineEndings(result.newContent, ending));
       } catch (err) {
         return { error: true, path: file, message: "cannot write " + file + ": " + err.message, ...(err.code ? { code: err.code } : {}) };
       }
@@ -342,20 +374,33 @@ export const tools = [
           cwd,
           timeout: ctx.timeoutMs ?? 60_000,
           maxBuffer: 1024 * 1024,
-          shell: process.env.SHELL || "/bin/sh",
+          // Always /bin/sh, never the caller's $SHELL: the {…}; $? cwd wrapper
+          // is POSIX syntax and breaks under fish/csh aliases.
+          shell: "/bin/sh",
           ...(ctx.signal ? { signal: ctx.signal } : {}),
         });
         const parsed = extractCwd(stderr, marker);
         return { stdout, stderr: parsed.stderr, ...(parsed.cwd ? { cwd: parsed.cwd } : {}) };
       } catch (err) {
         // execAsync throws on non-zero exit OR on abort; surface either cleanly.
+        const parsed = extractCwd(err.stderr ?? "", marker);
+        if (err.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+          // The command ran but its output overflowed the 1MB capture buffer.
+          // That is a truncated success, not a failure: surface what was
+          // captured so the model sees the output instead of a bogus error.
+          return {
+            stdout: err.stdout ?? "",
+            stderr: parsed.stderr,
+            truncated: true,
+            ...(parsed.cwd ? { cwd: parsed.cwd } : {}),
+          };
+        }
         if (err.name === "AbortError") {
           return { error: true, aborted: true, message: "command aborted" };
         }
         if (err.killed && err.signal) {
           return { error: true, timeout: true, message: `command timed out after ${ctx.timeoutMs ?? 60_000}ms` };
         }
-        const parsed = extractCwd(err.stderr ?? "", marker);
         return {
           error: true,
           stdout: err.stdout ?? "",

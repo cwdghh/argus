@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MinimalTui } from "../src/tui.mjs";
@@ -620,6 +620,48 @@ test("history navigation does not destroy an in-progress draft", () => {
   assert.equal(t.editor.buffer, "my draft", "walking off the history restores the draft");
   assert.equal(t.editor.cursor, 4);
   assert.equal(t.editor.draft, null, "the draft is consumed once restored");
+});
+
+test("Ctrl-D on an empty buffer quits only while idle", () => {
+  const t = new MinimalTui({ model: "m" });
+  let stopped = 0;
+  t.stop = () => (stopped++);
+  t.mode = "working";
+  t.insertText("\x04");
+  assert.equal(stopped, 0, "mid-turn Ctrl-D must not exit");
+  t.mode = "idle";
+  t.insertText("\x04");
+  assert.equal(stopped, 1, "idle Ctrl-D still quits");
+});
+
+test("a denied approval renders one result row, not two", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "argus-deny-"));
+  const srv = await createMockServer((i) => {
+    if (i === 0) {
+      return [{ tool_calls: [{ index: 0, id: "c1", function: { name: "bash", arguments: JSON.stringify({ command: `rm -rf "${dir}"` }) } }] }];
+    }
+    return [{ content: "ok" }];
+  });
+  t.after(async () => {
+    await srv.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const tui = new MinimalTui({ model: "m", baseUrl: srv.url, apiKey: "", systemPrompt: "s" });
+  tui.editor.buffer = "dangerous";
+  tui.confirm = () => Promise.resolve(false);
+  await tui.submit();
+  const denied = tui.blocks.filter((b) => b.kind === "result" && b.summary.includes("denied"));
+  assert.equal(denied.length, 1);
+  assert.match(denied[0].summary, /not approved/);
+});
+
+test("an interrupted turn renders without a redundant ✗ before ⏹", () => {
+  const t = new MinimalTui({ model: "m" });
+  t.width = 60;
+  t.pushBlock({ kind: "result", ok: false, summary: "⏹ interrupted" });
+  const lines = t.transcriptLines().map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
+  assert.ok(lines.some((l) => l.includes("⏹ interrupted")));
+  assert.ok(!lines.some((l) => l.includes("✗")), "no ✗ marker on the interrupt row");
 });
 
 test("terminal editing hotkeys manipulate input predictably", () => {

@@ -45,7 +45,9 @@ export function blockLines(block, width) {
     }
     case "result": {
       const timing = block.durationMs == null ? "" : `${formatDuration(block.durationMs)} · `;
-      const prefix = block.summary === "interrupted" ? "" : `${block.ok ? "✓" : "✗"} `;
+      // Both the bare "interrupted" and the TUI's "⏹ interrupted" summary must
+      // suppress the ✗ so an interrupt never renders "✗ ⏹ interrupted".
+      const prefix = block.summary?.includes("interrupted") ? "" : `${block.ok ? "✓" : "✗"} `;
       const contentWidth = Math.max(1, width - 4);
       const pieces = renderSimple(`${prefix}${timing}${block.summary}`, {
         fg: block.ok ? theme.good : theme.bad,

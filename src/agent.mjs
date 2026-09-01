@@ -85,9 +85,10 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
   });
   if (compacted) onEvent({ type: "compacted" });
 
-  // Guard only consecutive calls that produce the same result. Legitimate
-  // rereads separated by a mutation are progress, not a loop.
-  let repeatStreak = null;
+  // Rolling window of executed (call, result) pairs for the no-progress guard.
+  // Keying whole pairs — not just consecutive ones — lets the guard catch an
+  // A/B/A/B alternation that a plain repeat-streak would reset on every change.
+  const loopWindow = [];
 
   try {
     while (true) {
@@ -140,11 +141,14 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
       // `tool` message. The model does not actually run anything itself.
       for (const call of toolCalls) {
         const repeatKey = canonicalToolCall(call);
-        if (repeatStreak?.callKey === repeatKey && repeatStreak.count >= 2) {
+        const loop = detectCallLoop(repeatKey, loopWindow);
+        if (loop) {
           throw new Error(
-            `agent stopped: the model repeated the same no-progress tool call 3 times ` +
-              `(${call?.function?.name ?? "(missing name)"}); this looks like a loop — ` +
-              "refusing to keep generating"
+            loop.period === 1
+              ? `agent stopped: the model repeated the same no-progress tool call 3 times ` +
+                `(${loop.name ?? "(missing name)"}); this looks like a loop — refusing to keep generating`
+              : `agent stopped: the model alternated two no-progress tool calls 3 times ` +
+                `(${loop.names}); this looks like a loop — refusing to keep generating`
           );
         }
         if (steps >= maxSteps) {
@@ -177,14 +181,16 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
           content: serializedResult,
         });
         const resultKey = stableStringify(result);
-        repeatStreak =
-          repeatStreak?.callKey === repeatKey && repeatStreak.resultKey === resultKey
-            ? { callKey: repeatKey, resultKey, count: repeatStreak.count + 1 }
-            : { callKey: repeatKey, resultKey, count: 1 };
+        loopWindow.push({
+          key: `${repeatKey}\u0000${resultKey}`,
+          callKey: repeatKey,
+          name: call?.function?.name ?? "(missing name)",
+        });
+        if (loopWindow.length > LOOP_WINDOW) loopWindow.shift();
 
         // Stop early if aborted (e.g. while a tool was running).
         if (signal?.aborted) {
-          return { messages: turnMessages, finalText: "", aborted: true, cwd, usage };
+          return { messages: protocolSafeMessages(turnMessages), finalText: "", aborted: true, cwd, usage };
         }
       }
       // Loop again: the model now sees the tool results and can continue.
@@ -192,11 +198,89 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
   } catch (err) {
     // A later request may fail after tools already changed the world. Preserve
     // that completed audit trail so sessions and subsequent turns stay honest.
-    err.turnMessages = turnMessages;
+    err.turnMessages = protocolSafeMessages(turnMessages);
     err.cwd = cwd;
     err.usage = usage;
     throw err;
   }
+}
+
+/**
+ * No editor buffers / session payloads may violate the tool-call pairing
+ * invariant: every `assistant` message's tool_call must be followed by a
+ * matching `tool` message. Mid-loop guards (repeat guard, max steps inside the
+ * tool loop, the per-turn result budget) throw AFTER the assistant reply is
+ * pushed but BEFORE its tool executed — without this, an exposed
+ * `err.turnMessages` would carry a dangling tool_call. Synthesize an error
+ * tool result for every call that never executed, so the trail stays
+ * replayable; already-safe turns are returned unchanged.
+ */
+export function protocolSafeMessages(turnMessages) {
+  const out = [];
+  for (let i = 0; i < turnMessages.length; i++) {
+    const msg = turnMessages[i];
+    out.push(msg);
+    const calls = msg.role === "assistant" ? msg.tool_calls : undefined;
+    if (!calls || calls.length === 0) continue;
+    for (const call of calls) {
+      const id = call?.id;
+      // Pairing requires the matching tool result to come *after* this
+      // assistant message; an earlier turn reusing the same call id (or the
+      // same reply's earlier results) does not satisfy it.
+      const matched = turnMessages
+        .slice(i + 1)
+        .some((m) => m.role === "tool" && m.tool_call_id === id);
+      if (!matched) {
+        out.push({
+          role: "tool",
+          tool_call_id: id,
+          content: JSON.stringify({
+            error: true,
+            message: `tool call was never executed (${call?.function?.name ?? "(missing name)"})`,
+          }),
+        });
+      }
+    }
+  }
+  return out;
+}
+
+// How many executed (call, result) pairs the no-progress guard keeps in view;
+// bounds the alternation patterns it can recognise.
+const LOOP_WINDOW = 8;
+
+/**
+ * Decide whether the next tool call would extend a no-progress loop, from the
+ * pairs already executed this turn:
+ *   - period 1: the same call produced the same result twice in a row — this
+ *     request would be the third identical one;
+ *   - period 2: the last six executed pairs strictly alternate — this request
+ *     repeats a two-leg A/B/A/B cycle for a third time (a plain repeat-streak
+ *     resets on every key change and never trips on this).
+ * A pair key is callKey joined to resultKey (NUL-separated), so results —
+ * not just call shapes — must repeat for the guard to fire.
+ */
+export function detectCallLoop(repeatKey, window) {
+  const n = window.length;
+  if (n >= 2) {
+    const last = window[n - 1];
+    if (last.key === window[n - 2].key && last.callKey === repeatKey) {
+      return { period: 1, name: last.name };
+    }
+  }
+  if (n >= 6) {
+    let alternating = true;
+    for (let j = n - 1; j >= Math.max(n - 6, 2); j--) {
+      if (window[j].key !== window[j - 2].key) {
+        alternating = false;
+        break;
+      }
+    }
+    if (alternating) {
+      return { period: 2, names: `${window[n - 1].name} / ${window[n - 2].name}` };
+    }
+  }
+  return null;
 }
 
 

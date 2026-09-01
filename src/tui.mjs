@@ -274,13 +274,17 @@ export class MinimalTui {
           if (this.mode !== "aborting") this.mode = "working";
         } else if (ev.type === "approval") {
           // The decision (approved/denied) for a pending confirmation. The
-          // pending question itself was already recorded as a `confirm` block
-          // by confirm(); this records the outcome as a result.
-          this.pushBlock({
-            kind: "result",
-            ok: ev.approved,
-            summary: `${ev.approved ? "approved" : "denied"} ${ev.tool} in ${ev.cwd}: ${ev.reason}`,
-          });
+          // pending question was already recorded as a `confirm` block by
+          // confirm(). A denial is re-reported by the tool_result error block
+          // that follows, so only approvals get a result row here — one
+          // "denied …" row, not two (W3).
+          if (ev.approved) {
+            this.pushBlock({
+              kind: "result",
+              ok: true,
+              summary: `approved ${ev.tool} in ${ev.cwd}: ${ev.reason}`,
+            });
+          }
         } else if (ev.type === "cwd_change") {
           this.cwd = ev.cwd;
           if (this.session) this.session.setCwd(ev.cwd).catch(() => {});
@@ -547,8 +551,10 @@ export class MinimalTui {
         else if (cp === 9) this.completePath(); // Tab
         else if (cp === 3) this.handleCtrlC();
         else if (cp === 4) {
-          if (!this.editor.buffer) this.stop();
-          else this.deleteAtCursor();
+          // Ctrl-D quits only on an empty buffer *while idle* — mid-turn it must
+          // not exit (the mode guard mirrors Esc / Ctrl-C).
+          if (!this.editor.buffer && this.mode === "idle") this.stop();
+          else if (this.editor.buffer) this.deleteAtCursor();
         } else if (cp === 5) this.editor.cursor = this.editor.buffer.length; // Ctrl-E
         else if (cp === 11) this.deleteToLineEnd(); // Ctrl-K
         else if (cp === 12) this.redraw(); // Ctrl-L

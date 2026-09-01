@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -73,6 +74,39 @@ test("headless CLI runs end to end against an OpenAI-compatible stream", async (
   assert.equal(code, 0);
   assert.equal(stdout, "cli smoke ok\n");
   assert.match(stderr, /❯ say hello/);
+});
+
+test("an idle timeout tears down the underlying stream connection", async (t) => {
+  // A server that starts streaming then goes silent forever. The client's idle
+  // timeout must cancel its pending reader; otherwise the connection (and the
+  // server-side event handler) stays open for as long as the server keeps the
+  // stream alive — a leaked body reader.
+  let clientClosed = false;
+  const srv = http.createServer((req, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "a" } }] })}\n\n`);
+    req.on("close", () => {
+      clientClosed = true;
+    });
+    // never end the response
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  t.after(() => new Promise((r) => srv.close(r)));
+  const baseUrl = `http://127.0.0.1:${srv.address().port}/v1`;
+
+  await assert.rejects(
+    runTurn(
+      { baseUrl, apiKey: "", model: "m", systemPrompt: "s", streamIdleTimeoutMs: 60 },
+      [],
+      "hi",
+      () => {},
+      {},
+    ),
+    /idle timeout/,
+  );
+  const deadline = Date.now() + 3000;
+  while (!clientClosed && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+  assert.ok(clientClosed, "reader.cancel() tore the body down so the server saw the connection close");
 });
 
 test("ARGUS_SESSION_KEEP defaults to 0 and parses a non-negative limit", () => {
