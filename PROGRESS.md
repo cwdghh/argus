@@ -4,6 +4,32 @@ Dated changelog, **newest first** (this file is a log — never edit entries in 
 
 ---
 
+#### 2026-09-01 — paste integrity + multi-line draft safety (plan W1)
+
+**Status: ✅ done**
+
+- **Bulk-literal paste insert:** a bracketed paste payload now lands in the
+  editor in a single `editor.insert()` call, bypassing the per-character
+  keybinding interpreter. Pasted TAB no longer fires path-completion and pasted
+  Ctrl-A/K/D/U/E can no longer move the caret, delete, or quit; control bytes
+  become literal text.
+- **Newline preservation:** `\r\n`/`\r` normalize to `\n`; embedded `\n` no
+  longer folds to spaces and no `submit()` can fire mid-paste (the existing
+  fold test now asserts the preserved buffer).
+- **`[pasted N lines]` marker:** a large paste (>1000 chars or >20 lines) whose
+  buffer is submitted untouched renders the user block as `[pasted N lines]` /
+  `[pasted N chars]`; the full text is still what reaches the model and persists
+  in the session JSONL. Editing the paste afterwards keeps the real text.
+- **Esc / history draft slot:** Esc on a multiline draft no longer flattens it
+  silently; `Editor.historyUp` stashes the live draft and `historyDown` walking
+  off the end of the recall history restores it (consumed once, cleared on
+  submit and on session apply).
+
+Verified in this session: `node --test` **263/263 pass** (7 new/updated paste +
+draft tests).
+
+---
+
 #### 2026-08-24 — context cache (explicit) + automatic quota retry
 
 **Status: ✅ done**

@@ -55,6 +55,11 @@ import {
 import { blockLines } from "./tui/blocks.mjs";
 
 const ESC = "\x1b";
+// Pastes beyond either bound render the submitted user block as `[pasted N …]`
+// instead of flooding the transcript; the full text still persists and is what
+// actually reaches the model.
+const PASTE_ABBREV_CHARS = 1000;
+const PASTE_ABBREV_LINES = 20;
 
 export class MinimalTui {
   constructor(config, opts = {}) {
@@ -225,6 +230,9 @@ export class MinimalTui {
     if (this.pendingConfirm) return; // a confirmation is in flight; Enter submits y/n via insertText
     const text = this.editor.buffer.trim();
     if (!text) return;
+    const pasteMeta = this.editor.lastPaste;
+    this.editor.lastPaste = null;
+    this.editor.draft = null;
     this.editor.buffer = "";
     this.editor.cursor = 0;
     this.suggestion = null;
@@ -241,7 +249,7 @@ export class MinimalTui {
     if (this.editor.history[this.editor.history.length - 1] !== text) this.editor.history.push(text);
     this.editor.historyIndex = -1;
     const turnStart = this.blocks.length;
-    this.pushBlock({ kind: "user", text });
+    this.pushBlock({ kind: "user", text: this.userPromptText(text, pasteMeta) });
 
     const ac = new AbortController();
     this.abortController = ac;
@@ -386,6 +394,8 @@ export class MinimalTui {
       .filter((message) => message.role === "user" && typeof message.content === "string")
       .map((message) => message.content);
     this.editor.historyIndex = -1;
+    this.editor.draft = null;
+    this.editor.lastPaste = null;
     this.scrollOffset = null;
     this.suggestion = null;
     this.refreshGitStatus();
@@ -470,10 +480,12 @@ export class MinimalTui {
     if (this.pasting) {
       const end = this.rawBuf.indexOf("\x1b[201~");
       if (end === -1) return;
-      const pasted = this.rawBuf.slice(0, end).replace(/\r?\n/g, " ").replace(/\r/g, " ");
+      // Normalize CRLF/CR to LF but keep every other byte — a paste is data,
+      // not key presses, so control bytes must not be interpreted (W1).
+      const pasted = this.rawBuf.slice(0, end).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
       this.rawBuf = this.rawBuf.slice(end + 6);
       this.pasting = false;
-      this.insertText(pasted);
+      this.pasteLiteral(pasted);
       this.consumeInput();
       return;
     }
@@ -527,12 +539,7 @@ export class MinimalTui {
   }
 
   insertText(text) {
-    if (this.pendingConfirm) {
-      const ch = String(text).trim().toLowerCase()[0];
-      if (ch === "y") this.resolveConfirm(true);
-      else if (ch === "n") this.resolveConfirm(false);
-      return;
-    }
+    if (this.pendingConfirm) return this.confirmKey(text);
     for (const ch of text) {
       const cp = ch.codePointAt(0);
       if (cp < 32 || cp === 127) {
@@ -562,6 +569,47 @@ export class MinimalTui {
       this.dirtyRendered = true;
     }
     this.refreshSuggestions();
+  }
+
+  /** A potential y/n input while a confirmation is pending (Enter or a paste). */
+  confirmKey(text) {
+    const ch = String(text).trim().toLowerCase()[0];
+    if (ch === "y") this.resolveConfirm(true);
+    else if (ch === "n") this.resolveConfirm(false);
+  }
+
+  /**
+   * Insert a bracketed-paste payload literally, bypassing the per-character
+   * keybinding interpreter. Control bytes (TAB, Ctrl-A/K/U, ESC, …) become
+   * text, and embedded newlines must never fire submit() — the payload lands in
+   * one editor.insert() call.
+   */
+  pasteLiteral(text) {
+    if (this.pendingConfirm) return this.confirmKey(text);
+    this.editor.insert(text);
+    // Large pastes abbreviate the rendered user block (W1): record the shape
+    // so submit() knows when the prompt came straight from a paste.
+    const lines = text.split("\n").length;
+    if (text.length > PASTE_ABBREV_CHARS || lines > PASTE_ABBREV_LINES) {
+      this.editor.lastPaste = { chars: text.length, lines, text: text.trim() };
+    }
+    this.dirtyRendered = true;
+    this.refreshSuggestions();
+  }
+
+  /**
+   * The text of the submitted `user` block. A large paste renders as a marker
+   * (the full prompt still reaches the model and persists in the session) but
+   * only when it is exactly what is submitted — edits after the paste keep the
+   * real text visible.
+   */
+  userPromptText(text, pasteMeta) {
+    if (!pasteMeta) return text;
+    if (text !== pasteMeta.text) return text;
+    if (pasteMeta.chars > PASTE_ABBREV_CHARS || pasteMeta.lines > PASTE_ABBREV_LINES) {
+      return pasteMeta.lines > 1 ? `[pasted ${pasteMeta.lines} lines]` : `[pasted ${pasteMeta.chars} chars]`;
+    }
+    return text;
   }
 
   backspace() {
@@ -650,12 +698,9 @@ export class MinimalTui {
         else if (this.mode !== "idle") this.abortTurn();
         else if (this.suggestion) {
           this.suggestion = null;
-        } else if (this.editor.buffer.includes("\n")) {
-          // Esc closes a multiline buffer back to a single line.
-          this.editor.buffer = this.editor.buffer.replace(/\n/g, " ");
-          this.editor.cursor = this.editor.buffer.length;
-          this.refreshSuggestions();
         }
+        // else: a multiline draft is left untouched — never flatten silently
+        // (the editor's history draft slot already protects it on Up/Down).
         break;
       case "wheel":
         if (action.dir > 0) {

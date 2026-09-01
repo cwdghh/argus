@@ -33,6 +33,10 @@ Test convention: `node --test test/*.test.mjs`. The mock LLM server
 
 ## W1 — Paste integrity + multi-line draft safety  *(small, medium impact)*
 
+> **Status: shipped 2026-09-01** — items 1-4 (+ the draft slot) and the
+> acceptance tests landed; item 5 (kitty keyboard protocol) remains optional and
+> unfinished. See the PROGRESS.md entry.
+
 **Files:** `src/tui.mjs` (pasting branch ~468-478, `insertText` ~529-558, Esc
 ~653-657), `src/tui/editor.mjs` (~213-231, historyUp/historyDown), `src/tui/keys.mjs`.
 

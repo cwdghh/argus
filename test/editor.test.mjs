@@ -109,4 +109,23 @@ test("Editor history recall walks recall history and resets", () => {
   e.historyDown();
   assert.equal(e.historyIndex, -1);
   assert.equal(e.buffer, "");
+  assert.equal(e.draft, null, "an empty start buffer has no draft to restore");
 });
+
+test("Editor history recall stashes a live draft and restores it on walk-off", () => {
+  const e = new Editor();
+  e.history = ["first", "second"];
+  e.buffer = "my draft";
+  e.cursor = 4;
+  e.historyUp();
+  assert.equal(e.buffer, "second", "Up recalls history");
+  e.historyUp();
+  assert.equal(e.buffer, "first");
+  e.historyDown();
+  e.historyDown();
+  assert.equal(e.historyIndex, -1);
+  assert.equal(e.buffer, "my draft", "walking off the end restores the draft");
+  assert.equal(e.cursor, 4);
+  assert.equal(e.draft, null, "the draft is consumed once restored");
+});
+

@@ -7,6 +7,7 @@ import { MinimalTui } from "../src/tui.mjs";
 import { formatChars } from "../src/format.mjs";
 import { SLASH_COMMANDS } from "../src/tui/commands.mjs";
 import { suggestionLines } from "../src/tui/suggestions.mjs";
+import { createMockServer } from "./helpers/mock-llm.mjs";
 
 const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
 
@@ -543,13 +544,82 @@ test("Tab never completes plain text without an @ or / token", () => {
   assert.equal(t.suggestion, null);
 });
 
-test("bracketed multiline paste becomes one editor input", () => {
+test("bracketed multiline paste becomes one editor input, newlines preserved", () => {
   const t = new MinimalTui({ model: "m" });
   let submits = 0;
   t.submit = () => submits++;
   t.onData(Buffer.from("\x1b[200~first\nsecond\r\nthird\x1b[201~"));
-  assert.equal(t.editor.buffer, "first second third");
+  assert.equal(t.editor.buffer, "first\nsecond\nthird");
   assert.equal(submits, 0);
+});
+
+test("paste inserts TAB, ESC, and control bytes literally (no keybindings fire)", () => {
+  const t = new MinimalTui({ model: "m" });
+  // \t must not path-complete; \x1b, Ctrl-A (\x01), Ctrl-K (\x0b) must land in
+  // the buffer as data rather than move the caret / delete / move-to-line-end.
+  t.onData(Buffer.from("\x1b[200~a\tb\x1bc\x01d\x0be\x1b[201~"));
+  assert.equal(t.editor.buffer, "a\tb\x1bc\x01d\x0be");
+  assert.equal(t.suggestion, null, "no completion popup from pasted TAB");
+});
+
+test("a pasted Ctrl-D cannot quit from a non-empty buffer mid-paste", () => {
+  const t = new MinimalTui({ model: "m" });
+  let stopped = false;
+  t.stop = () => (stopped = true);
+  t.onData(Buffer.from("\x1b[200~abc\x04def\x1b[201~"));
+  assert.equal(t.editor.buffer, "abc\x04def");
+  assert.equal(stopped, false);
+});
+
+test("a large paste renders [pasted N lines] but submits the full text", async (t) => {
+  const srv = await createMockServer(() => [{ content: "ok" }]);
+  t.after(() => srv.close());
+  const lines = Array.from({ length: 25 }, (_, i) => `line ${i}`);
+  const payload = lines.join("\n");
+  const tui = new MinimalTui({ model: "m", baseUrl: srv.url, apiKey: "", systemPrompt: "s" });
+  tui.onData(Buffer.from(`\x1b[200~${payload}\x1b[201~`));
+  await tui.submit();
+  const user = tui.blocks.find((b) => b.kind === "user");
+  assert.equal(user.text, "[pasted 25 lines]");
+  assert.equal(tui.history.find((m) => m.role === "user")?.content, payload, "the full paste reached the model");
+});
+
+test("editing a large paste keeps the real text in the user block", async (t) => {
+  const srv = await createMockServer(() => [{ content: "ok" }]);
+  t.after(() => srv.close());
+  const lines = Array.from({ length: 25 }, (_, i) => `line ${i}`);
+  const payload = lines.join("\n");
+  const tui = new MinimalTui({ model: "m", baseUrl: srv.url, apiKey: "", systemPrompt: "s" });
+  tui.onData(Buffer.from(`\x1b[200~${payload}\x1b[201~`));
+  tui.editor.buffer += "\nplease review";
+  tui.editor.cursor = tui.editor.buffer.length;
+  await tui.submit();
+  const user = tui.blocks.find((b) => b.kind === "user");
+  assert.equal(user.text.split("\n").length, 26, "the block shows the real (edited) prompt");
+  assert.match(user.text, /please review/);
+});
+
+test("Esc on a multiline draft keeps it instead of flattening", () => {
+  const t = new MinimalTui({ model: "m" });
+  t.editor.buffer = "alpha\nbeta";
+  t.editor.cursor = 5;
+  t.runAction({ type: "escape" });
+  assert.equal(t.editor.buffer, "alpha\nbeta");
+  assert.equal(t.editor.cursor, 5);
+});
+
+test("history navigation does not destroy an in-progress draft", () => {
+  const t = new MinimalTui({ model: "m" });
+  t.editor.history = ["first", "second"];
+  t.editor.buffer = "my draft";
+  t.editor.cursor = 4;
+  t.historyUp();
+  assert.equal(t.editor.buffer, "second");
+  t.historyDown();
+  t.historyDown();
+  assert.equal(t.editor.buffer, "my draft", "walking off the history restores the draft");
+  assert.equal(t.editor.cursor, 4);
+  assert.equal(t.editor.draft, null, "the draft is consumed once restored");
 });
 
 test("terminal editing hotkeys manipulate input predictably", () => {

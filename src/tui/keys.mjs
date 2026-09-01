@@ -23,7 +23,8 @@
  */
 export function decodeEscape(buf) {
   // Bracketed paste start: collect the entire payload so embedded newlines
-  // cannot accidentally submit several prompts. The one-line editor folds them.
+  // cannot accidentally submit several prompts. The TUI pastes the payload
+  // literally and preserves the newlines (see pasteLiteral in tui.mjs).
   if (buf.startsWith("\x1b[200~")) return { consumed: 6, pasting: true };
 
   // OSC sequence (theme response etc.): consume up to ESC \ or BEL.

@@ -16,6 +16,12 @@ export class Editor {
     this.cursor = 0;
     this.history = [];
     this.historyIndex = -1;
+    // In-progress input stashed when history recall starts, so walking back
+    // off the end of the history restores the draft instead of dropping it.
+    this.draft = null;
+    // Meta about the last bracketed paste (set only for large pastes) so the
+    // TUI can render the submitted user block as `[pasted N lines]`.
+    this.lastPaste = null;
   }
 
   /**
@@ -212,8 +218,14 @@ export class Editor {
 
   historyUp() {
     if (!this.history.length) return;
-    if (this.historyIndex === -1) this.historyIndex = this.history.length - 1;
-    else this.historyIndex = Math.max(0, this.historyIndex - 1);
+    if (this.historyIndex === -1) {
+      // First Up from a live buffer: stash the draft so a later walk off the
+      // history end restores it. An empty buffer has no draft to lose.
+      if (this.buffer) this.draft = { buffer: this.buffer, cursor: this.cursor };
+      this.historyIndex = this.history.length - 1;
+    } else {
+      this.historyIndex = Math.max(0, this.historyIndex - 1);
+    }
     this.buffer = this.history[this.historyIndex];
     this.cursor = this.buffer.length;
   }
@@ -223,10 +235,17 @@ export class Editor {
     this.historyIndex++;
     if (this.historyIndex >= this.history.length) {
       this.historyIndex = -1;
-      this.buffer = "";
+      if (this.draft) {
+        this.buffer = this.draft.buffer;
+        this.cursor = this.draft.cursor;
+        this.draft = null;
+      } else {
+        this.buffer = "";
+        this.cursor = 0;
+      }
     } else {
       this.buffer = this.history[this.historyIndex];
+      this.cursor = this.buffer.length;
     }
-    this.cursor = this.buffer.length;
   }
 }

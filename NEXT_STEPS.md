@@ -14,18 +14,15 @@ A full-repo audit (incl. `references/pi`) produced a verified, workstreamed plan
 `docs/improvements-plan.md` is the source of truth. Its top picks, in suggested
 order:
 
-1. **W1 — Paste integrity** — pasted text is flattened, TAB/Ctrl chords fire
-   keybindings, and Esc/history destroy multiline drafts. Bulk-literal paste
-   insert first, then newline preservation + `[pasted N lines]` marker + draft slot.
-2. **W3 — Reliability batch** — protocol-safe histories on mid-loop guards,
+1. **W3 — Reliability batch** — protocol-safe histories on mid-loop guards,
    interrupt/deny double markers, Ctrl-D mode guard, bash maxBuffer/shell fixes,
    non-atomic writes, write+rename.
-3. **W2 — Tool output visibility** (highest user-facing value) — per-tool label
+2. **W2 — Tool output visibility** (highest user-facing value) — per-tool label
    resolver, multi-line result previews + `/show`, active-tool footer.
-4. **W4 — Session durability/scale** — torn-line recovery, streaming meta
+3. **W4 — Session durability/scale** — torn-line recovery, streaming meta
    scanner for resume.
-5. **W5 — Core-loop hardening** — mid-stream step retry, body built once.
-6. **W6 — Feature backlog** — interrupt→continue, render cache, structured
+4. **W5 — Core-loop hardening** — mid-stream step retry, body built once.
+5. **W6 — Feature backlog** — interrupt→continue, render cache, structured
    compaction, fallback model, steering.
 
 ## Practical improvements
