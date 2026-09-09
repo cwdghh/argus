@@ -15,8 +15,8 @@
 import { runTurn } from "./agent.mjs";
 import { nextContextTokens } from "./compact.mjs";
 import { loadSession, sessionConfig, sessionData } from "./session/index.mjs";
-import { formatDuration, previewResult, summarize, toolLabel } from "./format.mjs";
-import { appendBlock } from "./transcript.mjs";
+import { formatDuration, summarize, toolLabel } from "./format.mjs";
+import { consumeAgentEvent } from "./transcript.mjs";
 
 export async function runHeadless(config, prompt, { session, cwd, stdout, stderr } = {}) {
   // Streams are injectable so tests can capture output without monkeypatching.
@@ -45,7 +45,6 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
   // Build display blocks alongside events (mirrors the TUI) so a turn saved to
   // a session reconstructs the transcript.
   const blocks = [];
-  const append = (kind, delta) => appendBlock(blocks, kind, delta);
   const push = (b) => blocks.push(b);
 
   let sawText = false;
@@ -58,38 +57,24 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
       history,
       prompt,
       (ev) => {
+        // Blocks are projected by the same consumeAgentEvent the TUI uses, so
+        // a session's transcript never depends on which frontend wrote it
+        // (W6.6). The stdout/stderr lines are this frontend's stream split.
+        consumeAgentEvent(blocks, ev);
         if (ev.type === "user") {
           push({ kind: "user", text: ev.text });
           writeErr(`❯ ${ev.text}\n`);
         } else if (ev.type === "thinking_delta") {
-          append("thinking", ev.delta);
           writeErr(`… ${ev.delta}`);
         } else if (ev.type === "text_delta") {
-          append("assistant", ev.delta);
           writeOut(ev.delta);
           sawText = true;
         } else if (ev.type === "tool_call") {
-          const label = toolLabel(ev.name, ev.args);
-          push({ kind: "tool", name: ev.name, label, ...(ev.id ? { id: ev.id } : {}) });
-          writeErr(`⚙ ${label}\n`);
+          writeErr(`⚙ ${toolLabel(ev.name, ev.args)}\n`);
         } else if (ev.type === "tool_result") {
-          const detail = previewResult(ev.result);
-          push({
-            kind: "result",
-            ok: ev.ok,
-            summary: summarize(ev.result),
-            ...(ev.id ? { id: ev.id } : {}),
-            ...(detail ? { detail } : {}),
-          });
           writeErr(`   ${ev.ok ? "✓" : "✗"} ${summarize(ev.result)}\n`);
         } else if (ev.type === "approval") {
-          // Only approvals get their own row — a denial is already reported by
-          // the tool_result error block that follows (one "denied …" row).
-          if (ev.approved) {
-            const summary = `approved ${ev.tool} in ${ev.cwd}: ${ev.reason}`;
-            push({ kind: "result", ok: true, summary });
-            writeErr(`   ✓ ${summary}\n`);
-          }
+          if (ev.approved) writeErr(`   ✓ approved ${ev.tool} in ${ev.cwd}: ${ev.reason}\n`);
         } else if (ev.type === "compacted") {
           writeErr("… earlier context compacted\n");
         } else if (ev.type === "retrying") {

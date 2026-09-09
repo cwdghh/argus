@@ -34,8 +34,8 @@
  */
 import { runTurn } from "./agent.mjs";
 import { nextContextTokens } from "./compact.mjs";
-import { formatDuration, previewResult, summarize, toolLabel } from "./format.mjs";
-import { appendBlock } from "./transcript.mjs";
+import { formatDuration } from "./format.mjs";
+import { appendBlock, consumeAgentEvent } from "./transcript.mjs";
 import { theme } from "./theme.mjs";
 import { sessionConfig } from "./session/index.mjs";
 import { Editor } from "./tui/editor.mjs";
@@ -260,69 +260,31 @@ export class MinimalTui {
     let outcome = "completed";
     try {
       const { messages, aborted, cwd } = await runTurn(this.config, this.history, text, (ev) => {
-        if (ev.type === "thinking_delta") {
-          this.append("thinking", ev.delta);
-          this.mode = "thinking";
-        } else if (ev.type === "text_delta") {
-          this.append("assistant", ev.delta);
-          if (this.mode !== "aborting") this.mode = "working";
-        } else if (ev.type === "tool_call") {
+        // Mode/live-state tracking is frontend-specific; the blocks both
+        // frontends persist come from the shared consumeAgentEvent so the TUI
+        // and headless can never drift (W6.6).
+        if (ev.type === "tool_call") {
           this.activeToolStartedAt = this.now();
           this.activeTool = { name: ev.name, args: ev.args };
-          // Persist the resolved label, not the raw args: the payload already
-          // lives in the turn's tool message, so re-storing it here is pure
-          // JSONL amplification (W2.1). `id` lets /show link back to that
-          // message after a resume.
-          this.pushBlock({
-            kind: "tool",
-            name: ev.name,
-            label: toolLabel(ev.name, ev.args),
-            ...(ev.id ? { id: ev.id } : {}),
-          });
           if (this.mode !== "aborting") this.mode = "working";
-        } else if (ev.type === "tool_result") {
-          const durationMs = this.activeToolStartedAt == null ? null : this.now() - this.activeToolStartedAt;
-          this.activeToolStartedAt = null;
-          this.activeTool = null;
-          const detail = previewResult(ev.result);
-          this.pushBlock({
-            kind: "result",
-            ok: ev.ok,
-            summary: summarize(ev.result),
-            durationMs,
-            ...(ev.id ? { id: ev.id } : {}),
-            ...(detail ? { detail } : {}),
-          });
+        } else if (ev.type === "thinking_delta") {
+          this.mode = "thinking";
+        } else if (ev.type === "text_delta" || ev.type === "tool_result" || ev.type === "compacted" || ev.type === "retrying") {
           if (this.mode !== "aborting") this.mode = "working";
-        } else if (ev.type === "approval") {
-          // The decision (approved/denied) for a pending confirmation. The
-          // pending question was already recorded as a `confirm` block by
-          // confirm(). A denial is re-reported by the tool_result error block
-          // that follows, so only approvals get a result row here — one
-          // "denied …" row, not two (W3).
-          if (ev.approved) {
-            this.pushBlock({
-              kind: "result",
-              ok: true,
-              summary: `approved ${ev.tool} in ${ev.cwd}: ${ev.reason}`,
-            });
-          }
         } else if (ev.type === "cwd_change") {
           this.cwd = ev.cwd;
           if (this.session) this.session.setCwd(ev.cwd).catch(() => {});
-        } else if (ev.type === "compacted") {
-          this.pushBlock({ kind: "result", ok: true, summary: "… earlier context compacted" });
-          if (this.mode !== "aborting") this.mode = "working";
-        } else if (ev.type === "retrying") {
-          const why = ev.reason === "quota" ? "LLM quota exhausted" : "LLM request failed";
-          this.pushBlock({
-            kind: "result",
-            ok: true,
-            summary: `${why}; retrying (${ev.attempt}/${ev.budget}) in ${formatDuration(ev.delayMs)}`,
-          });
-          if (this.mode !== "aborting") this.mode = "working";
         } else if (ev.type === "usage") {
           this.turnUsage = ev.usage;
+        }
+        if (ev.type === "tool_result") {
+          // The one block field the projector can't derive: the tool's wall time.
+          const durationMs = this.activeToolStartedAt == null ? null : this.now() - this.activeToolStartedAt;
+          this.activeToolStartedAt = null;
+          this.activeTool = null;
+          consumeAgentEvent(this.blocks, ev, { durationMs });
+        } else {
+          consumeAgentEvent(this.blocks, ev);
         }
         this.dirtyRendered = true;
       }, {

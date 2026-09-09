@@ -4,6 +4,24 @@ Dated changelog, **newest first** (this file is a log — never edit entries in 
 
 ---
 
+#### 2026-09-01 — shared agent-event → block projector (plan W6.6)
+
+**Status: ✅ done** (tests under `test/transcript.test.mjs`)
+
+- `consumeAgentEvent()` in `transcript.mjs` is now the single projector from
+  agent events to the display blocks both frontends persist: tool calls
+  (label + id), results (summary + detail + duration), approvals, compaction,
+  retries, and folded text deltas. The TUI and headless onEvent handlers
+  shrank to frontend-only concerns (stream splitting, live mode, tool
+  timing); headless now persists `compacted`/`retrying`/`approval` blocks
+  exactly like the TUI instead of only printing them, so a session's
+  transcript no longer depends on which frontend wrote it. A preview identical
+  to its one-line summary is no longer duplicated into the block.
+
+Verified in this session: `node --test` **294/294 pass** (3 new projector tests).
+
+---
+
 #### 2026-09-01 — core-loop hardening (plan W5)
 
 **Status: ✅ done** (tests under `test/reliability.test.mjs`,

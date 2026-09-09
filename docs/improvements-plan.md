@@ -236,7 +236,7 @@ user abort; suites green.
 6. **Shared agent-event → block projector** — `tui.mjs:252-298` vs
    `headless.mjs:55-86` already drift (TUI persists `compacted`/`retrying`
    blocks, headless only prints); extract `consumeAgentEvent()` in
-   `transcript.mjs`. Medium.
+   `transcript.mjs`. Medium. **Status: shipped 2026-09-01** (see PROGRESS).
 7. **Sub-agent task tool** — recursive `runTurn` for bounded, isolated
    exploration, depth-guarded. Medium.
 8. **Mid-turn compaction** — digest oldest already-consumed tool-result pairs
