@@ -4,6 +4,43 @@ Dated changelog, **newest first** (this file is a log — never edit entries in 
 
 ---
 
+#### 2026-09-01 — core-loop hardening (plan W5)
+
+**Status: ✅ done** (tests under `test/reliability.test.mjs`,
+`test/agent.test.mjs`, `test/config.test.mjs`)
+
+- **Mid-stream step retry** (`runModelStep` extracted from the `runTurn`
+  monolith): a model step that dies before any visible text streamed — a
+  mid-body disconnect or idle timeout ahead of the first token — is retried at
+  the loop level on top of the in-request POST retries. A step that already
+  streamed text is never re-run (no duplicated transcript output), and a
+  request that exhausted its own retry budget (`LLM request …` errors) is not
+  multiplied by the step retry. Retry backoff streams through the existing
+  `retrying` event.
+- **Request body built once:** the serialized payload is measured against the
+  char cap and sent as the same object (`streamChat` accepts a prebuilt
+  `requestBody`), killing the "two builds must stay identical" drift risk.
+- **`ARGUS_MAX_REQUEST_CHARS`:** explicit knob (validated ≥ 500, previously it
+  silently inherited the compaction char budget) with a config test and a
+  guard test.
+- **Multi-tool batches run sequentially** instead of throwing: endpoints that
+  ignore `parallel_tool_calls:false` get their calls executed one-by-one and
+  fed back in order, with a test pinning both writes land.
+- **Graceful `finish_reason:"length"`:** a truncated reply is kept (marked
+  `truncated`), its un-executed tool_calls become explicit "never ran" error
+  results (pairing invariant intact), and the turn returns `truncated:true`
+  instead of failing.
+- **Tail-first truncation:** `boundToolResult` binary-searches the largest tail
+  that truly fits (JSON re-escaping means a naive char count lies), spills the
+  complete output to `~/.argus/tmp` with the path in the result, and only then
+  drops `cwd`/`path` context — `nextOffset` is never dropped so read paging
+  stays exact.
+
+Verified in this session: `node --test` **291/291 pass** (5 new tests + 2
+rewritten for the new semantics).
+
+---
+
 #### 2026-09-01 — session durability & startup scale (plan W4)
 
 **Status: ✅ done** (tests under `test/session.test.mjs`, `test/headless.test.mjs`,

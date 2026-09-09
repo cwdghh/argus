@@ -20,9 +20,13 @@
  * reply stops, in-flight tools get the signal, and the loop returns early with
  * `{ aborted: true }`.
  */
-import { buildBody, streamChat } from "./llm.mjs";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { abortableDelay, buildBody, streamChat } from "./llm.mjs";
 import { findTool, tools, validateToolArgs } from "./tools.mjs";
 import { COMPACT_DEFAULTS, maybeCompact } from "./compact.mjs";
+import { argusHome } from "./config.mjs";
 import { createToolState } from "./tool-state.mjs";
 
 /**
@@ -57,7 +61,11 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
   const maxSteps = opts.maxSteps ?? config.maxSteps ?? 100;
   const maxToolResultChars = opts.maxToolResultChars ?? config.maxToolResultChars ?? 50_000;
   const maxTurnToolResultChars = opts.maxTurnToolResultChars ?? config.maxTurnToolResultChars ?? 400_000;
-  const maxRequestChars = opts.maxRequestChars ?? COMPACT_DEFAULTS.compactAtChars;
+  const maxRequestChars = opts.maxRequestChars ?? config.maxRequestChars ?? COMPACT_DEFAULTS.compactAtChars;
+  // Loop-level retries for a model step that died before any visible text
+  // streamed (the in-request `request()` retries already cover the initial
+  // POST); reuses the same budget the request layer uses.
+  const stepRetries = config.maxRetries ?? 2;
   const toolState = createToolState();
   let steps = 0;
   let turnToolResultChars = 0;
@@ -97,19 +105,22 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
       }
       steps++;
       const outgoingMessages = [...sendHistory, ...turnMessages];
-      const outgoingChars = requestPayloadChars(config, outgoingMessages, toolList);
+      // Build the request body once per step: the same serialized payload is
+      // both measured against the char cap and sent, so the measurement can
+      // never drift from what actually goes over the wire.
+      const body = buildRequestBody(config, outgoingMessages, toolList);
+      const outgoingChars = JSON.stringify(body).length;
       if (outgoingChars > maxRequestChars) {
         throw new Error(
           `agent stopped before sending ${outgoingChars} characters; the active request exceeds the ` +
             `${maxRequestChars}-character context safety limit`
         );
       }
-      const { message: reply, finishReason, usage: stepUsage } = await streamAssistant(
+      const { message: reply, finishReason, usage: stepUsage } = await runModelStep(
         config,
         outgoingMessages,
         toolList,
-        onEvent,
-        signal
+        { body, onEvent, signal, stepRetries }
       );
       usage = accumulateUsage(usage, stepUsage);
       onEvent({ type: "usage", usage });
@@ -120,14 +131,28 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
         return { messages: turnMessages, finalText: "", aborted: true, cwd, usage };
       }
 
+      const toolCalls = reply.tool_calls ?? [];
       if (finishReason === "length") {
-        throw new Error("model response was truncated by its context/output limit; no partial tool calls were executed");
+        // The model hit its output/context limit. Keep what it said (marked
+        // truncated) instead of discarding the reply, and turn any un-executed
+        // tool_calls into explicit "never ran" error results so the persisted
+        // turn still satisfies tool-call pairing.
+        reply.truncated = true;
+        turnMessages.push(reply);
+        for (const call of toolCalls) {
+          turnMessages.push({
+            role: "tool",
+            tool_call_id: call.id,
+            content: JSON.stringify({
+              error: true,
+              truncated: true,
+              message: 'model output was truncated (finish_reason "length"); this tool call never ran',
+            }),
+          });
+        }
+        return { messages: turnMessages, finalText: reply.content ?? "", aborted: false, truncated: true, cwd, usage };
       }
 
-      const toolCalls = reply.tool_calls ?? [];
-      if (toolCalls.length > 1) {
-        throw new Error(`provider returned ${toolCalls.length} tool calls in one model step; argus requires exactly one`);
-      }
       // The assistant message becomes part of the conversation only after its
       // tool-call shape is known to be protocol-safe.
       turnMessages.push(reply);
@@ -137,8 +162,10 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
         return { messages: turnMessages, finalText: reply.content ?? "", aborted: false, cwd, usage };
       }
 
-      // Execute each requested tool call and feed the result back as a
-      // `tool` message. The model does not actually run anything itself.
+      // Execute each requested tool call in sequence and feed the results back as
+      // `tool` messages. Some endpoints ignore `parallel_tool_calls:false` and
+      // return several at once; they still never run in parallel, and each is
+      // executed exactly once. The model does not actually run anything itself.
       for (const call of toolCalls) {
         const repeatKey = canonicalToolCall(call);
         const loop = detectCallLoop(repeatKey, loopWindow);
@@ -438,7 +465,7 @@ export async function executeToolCall(call, { cwd, signal, confirm, authorize, m
     }
   }
 
-  result = boundToolResult(result, maxToolResultChars);
+  result = await boundToolResult(result, maxToolResultChars);
   onEvent({ type: "tool_result", name: toolName, ok: !result?.error, result, id: call?.id });
 
   let nextCwd = cwd;
@@ -449,8 +476,15 @@ export async function executeToolCall(call, { cwd, signal, confirm, authorize, m
   return { result, cwd: nextCwd };
 }
 
-/** Keep any tool—present or future—from flooding the next model request. */
-function boundToolResult(result, maxChars = 50_000) {
+/**
+ * Keep any tool—present or future—from flooding the next model request.
+ *
+ * Truncation is tail-first: the last chunk of the serialized result is kept
+ * (the part a failing build's error shows up in), and the full output is
+ * spilled to a tmp file whose path rides in the result so the model can read
+ * any range of it with the read tool instead of guessing from a head slice.
+ */
+async function boundToolResult(result, maxChars = 50_000) {
   let serialized;
   try {
     serialized = JSON.stringify(result);
@@ -460,8 +494,7 @@ function boundToolResult(result, maxChars = 50_000) {
   if (serialized === undefined) return { error: true, message: "tool returned undefined" };
   if (serialized.length <= maxChars) return result;
 
-  let preview = serialized.slice(0, Math.max(0, maxChars - 300));
-  const context = {
+  let context = {
     ...(typeof result?.path === "string" ? { path: result.path } : {}),
     ...(typeof result?.cwd === "string" ? { cwd: result.cwd } : {}),
     ...(Number.isInteger(result?.nextOffset) ? { nextOffset: result.nextOffset } : {}),
@@ -472,32 +505,68 @@ function boundToolResult(result, maxChars = 50_000) {
   for (const key of ["path", "cwd"]) {
     if (JSON.stringify(context[key] ?? "").length > maxChars / 3) delete context[key];
   }
-  let bounded;
+
+  const fullPath = await spillFullResult(serialized);
+  const message = fullPath
+    ? `tool result exceeded ${maxChars} characters; full output at ${fullPath}`
+    : `tool result exceeded ${maxChars} characters`;
+
+  // Previews are JSON fragments, so embedding them re-escapes quotes/backslashes
+  // and inflates the payload beyond a naive character count — binary-search the
+  // largest tail that truly fits rather than trusting arithmetic. Dropping a
+  // context field frees room and the search re-runs larger.
+  const skeleton = () => ({
+    ...(result?.error ? { error: true } : {}),
+    ...context,
+    truncated: true,
+    originalChars: serialized.length,
+    message,
+    ...(fullPath ? { fullPath } : {}),
+  });
+  // Free context room (cwd first, then path) before ever giving the tail up —
+  // the preview is the actionable part and context fields can be recovered from
+  // the spilled file. nextOffset stays: dropping it would break read paging.
   for (;;) {
-    bounded = {
-      ...(result?.error ? { error: true } : {}),
-      ...context,
-      truncated: true,
-      originalChars: serialized.length,
-      message: `tool result exceeded ${maxChars} characters; use a narrower read or command`,
-      preview,
-    };
-    const excess = JSON.stringify(bounded).length - maxChars;
-    if (excess <= 0) return bounded;
-    if (preview.length > 0) {
-      preview = preview.slice(0, Math.max(0, preview.length - excess - 8));
+    const base = skeleton();
+    let lo = 0;
+    let hi = Math.min(serialized.length, maxChars);
+    let best = null;
+    while (lo <= hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      const candidate = mid === 0 ? { ...base, preview: "" } : { ...base, preview: serialized.slice(-mid) };
+      if (JSON.stringify(candidate).length <= maxChars) {
+        best = candidate;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    if (best) return best;
+    if (Object.hasOwn(context, "cwd")) {
+      delete context.cwd;
       continue;
     }
     if (Object.hasOwn(context, "path")) {
       delete context.path;
       continue;
     }
-    if (Object.hasOwn(context, "cwd")) {
-      delete context.cwd;
-      continue;
-    }
     // Config validation keeps this limit >= 500, so the minimal object fits.
-    return { ...(result?.error ? { error: true } : {}), truncated: true };
+    return base;
+  }
+}
+
+/** Write an oversized tool result's full payload to the spill dir. */
+async function spillFullResult(serialized) {
+  try {
+    const dir = join(argusHome(), "tmp");
+    await mkdir(dir, { recursive: true });
+    const file = join(dir, `tool-result-${randomUUID()}.json`);
+    await writeFile(file, serialized, "utf8");
+    return file;
+  } catch {
+    // A spill failure must never fail the turn; the preview still carries the
+    // actionable tail.
+    return null;
   }
 }
 
@@ -513,23 +582,57 @@ function stableStringify(value) {
   return JSON.stringify(stableValue(value));
 }
 
-function requestPayloadChars(config, messages, toolList) {
-  return JSON.stringify(buildBody({
+/** Build the chat request body once per step (measured and sent, never twice). */
+function buildRequestBody(config, messages, toolList) {
+  return buildBody({
     model: config.model,
     systemPrompt: config.systemPrompt,
     messages,
     tools: toolList,
-    // The marker changes the wire shape, so the char safety check must measure
-    // the same body the loop will actually send.
     contextCache: config.contextCache,
-  })).length;
+  });
+}
+
+/**
+ * One model step, retried at the loop level when the stream died before any
+ * visible text arrived (a disconnect ahead of the first token, or a body that
+ * produced nothing). Once a text/thinking delta has been forwarded the step is
+ * not retried — re-streaming would duplicate the visible text in the
+ * transcript — and it fails as it always has. The in-request `request()`
+ * retries inside llm.mjs already cover the initial POST; this wraps the whole
+ * step on top of that for mid-body failures.
+ */
+async function runModelStep(config, outgoingMessages, toolList, { body, onEvent, signal, stepRetries }) {
+  for (let attempt = 0; ; attempt++) {
+    let sawContent = false;
+    const forward = (ev) => {
+      if (ev.type === "text_delta" || ev.type === "thinking_delta") sawContent = true;
+      onEvent(ev);
+    };
+    try {
+      return {
+        ...(await streamAssistant(config, outgoingMessages, toolList, forward, signal, body)),
+        sawContent,
+      };
+    } catch (err) {
+      // Only a pristine failure may be retried: a user abort, a step that
+      // already streamed visible text, or a request that *already* exhausted
+      // its in-`request()` retry budget (`LLM request …` errors) all fail the
+      // step — re-running those would duplicate text or multiply the retries.
+      if (signal?.aborted || sawContent || err?.message?.startsWith("LLM request ") || attempt >= stepRetries) throw err;
+      const delayMs = 250 * 2 ** attempt;
+      onEvent({ type: "retrying", reason: "step", attempt: attempt + 1, budget: stepRetries, delayMs });
+      await abortableDelay(delayMs, signal);
+    }
+  }
 }
 
 /**
  * Stream one assistant reply from the model, emitting text deltas as they
- * arrive and returning the fully-assembled assistant message.
+ * arrive and returning the fully-assembled assistant message. `body` is the
+ * prebuilt request body passed down so measurement and send share one object.
  */
-async function streamAssistant(config, messages, toolList, onEvent, signal) {
+async function streamAssistant(config, messages, toolList, onEvent, signal, body = null) {
   onEvent({ type: "assistant_start" });
   const stream = streamChat({
     ...config,
@@ -540,6 +643,7 @@ async function streamAssistant(config, messages, toolList, onEvent, signal) {
     // Surface retry backoffs (notably the long quota waits) through the same
     // event channel as everything else.
     onEvent,
+    ...(body ? { requestBody: body } : {}),
   });
   let message = null;
   let finishReason = null;

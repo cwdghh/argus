@@ -83,6 +83,24 @@ test("a project .env (loaded first) beats the home .env", () => {
   }
 });
 
+test("ARGUS_MAX_REQUEST_CHARS sets the request payload cap; small or bad values fall back", () => {
+  const saved = process.env.ARGUS_MAX_REQUEST_CHARS;
+  try {
+    delete process.env.ARGUS_MAX_REQUEST_CHARS;
+    const fallback = getConfig().maxRequestChars;
+    assert.ok(Number.isInteger(fallback) && fallback >= 500, `a sane default (got ${fallback})`);
+    process.env.ARGUS_MAX_REQUEST_CHARS = "12345";
+    assert.equal(getConfig().maxRequestChars, 12345);
+    process.env.ARGUS_MAX_REQUEST_CHARS = "499";
+    assert.equal(getConfig().maxRequestChars, fallback, "below the 500 hard floor uses the default");
+    process.env.ARGUS_MAX_REQUEST_CHARS = "bogus";
+    assert.equal(getConfig().maxRequestChars, fallback);
+  } finally {
+    if (saved === undefined) delete process.env.ARGUS_MAX_REQUEST_CHARS;
+    else process.env.ARGUS_MAX_REQUEST_CHARS = saved;
+  }
+});
+
 test("default system prompt names the agent Argus", () => {
   delete process.env.ARGUS_SYSTEM_PROMPT;
   const prompt = getConfig().systemPrompt;

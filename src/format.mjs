@@ -139,7 +139,8 @@ export function previewResult(result, { maxLines = PREVIEW_MAX_LINES, maxChars =
   const source = pickNonEmpty(result.stdout, result.stderr, result.numberedText, result.content);
   if (source == null) {
     if (result.truncated === true && typeof result.preview === "string" && result.preview) {
-      return `… result exceeded the tool-result limit (${Number.isInteger(result.originalChars) ? formatChars(result.originalChars) : "?"} chars)`;
+      const where = result.fullPath ? `; full output at ${result.fullPath}` : "";
+      return `… result exceeded the tool-result limit (${Number.isInteger(result.originalChars) ? formatChars(result.originalChars) : "?"} chars)${where}`;
     }
     return "";
   }

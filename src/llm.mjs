@@ -193,7 +193,7 @@ async function request({ baseUrl, apiKey, body, signal, requestTimeoutMs, maxRet
   }
 }
 
-function abortableDelay(ms, signal) {
+export function abortableDelay(ms, signal) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
     const timer = setTimeout(resolve, ms);
@@ -296,8 +296,11 @@ export async function* streamChat({
   quotaRetries,
   quotaRetryDelayMs,
   onEvent,
+  // A prebuilt body (agent.mjs measures the payload it sends, so it builds the
+  // body once and hands it over; without it, the body is built here as ever).
+  requestBody = null,
 }) {
-  const body = buildBody({ model, systemPrompt, messages, tools, contextCache });
+  const body = requestBody ?? buildBody({ model, systemPrompt, messages, tools, contextCache });
   let state = createChatStreamState();
   let timeoutSignal = null;
   const idleTimeoutMs = streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS;

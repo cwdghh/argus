@@ -7,6 +7,7 @@
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { COMPACT_DEFAULTS } from "./compact.mjs";
 
 /**
  * Root directory for argus state (sessions, the home config file). Resolved
@@ -87,6 +88,11 @@ export function getConfig() {
     quotaRetries: nonNegativeInt(process.env.ARGUS_QUOTA_RETRIES, 2),
     quotaRetryDelayMs: positiveInt(process.env.ARGUS_QUOTA_RETRY_DELAY_MS, 10_000, 1),
     maxSteps: positiveInt(process.env.ARGUS_MAX_STEPS, 100),
+    // Hard cap on one request's serialized payload, checked before every model
+    // step. Previously this silently reused the compaction char budget; it is
+    // now its own explicit knob (`ARGUS_MAX_REQUEST_CHARS`, keep >= 500) so a
+    // request can fail fast instead of being sent over a window it cannot fit.
+    maxRequestChars: positiveInt(process.env.ARGUS_MAX_REQUEST_CHARS, COMPACT_DEFAULTS.compactAtChars, 500),
     maxToolResultChars: positiveInt(process.env.ARGUS_MAX_TOOL_RESULT_CHARS, 50_000, 500),
     // Bound cumulative tool output inside one active turn; next-turn
     // compaction cannot help until that turn finishes.

@@ -249,19 +249,25 @@ test("identical reads separated by other work do not trigger the no-progress gua
   assert.equal((await runTurn(config(srv), [], "inspect", () => {}, { cwd: dir })).finalText, "done");
 });
 
-test("a provider response with multiple tool calls is rejected before side effects", async (t) => {
+test("a provider response with multiple tool calls runs them in sequence", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "argus-multi-call-"));
-  const srv = await createMockServer(() => [{ tool_calls: [
+  const multi = [
     { index: 0, id: "c1", function: { name: "write", arguments: '{"path":"a.txt","content":"a","ensureFinalNewline":false}' } },
     { index: 1, id: "c2", function: { name: "write", arguments: '{"path":"b.txt","content":"b","ensureFinalNewline":false}' } },
-  ] }]);
+  ];
+  const srv = await createMockServer((i) => (i === 0 ? [{ tool_calls: multi }] : [{ content: "done" }]));
   t.after(async () => {
     await srv.close();
     rmSync(dir, { recursive: true, force: true });
   });
-  await assert.rejects(runTurn(config(srv), [], "write", () => {}, { cwd: dir }), /returned 2 tool calls/);
-  assert.equal(existsSync(join(dir, "a.txt")), false);
-  assert.equal(existsSync(join(dir, "b.txt")), false);
+  const result = await runTurn(config(srv), [], "write", () => {}, { cwd: dir });
+  assert.equal(result.finalText, "done", "the turn continues after the batch");
+  assert.equal(existsSync(join(dir, "a.txt")), true, "the first call of the batch ran");
+  assert.equal(existsSync(join(dir, "b.txt")), true, "the second call of the batch ran too");
+  const toolMessages = result.messages.filter((m) => m.role === "tool");
+  assert.equal(toolMessages.length, 2);
+  assert.equal(JSON.parse(toolMessages[0].content).path, join(dir, "a.txt"), "results stay in call order");
+  assert.equal(JSON.parse(toolMessages[1].content).path, join(dir, "b.txt"));
 });
 
 test("the final allowed model step cannot perform an orphaned mutation", async (t) => {

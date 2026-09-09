@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -196,7 +196,7 @@ test("malformed tool arguments are returned as an error and never executed", asy
   assert.equal(existsSync(target), false);
 });
 
-test("truncated responses never execute partial tool calls", async (t) => {
+test("truncated responses mark the turn truncated and never execute partial tool calls", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "argus-truncated-tool-"));
   const target = join(dir, "should-not-exist");
   const srv = await createMockServer(() => [
@@ -204,8 +204,15 @@ test("truncated responses never execute partial tool calls", async (t) => {
     { finishReason: "length" },
   ]);
   t.after(() => srv.close());
-  await assert.rejects(() => runTurn(config(srv), [], "go"), /truncated/);
-  assert.equal(existsSync(target), false);
+  const result = await runTurn(config(srv), [], "go");
+  assert.equal(result.truncated, true, "the truncation is reported, not thrown away");
+  assert.equal(result.aborted, false);
+  assert.equal(existsSync(target), false, "the un-executed tool call never ran");
+  const erred = result.messages.filter((m) => m.role === "tool");
+  assert.equal(erred.length, 1);
+  assert.match(JSON.parse(erred[0].content).message, /never ran/);
+  const assistant = result.messages.find((m) => m.role === "assistant");
+  assert.equal(assistant.truncated, true, "the persisted assistant message carries the flag");
 });
 
 test("agent stops a runaway tool loop at the configured step limit", async (t) => {
@@ -232,6 +239,81 @@ test("transient API failures retry, while request timeouts stay bounded", async 
     () => runTurn(config(slowSrv, { requestTimeoutMs: 20, maxRetries: 0 }), [], "timeout"),
     /timed out/
   );
+});
+
+test("a mid-stream idle timeout retries the step before any text is shown", async (t) => {
+  // First attempt: the SSE body opens (a flush-only keepalive comment, so the
+  // response headers arrive) and then goes quiet past the idle timeout — a
+  // pristine failure (no visible text forwarded) that the loop-level retry may
+  // re-run. The second attempt streams normally.
+  let calls = 0;
+  const finish = (res) => {
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "ok" } }] })}\n\n`);
+    res.write("data: [DONE]\n\n");
+    res.end();
+  };
+  const srv = http.createServer((req, res) => {
+    calls++;
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    if (calls === 1) {
+      res.write(": keepalive\n\n");
+      setTimeout(() => finish(res), 1_000); // far past the 60ms idle timeout
+    } else {
+      finish(res);
+    }
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  t.after(() => new Promise((r) => srv.close(r)));
+  const result = await runTurn(
+    { baseUrl: `http://127.0.0.1:${srv.address().port}/v1`, apiKey: "", model: "m", systemPrompt: "s", streamIdleTimeoutMs: 60, maxRetries: 1 },
+    [],
+    "hi",
+    () => {},
+    {},
+  );
+  assert.equal(result.finalText, "ok");
+  assert.equal(calls, 2, "the step was retried once after the idle timeout");
+});
+
+test("a step that already streamed text is never retried (no duplicated output)", async (t) => {
+  // The first attempt shows "par", then the idle timeout hits. Re-running the
+  // step would echo "par" into the transcript again, so it must fail instead.
+  let calls = 0;
+  const srv = http.createServer((req, res) => {
+    calls++;
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "par" } }] })}\n\n`);
+    // never end -> the idle timeout fires after the partial text
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  t.after(() => new Promise((r) => srv.close(r)));
+  await assert.rejects(
+    runTurn(
+      { baseUrl: `http://127.0.0.1:${srv.address().port}/v1`, apiKey: "", model: "m", systemPrompt: "s", streamIdleTimeoutMs: 60, maxRetries: 1 },
+      [],
+      "hi",
+      () => {},
+      {},
+    ),
+    /idle timeout/,
+  );
+  assert.equal(calls, 1, "a content-carrying attempt is not retried");
+});
+
+test("the payload cap stops a request larger than ARGUS_MAX_REQUEST_CHARS", async (t) => {
+  const srv = await createMockServer(() => [{ content: "ok" }]);
+  t.after(() => srv.close());
+  await assert.rejects(
+    () => runTurn(config(srv, { maxRequestChars: 10 }), [], "x".repeat(200)),
+    /exceeds the 10-character context safety limit/
+  );
+});
+
+test("a request that exhausts its retry budget is not multiplied by the step retry", async (t) => {
+  const srv = await createMockServer(() => ({ status: 500, body: { error: { message: "boom" } } }));
+  t.after(() => srv.close());
+  await assert.rejects(runTurn(config(srv, { maxRetries: 2 }), [], "boom"), /LLM request failed \(500\)/);
+  assert.equal(srv.calls(), 3, "only the in-request budget is spent (1 + maxRetries); a step retry must not stack on top");
 });
 
 test("edit refuses ambiguous replacements unless all=true", async () => {
@@ -268,9 +350,12 @@ test("bash persists the shell's real cwd for quoted and compound cd commands", a
   assert.ok(result.cwd.endsWith("/dir with spaces"));
 });
 
-test("oversized tool results are bounded before the next model request", async (t) => {
+test("oversized tool results keep the tail and spill the full output", async (t) => {
+  const originalHome = process.env.ARGUS_HOME;
+  const spillHome = mkdtempSync(join(tmpdir(), "argus-spill-home-"));
+  process.env.ARGUS_HOME = spillHome;
   let sentResult = null;
-  const command = `node -e ${JSON.stringify("process.stdout.write('x'.repeat(2000))")}`;
+  const command = `node -e ${JSON.stringify("process.stdout.write('x'.repeat(1990) + 'TAIL-END')")}`;
   const srv = await createMockServer((i, body) => {
     if (i === 0) {
       return [{ tool_calls: [{ index: 0, id: "c1", function: { name: "bash", arguments: JSON.stringify({ command }) } }] }];
@@ -278,8 +363,16 @@ test("oversized tool results are bounded before the next model request", async (
     sentResult = body.messages.at(-1).content;
     return [{ content: "ok" }];
   });
-  t.after(() => srv.close());
-  await runTurn(config(srv, { maxToolResultChars: 500 }), [], "large output");
-  assert.ok(sentResult.length <= 500);
-  assert.equal(JSON.parse(sentResult).truncated, true);
+  t.after(async () => {
+    await srv.close();
+    rmSync(spillHome, { recursive: true, force: true });
+    process.env.ARGUS_HOME = originalHome;
+  });
+  await runTurn(config(srv, { maxToolResultChars: 700 }), [], "large output");
+  assert.ok(sentResult.length <= 700);
+  const bounded = JSON.parse(sentResult);
+  assert.equal(bounded.truncated, true);
+  assert.ok(bounded.preview.includes("TAIL-END"), "the preview keeps the tail, where a failure shows up");
+  assert.ok(bounded.fullPath && existsSync(bounded.fullPath), "the full output is spilled to a tmp file with a path");
+  assert.ok(readFileSync(bounded.fullPath, "utf8").includes("TAIL-END"), "the spill holds the complete output");
 });

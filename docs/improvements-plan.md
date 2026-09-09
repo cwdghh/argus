@@ -188,6 +188,9 @@ synthetic 20-session dir.
 
 ## W5 — Core-loop hardening  *(medium)*
 
+> **Status: shipped 2026-09-01** — every bullet below landed with a test. See
+> the PROGRESS.md entry.
+
 - **Mid-stream retry** (`llm.mjs` ~313-357): `request()` retries only the initial
   POST; a disconnect mid-SSE-body kills the turn though the step is idempotent.
   Retry the *step* at the loop level — extract `runModelStep` from the `runTurn`
