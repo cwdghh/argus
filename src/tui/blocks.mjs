@@ -10,6 +10,25 @@ import { markdownLines, renderSimple } from "./markdown.mjs";
 import { theme } from "../theme.mjs";
 
 
+// Only text-carrying blocks (user/thinking/assistant) mutate after creation,
+// and they mutate *text* in place — so a per-block cache keyed by object
+// identity, width, and the text snapshot re-renders exactly the blocks that
+// changed and reuses the rest. Long transcripts stop re-wrapping every block
+// on every frame; only the mutated tail re-renders (W6.2).
+const blockLinesCache = new WeakMap();
+
+/**
+ * `blockLines` with a per-block cache. The snapshot check is exact: if the
+ * block's text is unchanged for this width, its wrapped lines are reused.
+ */
+export function blockLinesCached(block, width) {
+  const entry = blockLinesCache.get(block);
+  if (entry && entry.width === width && entry.text === block.text) return entry.lines;
+  const lines = blockLines(block, width);
+  blockLinesCache.set(block, { width, text: block.text, lines });
+  return lines;
+}
+
 export function blockLines(block, width) {
   switch (block.kind) {
     case "user": {

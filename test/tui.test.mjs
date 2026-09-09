@@ -994,6 +994,36 @@ test("result preview renders dimmed under the summary inside the same rail", () 
   assert.deepEqual(lines, ["│ ✓ stdout: npm ok", "│ build step 1", "│ build step 2", "│ … 4 more lines"]);
 });
 
+test("render cache: the line assembly is reused until a block changes or the width does", () => {
+  const t = new MinimalTui({ model: "m" });
+  t.width = 30;
+  t.append("assistant", "a".repeat(60));
+  const first = t.transcriptLines();
+  assert.equal(t.transcriptLines(), first, "an unchanged transcript returns the same cached array");
+
+  t.width = 60;
+  const widened = t.transcriptLines();
+  assert.notEqual(widened, first, "a width change invalidates the cache");
+  const plain = (l) => l.replace(/\x1b\[[0-9;]*m/g, "");
+  assert.ok(plain(widened[0]).length > plain(first[0]).length, "a wider terminal wraps less");
+
+  t.pushBlock({ kind: "user", text: "hi" });
+  const grew = t.transcriptLines();
+  assert.notEqual(grew, widened, "a new block invalidates the assembly");
+  assert.ok(grew.length > widened.length);
+});
+
+test("render cache: a folded text append re-wraps the tail, never stale lines", () => {
+  const t = new MinimalTui({ model: "m" });
+  t.width = 40;
+  t.append("assistant", "alpha");
+  const before = t.transcriptLines();
+  t.append("assistant", " beta");
+  const after = t.transcriptLines();
+  assert.notEqual(after, before, "appending to the live block invalidates the assembly");
+  assert.ok(after.some((l) => l.replace(/\x1b\[[0-9;]*m/g, "").includes("alpha beta")));
+});
+
 test("/show prints a block in full, including the stored tool result", async () => {
   const t = new MinimalTui({ model: "m" });
   t.history = [

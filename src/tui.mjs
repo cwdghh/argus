@@ -52,7 +52,7 @@ import {
   nextCharIndex,
   previousWordIndex,
 } from "./tui/renderers.mjs";
-import { blockLines } from "./tui/blocks.mjs";
+import { blockLinesCached } from "./tui/blocks.mjs";
 
 const ESC = "\x1b";
 // Pastes beyond either bound render the submitted user block as `[pasted N …]`
@@ -60,6 +60,17 @@ const ESC = "\x1b";
 // actually reaches the model.
 const PASTE_ABBREV_CHARS = 1000;
 const PASTE_ABBREV_LINES = 20;
+// Agent events whose block projection changes the transcript; only these
+// invalidate the rendered-line cache (usage/cwd_change/assistant_* do not).
+const BLOCK_PROJECTING_EVENTS = new Set([
+  "thinking_delta",
+  "text_delta",
+  "tool_call",
+  "tool_result",
+  "approval",
+  "compacted",
+  "retrying",
+]);
 
 export class MinimalTui {
   constructor(config, opts = {}) {
@@ -130,9 +141,19 @@ export class MinimalTui {
     // Editor row count from the last rendered frame, used by scrolling
     // helpers between frames (the layout pass computes the exact value).
     this.editorHeight = 1;
+    // Render cache (W6.2): a per-block cache re-wraps only the mutated tail,
+    // and the assembled lines are memoized until a block changes or the width
+    // changes. All block mutations bump this._renderStamp.
+    this._renderStamp = 0;
+    this._lines = null;
+    this._linesWidth = -1;
+    this._linesStamp = -1;
   }
 
   transcriptLines() {
+    if (this._lines && this._linesWidth === this.width && this._linesStamp === this._renderStamp) {
+      return this._lines;
+    }
     const out = [];
     let lastKind = null;
     for (const block of this.blocks) {
@@ -155,8 +176,11 @@ export class MinimalTui {
         }
       }
       lastKind = block.kind;
-      out.push(...blockLines(block, this.width));
+      out.push(...blockLinesCached(block, this.width));
     }
+    this._lines = out;
+    this._linesWidth = this.width;
+    this._linesStamp = this._renderStamp;
     return out;
   }
 
@@ -220,11 +244,13 @@ export class MinimalTui {
 
   pushBlock(block) {
     this.blocks.push(block);
+    this._renderStamp++;
     this.dirtyRendered = true;
   }
 
   append(kind, delta) {
     appendBlock(this.blocks, kind, delta);
+    this._renderStamp++;
     this.dirtyRendered = true;
   }
 
@@ -286,6 +312,9 @@ export class MinimalTui {
         } else {
           consumeAgentEvent(this.blocks, ev);
         }
+        // The projector mutates this.blocks directly (bypassing pushBlock), so
+        // bump the render stamp for exactly the events that produced blocks.
+        if (BLOCK_PROJECTING_EVENTS.has(ev.type)) this._renderStamp++;
         this.dirtyRendered = true;
       }, {
         signal: ac.signal,
@@ -380,6 +409,7 @@ export class MinimalTui {
     this.config = { ...this.config, model: next.model ?? this.defaultModel };
     this.history = next.history ?? [];
     this.blocks = [...(next.blocks ?? []), { kind: "result", ok: true, summary }];
+    this._renderStamp++;
     this.lastTurnDurationMs = [...(next.blocks ?? [])].reverse().find((block) => block.kind === "timing")?.durationMs ?? null;
     this.lastTurnUsage = [...(next.blocks ?? [])].reverse().find((block) => block.kind === "timing")?.usage ?? null;
     this.editor.history = this.history

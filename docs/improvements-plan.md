@@ -222,7 +222,8 @@ user abort; suites green.
 2. **Per-block rendered-line cache** — `transcriptLines()` re-wraps/re-tokenizes
    every block (~25×/s while streaming, full markdown incl. tables) and
    `maxScroll()` re-walks it; key on `(blocks.length, width)`, rebuild only the
-   tail → O(delta). Large payoff on long sessions.
+   tail → O(delta). Large payoff on long sessions. **Status: shipped
+   2026-09-01** (see PROGRESS).
 3. **LLM-assisted structured compaction** — replace the lossy
    `User:…|Assistant:…` digest (`compact.mjs:96-111`) with a one-call
    Goal/Constraints/Progress/Next-Steps summary (pi `compact.ts`), fallback to

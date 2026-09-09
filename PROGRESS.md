@@ -4,6 +4,23 @@ Dated changelog, **newest first** (this file is a log — never edit entries in 
 
 ---
 
+#### 2026-09-01 — per-block rendered-line cache (plan W6.2)
+
+**Status: ✅ done** (tests under `test/tui.test.mjs`)
+
+- `blockLinesCached` (per-block WeakMap keyed by object identity, width, and a
+  text snapshot — exact, since only text-carrying blocks mutate in place)
+  means a frame re-wraps only the block that actually changed, not every block
+  in a long session. The assembled `transcriptLines()` output is memoid until a
+  block changes (`_renderStamp` is bumped by `pushBlock`, `append`, the event
+  handler's block projection, and `applySession`) or the width changes, so
+  `maxScroll()`/layout reads of the transcript cost nothing between frames.
+  `usage`/`cwd_change`/`assistant_*` events don't invalidate.
+
+Verified in this session: `node --test` **296/296 pass** (2 new cache tests).
+
+---
+
 #### 2026-09-01 — shared agent-event → block projector (plan W6.6)
 
 **Status: ✅ done** (tests under `test/transcript.test.mjs`)
