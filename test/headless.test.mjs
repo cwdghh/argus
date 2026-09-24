@@ -61,6 +61,32 @@ test("headless: error -> exitCode 1 and error block saved", async (t) => {
   process.exitCode = 0;
 });
 
+test("headless: truncated and limited runs exit nonzero with saved status", async (t) => {
+  const srv = await createMockServer((i) => i === 0
+    ? [{ content: "partial" }, { finishReason: "length" }]
+    : [{ content: "ok" }]);
+  t.after(() => srv.close());
+  const config = { baseUrl: srv.url, apiKey: "", model: "mock", systemPrompt: "s" };
+  const session = new Session("hs-outcomes", config);
+  const out = [];
+  const err = [];
+  await runHeadless(config, "first", { session, stdout: (s) => out.push(s), stderr: (s) => err.push(s) });
+  assert.equal(out.join(""), "partial\n");
+  assert.equal(process.exitCode, 1);
+  assert.match(err.join(""), /truncated: model output reached its limit/);
+  await runHeadless(config, "second", { session, stdout: () => {}, stderr: () => {} });
+  assert.equal(process.exitCode, 0);
+  await runHeadless({ ...config, maxRequestChars: 10 }, "third", { session, stdout: () => {}, stderr: () => {} });
+  assert.equal(process.exitCode, 1);
+  const loaded = await loadSession("hs-outcomes");
+  assert.equal(loaded.turns[0].blocks.at(-1).outcome, "truncated");
+  assert.equal(loaded.turns[0].blocks.at(-1).reason, "model_length");
+  assert.ok(loaded.turns[0].blocks.at(-1).requestUsage);
+  assert.equal(loaded.turns[2].blocks.at(-1).outcome, "limited");
+  assert.equal(loaded.turns[2].blocks.at(-1).reason, "request_size_limit");
+  process.exitCode = 0;
+});
+
 test("headless: a session's stored model override is used for the request", async (t) => {
   const session = new Session("hs-model", { model: "base", systemPrompt: "s" });
   await session.setModel("deepseek-chat");

@@ -85,6 +85,9 @@ npm start -- --help
 Assistant text goes to stdout; reasoning, tool calls, and errors go to stderr.
 A named session resumes its history and saves the new turn. Destructive shell
 commands requiring human approval are blocked in headless mode.
+Exit status is 0 when the model ends normally, 130 when interrupted, and 1 for
+failed, truncated, or locally limited runs. Normal completion does not certify
+the requested work is correct.
 
 ## Execution and limits
 
@@ -98,8 +101,10 @@ See [the tool contract](docs/tools.md) for exact behavior.
 Long conversations use deterministic compaction. Tool results and complete
 requests have size limits, and model calls have retry/timeout/step bounds.
 Oversized tool results can be inspected through their saved spill path. Reported
-usage is a context/output display metric, not a billing total. Lossless interrupt
-and continue, steering, semantic compaction, and provider fallback remain future
+usage in the footer is a context/output display metric, not a billing total.
+Saved timing records also retain reported usage by network attempt, with missing
+reports marked unknown. Checkpointed interrupt and continue, steering, semantic
+compaction, and provider fallback remain future
 work; [GAPS.md](GAPS.md) records current limitations.
 
 ## Develop

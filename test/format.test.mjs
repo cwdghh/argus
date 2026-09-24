@@ -97,6 +97,8 @@ test("previewResult: paged reads strip the hint and count remaining file lines",
 
 test("previewResult: errors and non-text results degrade cleanly", () => {
   assert.equal(previewResult({ error: true, message: "boom" }), "boom");
+  assert.equal(previewResult({ error: true, message: "command failed", stdout: "test output", stderr: "failure detail" }),
+    "stdout:\ntest output\nstderr:\nfailure detail");
   assert.equal(previewResult({ error: true }), "…");
   assert.equal(previewResult({ ok: true, replacements: 3 }), "");
   assert.equal(previewResult(null), "");

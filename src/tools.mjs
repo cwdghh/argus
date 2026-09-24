@@ -21,7 +21,7 @@ function fitReadResult({ file, lines, startDisplay, totalLines, endsWithNewline,
       .map((line, i) => String(startDisplay + i).padStart(gutter) + " │ " + line)
       .join("\n");
     if (hasMore) {
-      numberedText = numberedText.trimEnd() +
+      numberedText +=
         `\n\n[Showing lines ${startDisplay}-${endDisplay} of ${totalLines}. Use offset=${endDisplay + 1} to continue.]`;
     } else if (endsWithNewline && count > 0) {
       numberedText += "\n";
@@ -61,9 +61,9 @@ export const tools = [
     name: "read",
     risk: "read-only",
     description:
-      "Read a text file as bounded numberedText with absolute 1-indexed line prefixes. " +
-      "The prefixes select ranges and are not file content. Use offset/limit and nextOffset to page. " +
-      "Paths are relative to the current working directory. Use this instead of bash for text files.",
+      "Read a UTF-8 text file with 1-indexed line numbers. The line-number gutter is not file content. " +
+      "Use offset/limit to page; a partial result gives nextOffset. Relative paths use the current working directory. " +
+      "Use read instead of bash for ordinary text-file inspection.",
     parameters: {
       type: "object",
       properties: {
@@ -122,10 +122,9 @@ export const tools = [
     name: "write",
     risk: "filesystem-write",
     description:
-      "Create a complete text file. Set ensureFinalNewline=true to append LF when content lacks one; " +
-      "false writes content exactly. Existing files are protected unless overwrite=true. " +
-      "Use this instead of bash redirection or heredocs for text files; use edit for targeted changes " +
-      "to an existing file.",
+      "Create a complete text file. Existing files are protected unless overwrite=true. " +
+      "Set ensureFinalNewline=true to append LF when needed; false preserves content exactly. " +
+      "Use edit for targeted changes to an existing file; do not use bash redirection for text files.",
     parameters: {
       type: "object",
       properties: {
@@ -168,13 +167,11 @@ export const tools = [
     name: "edit",
     risk: "filesystem-write",
     description:
-      "Apply an atomic edits[] batch to an existing file. Each item uses exactly one selector: " +
-      "{old,new} replaces unique content (all=true replaces every match), or " +
-      "{startLine,endLine,new} replaces the freshly read inclusive lines (line-oriented, so a " +
-      "single-line replacement with new='X' does not merge the next line; endLine=startLine-1 inserts; " +
-      "new='' deletes). old may include read's line prefixes; new must contain only file text. " +
-      "Exact content falls back to whitespace/punctuation-tolerant matching. Use " +
-      "this instead of shell text-rewrite commands.",
+      "Edit an existing text file atomically. Each edits[] item is either {old,new} for unique text " +
+      "replacement, or {startLine,endLine?,new} for whole-line replacement after reading those lines " +
+      "in this turn. For insertion, set endLine=startLine-1; new='' deletes selected lines. " +
+      "all=true applies only to {old,new} and replaces every match. old may include read's line-number " +
+      "gutter; new must be plain file text. Use edit instead of bash for text changes.",
     parameters: {
       type: "object",
       properties: {
@@ -195,7 +192,7 @@ export const tools = [
           },
           minItems: 1,
         },
-        all: { type: "boolean", description: "Replace every occurrence of old (default: false)" },
+        all: { type: "boolean", description: "For content edits only: replace every occurrence of old (default: false)" },
       },
       required: ["path", "edits"],
       additionalProperties: false,
@@ -208,6 +205,8 @@ export const tools = [
         const hasStart = Object.hasOwn(item, "startLine");
         if (hasOld === hasStart) return `edit argument edits[${i}] must provide exactly one of old or startLine`;
         if (!Object.hasOwn(item, "new")) return `edit argument edits[${i}] is missing required argument: new`;
+        if (!hasStart && Object.hasOwn(item, "endLine")) return `edit argument edits[${i}].endLine requires startLine`;
+        if (hasStart && args.all === true) return "edit argument all=true requires content edits only";
         if (hasStart && item.endLine !== undefined && item.endLine !== item.startLine - 1 && item.endLine < item.startLine) {
           return `edit argument edits[${i}].endLine must be startLine - 1 (insert) or >= startLine`;
         }

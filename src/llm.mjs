@@ -20,6 +20,8 @@
 // Timeout defaults (also the .env.example template). Reasoning models can
 // spend a long time "thinking" before the first byte or between chunks, so
 // both are generous; mirror the values in src/config.mjs.
+import { randomUUID } from "node:crypto";
+
 const DEFAULT_REQUEST_TIMEOUT_MS = 600_000;
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000;
 const DEFAULT_QUOTA_RETRY_DELAY_MS = 10_000;
@@ -62,7 +64,10 @@ export function buildBody({ model, systemPrompt, messages, tools, contextCache }
   const system = contextCache
     ? { role: "system", content: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }] }
     : { role: "system", content: systemPrompt };
-  const bodyMessages = contextCache ? markNewestMessage(messages) : messages;
+  // Local outcome metadata stays in the transcript but is not a Chat message
+  // field accepted by compatible providers.
+  const projectedMessages = messages.map(({ partial, truncated, ...wire }) => wire);
+  const bodyMessages = contextCache ? markNewestMessage(projectedMessages) : projectedMessages;
   return {
     model,
     messages: [system, ...bodyMessages],
@@ -128,6 +133,8 @@ async function request({ baseUrl, apiKey, body, signal, requestTimeoutMs, maxRet
   const url = `${baseUrl.replace(/\/+$/, "")}${CHAT_PATH}`;
 
   for (let generic = 0, quota = 0; ; ) {
+    const attemptId = randomUUID();
+    onEvent?.({ type: "request_attempt", attemptId, model: body.model });
     const timeoutSignal = AbortSignal.timeout(timeoutMs);
     const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
     let backoffMs;
@@ -142,7 +149,7 @@ async function request({ baseUrl, apiKey, body, signal, requestTimeoutMs, maxRet
         body: JSON.stringify(body),
         signal: requestSignal,
       });
-      if (res.ok) return { response: res, timeoutSignal };
+      if (res.ok) return { response: res, timeoutSignal, attemptId };
 
       const responseText = await res.text();
       // A 429 can mean "slow down" (rate limit) or "you are out of money"
@@ -163,6 +170,7 @@ async function request({ baseUrl, apiKey, body, signal, requestTimeoutMs, maxRet
         backoffMs = 250 * 2 ** (generic - 1);
       }
     } catch (err) {
+      if (err.eventCallbackError) throw err;
       if (signal?.aborted) throw err;
       if (timeoutSignal.aborted) {
         if (generic >= genericBudget) throw new Error(`LLM request timed out after ${timeoutMs}ms`);
@@ -302,6 +310,7 @@ export async function* streamChat({
   const body = requestBody ?? buildBody({ model, systemPrompt, messages, tools, contextCache });
   let state = createChatStreamState();
   let timeoutSignal = null;
+  let attemptId = null;
   const idleTimeoutMs = streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS;
 
   try {
@@ -318,6 +327,7 @@ export async function* streamChat({
     });
     const res = requested.response;
     timeoutSignal = requested.timeoutSignal;
+    attemptId = requested.attemptId;
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -335,7 +345,7 @@ export async function* streamChat({
         const data = ssePayload(line);
         if (data == null) continue; // comments, heartbeats, events without data
         if (data === "[DONE]") {
-          yield { type: "done", finishReason: state.finishReason, usage: state.usage, message: assembleChatMessage(state) };
+          yield { type: "done", attemptId, finishReason: state.finishReason, usage: state.usage, message: assembleChatMessage(state) };
           return;
         }
 
@@ -348,13 +358,15 @@ export async function* streamChat({
 
         const { state: next, events } = foldChatDelta(state, json);
         state = next;
+        if (json.usage) yield { type: "usage_report", attemptId, usage: json.usage };
         for (const ev of events) yield ev;
       }
     }
 
     // Stream ended without [DONE] sentinel; still emit what we assembled.
-    yield { type: "done", finishReason: state.finishReason, usage: state.usage, message: assembleChatMessage(state) };
+    yield { type: "done", attemptId, finishReason: state.finishReason, usage: state.usage, message: assembleChatMessage(state) };
   } catch (err) {
+    if (err.eventCallbackError) throw err;
     if (timeoutSignal?.aborted && !signal?.aborted) {
       throw new Error(`LLM request timed out after ${requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS}ms`);
     }
@@ -362,7 +374,7 @@ export async function* streamChat({
       throw err;
     }
     if (signal?.aborted || err?.name === "AbortError") {
-      yield { type: "done", aborted: true, finishReason: state.finishReason, usage: state.usage, message: assembleChatMessage(state) };
+      yield { type: "done", attemptId, aborted: true, finishReason: state.finishReason, usage: state.usage, message: assembleChatMessage(state) };
       return;
     }
     throw err;

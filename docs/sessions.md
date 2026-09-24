@@ -35,9 +35,15 @@ when a session changed configuration.
 
 Messages record the user prompt, assistant tool calls, and serialized tool
 results. Display blocks additionally retain reasoning, previews, authorization,
-and timing. These support inspection of the conversation and schema in use;
-compacted requests, transport extensions, and interrupted network streams are
-not byte-for-byte HTTP request recordings.
+and timing. A partial assistant message has local `partial: true` metadata, and
+a truncated model reply has local `truncated: true` metadata; neither flag is
+sent as a provider message field. New timing blocks may record `runId`, terminal
+`outcome`/`reason`, observed `partial` text/reasoning, per-request usage and
+tool-attempt IDs. Earlier timing blocks without these fields remain readable.
+Request totals sum reported counts only; `complete: false` means at least one
+attempt lacks a full core usage report. These fields support inspection of the
+conversation and schema in use. Compacted requests, transport extensions, and
+interrupted network streams are not byte-for-byte HTTP request recordings.
 
 ## Reading and recovery
 
@@ -71,4 +77,5 @@ the active session and applies in both frontends.
 
 Session data is never migrated or pruned merely by a source refactor. Cleanup is
 an explicit command or the user's configured retention policy. Interrupt and
-continue remains planned in [interrupt-resume.md](interrupt-resume.md).
+continue with crash-safe checkpoints remains planned in
+[interrupt-resume.md](interrupt-resume.md); a turn is still saved only at its end.

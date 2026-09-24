@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createMockServer } from "./helpers/mock-llm.mjs";
 import { runTurn } from "../src/agent.mjs";
 import { executeToolCall } from "../src/agent/tool-call.mjs";
-import { accumulateUsage } from "../src/agent/usage.mjs";
+import { accumulateUsage, reportedRequestUsage, totalReportedUsage } from "../src/agent/usage.mjs";
 import { canonicalToolCall } from "../src/agent/turn-state.mjs";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,9 +14,9 @@ const config = (srv) => ({ baseUrl: srv.url, apiKey: "", model: "mock", systemPr
 test("text-only turn returns the streamed content", async (t) => {
   const srv = await createMockServer(() => [{ content: "**ok**" }]);
   t.after(() => srv.close());
-  const { finalText, aborted, messages } = await runTurn(config(srv), [], "hi", () => {});
+  const { finalText, outcome, messages } = await runTurn(config(srv), [], "hi", () => {});
   assert.equal(finalText, "**ok**");
-  assert.equal(aborted, false);
+  assert.equal(outcome, "completed");
   assert.equal(messages.length, 2); // user + assistant
 });
 
@@ -36,15 +36,43 @@ test("tool call then final text feeds results back", async (t) => {
   assert.ok(messages.some((m) => m.role === "tool"), "tool result present in messages");
 });
 
-test("abort mid-stream returns aborted without incomplete reply", async (t) => {
+test("abort mid-stream preserves observed text without incomplete tool calls", async (t) => {
   const srv = await createMockServer(() => [{ content: "a" }, { delay: 500 }, { content: "b" }]);
   t.after(() => srv.close());
   const ac = new AbortController();
   const p = runTurn(config(srv), [], "hi", () => {}, { signal: ac.signal });
   setTimeout(() => ac.abort(), 50);
   const res = await p;
-  assert.equal(res.aborted, true);
-  assert.equal(res.finalText, "");
+  assert.equal(res.outcome, "interrupted");
+  assert.equal(res.partial.text, "a");
+  assert.equal(res.messages.at(-1).content, "a");
+  assert.equal(res.messages.at(-1).partial, true);
+});
+
+test("a late stop keeps a completed reply but prevents pending tool dispatch", async (t) => {
+  const finalServer = await createMockServer(() => [{ content: "done" }]);
+  t.after(() => finalServer.close());
+  const finalAbort = new AbortController();
+  const completed = await runTurn(config(finalServer), [], "hi", (event) => {
+    if (event.type === "assistant_stop") finalAbort.abort();
+  }, { signal: finalAbort.signal });
+  assert.equal(completed.outcome, "completed");
+  assert.equal(completed.finalText, "done");
+
+  const dir = mkdtempSync(join(tmpdir(), "argus-late-stop-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const toolServer = await createMockServer(() => [
+    { tool_calls: [{ index: 0, id: "c1", function: { name: "bash", arguments: '{"command":"touch should-not-run"}' } }] },
+  ]);
+  t.after(() => toolServer.close());
+  const toolAbort = new AbortController();
+  const stopped = await runTurn(config(toolServer), [], "hi", (event) => {
+    if (event.type === "assistant_stop") toolAbort.abort();
+  }, { signal: toolAbort.signal, cwd: dir });
+  assert.equal(stopped.outcome, "interrupted");
+  assert.equal(stopped.toolAttempts.length, 0);
+  assert.match(stopped.messages.at(-1).content, /never executed/);
+  assert.equal(existsSync(join(dir, "should-not-run")), false);
 });
 
 test("multi-step usage reports the largest context, never a per-step sum", async (t) => {
@@ -62,7 +90,7 @@ test("multi-step usage reports the largest context, never a per-step sum", async
   });
   t.after(() => srv.close());
   const seen = [];
-  const { finalText, usage } = await runTurn(config(srv), [], "go", (e) => {
+  const { finalText, usage, requestUsage, toolAttempts, runId } = await runTurn(config(srv), [], "go", (e) => {
     if (e.type === "usage") seen.push(e.usage);
   });
   assert.equal(finalText, "done");
@@ -72,6 +100,14 @@ test("multi-step usage reports the largest context, never a per-step sum", async
   assert.equal(usage.prompt_tokens, 130);
   assert.equal(usage.completion_tokens, 35); // 10 + 25
   assert.equal(usage.total_tokens, 165); // 130 + 35
+  assert.equal(requestUsage.attempts.length, 2);
+  assert.notEqual(requestUsage.attempts[0].id, requestUsage.attempts[1].id);
+  assert.deepEqual(requestUsage.attempts.map((attempt) => attempt.usage.prompt_tokens), [100, 130]);
+  assert.equal(requestUsage.totals.prompt_tokens, 230, "reported request input sums all actual requests");
+  assert.equal(requestUsage.totals.completion_tokens, 35);
+  assert.equal(requestUsage.totals.complete, true);
+  assert.equal(toolAttempts.length, 1);
+  assert.match(toolAttempts[0].id, new RegExp(`^${runId}:tool:`));
   assert.deepEqual(seen[0], { prompt_tokens: 100, completion_tokens: 10, total_tokens: 110, reasoning_tokens: 0, cached_tokens: 0, cache_creation_input_tokens: 0 });
   assert.deepEqual(seen[1], { prompt_tokens: 130, completion_tokens: 35, total_tokens: 165, reasoning_tokens: 0, cached_tokens: 0, cache_creation_input_tokens: 0 });
 });
@@ -99,8 +135,12 @@ test("an interrupted turn records only the steps that reported usage", async (t)
   assert.ok(srv.calls() >= 2, "second model request never started");
   ac.abort();
   const res = await p;
-  assert.equal(res.aborted, true);
+  assert.equal(res.outcome, "interrupted");
   assert.deepEqual(res.usage, { prompt_tokens: 100, completion_tokens: 12, total_tokens: 112, reasoning_tokens: 0, cached_tokens: 0, cache_creation_input_tokens: 0 });
+  assert.equal(res.requestUsage.attempts.length, 2);
+  assert.equal(res.requestUsage.attempts[0].usage.prompt_tokens, 100);
+  assert.equal(res.requestUsage.attempts[1].usage, null);
+  assert.equal(res.requestUsage.totals.complete, false);
 });
 
 test("real last-request tokens trigger compaction before the next turn", async (t) => {
@@ -173,10 +213,10 @@ test("an identical repeated tool call stops the turn instead of looping", async 
     { tool_calls: [{ index: 0, id: "c1", function: { name: "bash", arguments: '{"command":"echo loop"}' } }] },
   ]);
   t.after(() => srv.close());
-  await assert.rejects(
-    runTurn(config(srv), [], "go", () => {}),
-    /repeated the same no-progress tool call 3 times \(bash\); this looks like a loop/,
-  );
+  const result = await runTurn(config(srv), [], "go", () => {});
+  assert.equal(result.outcome, "limited");
+  assert.equal(result.reason, "repeated_tool_call");
+  assert.match(result.message, /repeated the same no-progress tool call 3 times \(bash\)/);
   assert.equal(srv.calls(), 3, "stopped on the third identical request");
 });
 
@@ -194,10 +234,10 @@ test("an alternating A/B/A/B loop of identical pairs also stops the turn", async
     },
   ]);
   t.after(() => srv.close());
-  await assert.rejects(
-    runTurn(config(srv), [], "go", () => {}),
-    /alternated two no-progress tool calls 3 times \(bash \/ bash\); this looks like a loop/,
-  );
+  const result = await runTurn(config(srv), [], "go", () => {});
+  assert.equal(result.outcome, "limited");
+  assert.equal(result.reason, "alternating_tool_calls");
+  assert.match(result.message, /alternated two no-progress tool calls 3 times \(bash \/ bash\)/);
   assert.equal(srv.calls(), 7, "stopped once the alternation repeated its cycle");
 });
 
@@ -206,15 +246,10 @@ test("no persisted turn violates tool-call pairing on a mid-loop guard", async (
     { tool_calls: [{ index: 0, id: "c1", function: { name: "bash", arguments: '{"command":"true"}' } }] },
   ]);
   t.after(() => srv.close());
-  let err;
-  try {
-    await runTurn(config(srv, { maxSteps: 2 }), [], "loop", () => {});
-  } catch (e) {
-    err = e;
-  }
-  assert.ok(err, "the max-steps guard threw");
-  assertProtocolSafe(err.turnMessages);
-  const synthesized = err.turnMessages.filter(
+  const result = await runTurn(config(srv, { maxSteps: 2 }), [], "loop", () => {});
+  assert.equal(result.outcome, "limited");
+  assertProtocolSafe(result.messages);
+  const synthesized = result.messages.filter(
     (m) => m.role === "tool" && (() => { try { return JSON.parse(m.content).error; } catch { return false; } })(),
   );
   assert.equal(synthesized.length, 1, "the never-executed tool_call got a synthetic error result");
@@ -282,7 +317,9 @@ test("the final allowed model step cannot perform an orphaned mutation", async (
     await srv.close();
     rmSync(dir, { recursive: true, force: true });
   });
-  await assert.rejects(runTurn(config(srv), [], "write", () => {}, { cwd: dir, maxSteps: 1 }), /no follow-up model step remains/);
+  const result = await runTurn(config(srv), [], "write", () => {}, { cwd: dir, maxSteps: 1 });
+  assert.equal(result.outcome, "limited");
+  assert.equal(result.reason, "step_limit_before_tool");
   assert.equal(existsSync(join(dir, "a.txt")), false);
 });
 
@@ -293,10 +330,9 @@ test("cumulative tool output is bounded inside an active turn", async (t) => {
     return [{ tool_calls: [{ index: 0, id: `c${i}`, function: { name: "bash", arguments: JSON.stringify({ command }) } }] }];
   });
   t.after(() => srv.close());
-  await assert.rejects(
-    runTurn(config(srv), [], "large", () => {}, { maxToolResultChars: 500, maxTurnToolResultChars: 700 }),
-    /tool-result budget/,
-  );
+  const result = await runTurn(config(srv), [], "large", () => {}, { maxToolResultChars: 500, maxTurnToolResultChars: 700 });
+  assert.equal(result.outcome, "limited");
+  assert.equal(result.reason, "tool_result_budget");
 });
 
 test("persistent cwd: cd then pwd", async (t) => {
@@ -367,4 +403,43 @@ test("accumulateUsage never counts shared context more than once", () => {
   assert.deepEqual(c, { prompt_tokens: 90, completion_tokens: 110, total_tokens: 200, reasoning_tokens: 2, cached_tokens: 3, cache_creation_input_tokens: 0 });
   // A call with no reasoning/cached fields leaves those totals unchanged.
   assert.equal(c.reasoning_tokens + c.cached_tokens, 5);
+});
+
+test("request accounting keeps missing reports unknown", () => {
+  const first = reportedRequestUsage({ prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 });
+  assert.equal(reportedRequestUsage({ prompt_tokens: "missing" }), null);
+  assert.deepEqual(totalReportedUsage([{ usage: first }, { usage: null }]), {
+    prompt_tokens: 10,
+    completion_tokens: 4,
+    total_tokens: 14,
+    reasoning_tokens: null,
+    cached_tokens: null,
+    cache_creation_input_tokens: null,
+    complete: false,
+  });
+});
+
+test("repeated usage chunks count once for one request", async (t) => {
+  const srv = await createMockServer(() => [
+    { usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 } },
+    { usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } },
+    { content: "ok" },
+  ]);
+  t.after(() => srv.close());
+  const result = await runTurn(config(srv), [], "hi");
+  assert.equal(result.requestUsage.attempts.length, 1);
+  assert.equal(result.requestUsage.totals.total_tokens, 12);
+  assert.equal(result.requestUsage.totals.complete, true);
+});
+
+test("a frontend callback bug is not reported as a provider failure", async (t) => {
+  const srv = await createMockServer(() => [{ content: "ok" }]);
+  t.after(() => srv.close());
+  await assert.rejects(
+    runTurn(config(srv), [], "hi", (event) => {
+      if (event.type === "request_attempt") throw new Error("callback broke");
+    }),
+    /callback broke/,
+  );
+  assert.equal(srv.calls(), 0, "the callback error never triggered a network retry");
 });

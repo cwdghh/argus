@@ -90,6 +90,13 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
     writeErr(`\nerror: ${err.message}\n`);
   }
 
+  if (result && result.outcome !== "completed") {
+    const detail = result.message ?? (result.outcome === "truncated" ? "model output reached its limit" : result.outcome);
+    if (result.outcome === "failed") blocks.push({ kind: "error", text: detail });
+    else blocks.push({ kind: "result", ok: false, summary: `${result.outcome}: ${detail}` });
+    writeErr(`\n${result.outcome === "failed" ? "error" : result.outcome}: ${detail}\n`);
+  }
+
   // Persist the turn (including error blocks) regardless of outcome. A timing
   // block carries the real provider usage so later headless/TUI runs on this
   // session can drive compaction from real tokens.
@@ -102,12 +109,20 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
         /* non-fatal */
       }
     }
-    const outcome = error ? "failed" : result?.aborted ? "interrupted" : "completed";
+    const outcome = error ? "failed" : result?.outcome ?? "failed";
     blocks.push({
       kind: "timing",
       summary: `${outcome} in ${formatDuration(Date.now() - startedAt)}`,
       durationMs: Date.now() - startedAt,
       usage: result?.usage ?? error?.usage ?? null,
+      ...(result ? {
+        runId: result.runId,
+        outcome: result.outcome,
+        reason: result.reason,
+        partial: result.partial,
+        requestUsage: result.requestUsage,
+        toolAttempts: result.toolAttempts,
+      } : {}),
     });
     // The static config (incl. the often-large systemPrompt) is persisted once
     // per session; the turn itself stores only the model delta.
@@ -123,6 +138,6 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
     process.exitCode = 1;
     return;
   }
-  if (sawText || result.aborted) writeOut("\n");
-  process.exitCode = result.aborted ? 130 : 0;
+  if (sawText || result.outcome === "interrupted") writeOut("\n");
+  process.exitCode = result.outcome === "completed" ? 0 : result.outcome === "interrupted" ? 130 : 1;
 }

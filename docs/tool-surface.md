@@ -24,7 +24,8 @@ model request.
 ## Design rules
 
 1. **One canonical input shape.** The schema and recursive runtime validation
-   agree. There are no hidden model-call aliases or legacy executor shapes.
+   agree. Cross-field validation rejects ambiguous `edit` combinations. There
+   are no hidden model-call aliases or legacy executor shapes.
 2. **Sequential execution.** The provider receives the single-call hint. If it
    returns several calls, the loop executes them in order under the same policy
    and budgets; it never runs tools in parallel.
@@ -34,7 +35,8 @@ model request.
    reads and mutations remain attributable to the structured tools.
 4. **Failures are data.** Tool failures return `{ error: true, message, ... }`
    so the model can recover. Mutating successes keep `ok: true`; `read` and
-   `bash` return their natural payloads.
+   `bash` return their natural payloads. Shell capture overflow is an error with
+   unknown completion, not evidence that the command succeeded.
 5. **Output is bounded twice.** Every result has a per-result character cap,
    and every active turn has a cumulative tool-result budget. `read` also has
    line and byte bounds with structured pagination.

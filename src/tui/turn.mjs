@@ -47,8 +47,9 @@ export async function submitTurn(tui) {
   tui.abortController = ac;
   let savedMessages = [{ role: "user", content: text }];
   let outcome = "completed";
+  let result = null;
   try {
-    const { messages, aborted, cwd } = await runTurn(tui.config, tui.history, text, (ev) => {
+    result = await runTurn(tui.config, tui.history, text, (ev) => {
       // Mode/live-state tracking is frontend-specific; the blocks both
       // frontends persist come from the shared consumeAgentEvent so the TUI
       // and headless can never drift (W6.6).
@@ -87,12 +88,14 @@ export async function submitTurn(tui) {
       // prompt + its completion); feeds the 200K-token compaction trigger.
       lastTokens: nextContextTokens(tui.lastTurnUsage),
     });
-    savedMessages = messages;
-    tui.history.push(...messages);
-    if (typeof cwd === "string") tui.cwd = cwd;
-    if (aborted || ac.signal.aborted) {
-      outcome = "interrupted";
-      tui.pushBlock({ kind: "result", ok: false, summary: "⏹ interrupted" });
+    savedMessages = result.messages;
+    tui.history.push(...result.messages);
+    if (typeof result.cwd === "string") tui.cwd = result.cwd;
+    outcome = result.outcome;
+    if (outcome !== "completed") {
+      const detail = result.message ?? (outcome === "truncated" ? "model output reached its limit" : outcome);
+      if (outcome === "failed") tui.pushBlock({ kind: "error", text: detail });
+      else tui.pushBlock({ kind: "result", ok: false, summary: outcome === "interrupted" ? "⏹ interrupted" : `${outcome}: ${detail}` });
     }
   } catch (err) {
     savedMessages = err.turnMessages ?? savedMessages;
@@ -107,8 +110,21 @@ export async function submitTurn(tui) {
   } finally {
     const durationMs = tui.activityStartedAt == null ? 0 : tui.now() - tui.activityStartedAt;
     tui.lastTurnDurationMs = durationMs;
-    tui.lastTurnUsage = tui.turnUsage;
-    tui.pushBlock({ kind: "timing", summary: `${outcome} in ${formatDuration(durationMs)}`, durationMs, usage: tui.turnUsage });
+    tui.lastTurnUsage = result?.usage ?? tui.turnUsage;
+    tui.pushBlock({
+      kind: "timing",
+      summary: `${outcome} in ${formatDuration(durationMs)}`,
+      durationMs,
+      usage: tui.lastTurnUsage,
+      ...(result ? {
+        runId: result.runId,
+        outcome: result.outcome,
+        reason: result.reason,
+        partial: result.partial,
+        requestUsage: result.requestUsage,
+        toolAttempts: result.toolAttempts,
+      } : {}),
+    });
     if (tui.session) {
       try {
         await tui.session.setCwd(tui.cwd);

@@ -25,7 +25,12 @@ export async function runModelStep(config, outgoingMessages, toolList, { body, o
     let sawContent = false;
     const forward = (ev) => {
       if (ev.type === "text_delta" || ev.type === "thinking_delta") sawContent = true;
-      onEvent(ev);
+      try {
+        onEvent(ev);
+      } catch (err) {
+        err.eventCallbackError = true;
+        throw err;
+      }
     };
     try {
       return {
@@ -37,7 +42,7 @@ export async function runModelStep(config, outgoingMessages, toolList, { body, o
       // already streamed visible text, or a request that *already* exhausted
       // its in-`request()` retry budget (`LLM request …` errors) all fail the
       // step — re-running those would duplicate text or multiply the retries.
-      if (signal?.aborted || sawContent || err?.message?.startsWith("LLM request ") || attempt >= stepRetries) throw err;
+      if (err.eventCallbackError || signal?.aborted || sawContent || err?.message?.startsWith("LLM request ") || attempt >= stepRetries) throw err;
       const delayMs = 250 * 2 ** attempt;
       onEvent({ type: "retrying", reason: "step", attempt: attempt + 1, budget: stepRetries, delayMs });
       await abortableDelay(delayMs, signal);
@@ -66,21 +71,47 @@ async function streamAssistant(config, messages, toolList, onEvent, signal, body
   let message = null;
   let finishReason = null;
   let usage = null;
-  for await (const ev of stream) {
-    if (ev.type === "text_delta") {
-      onEvent({ type: "text_delta", delta: ev.delta });
-    } else if (ev.type === "thinking_delta") {
-      onEvent({ type: "thinking_delta", delta: ev.delta });
-    } else if (ev.type === "done") {
-      message = ev.message;
-      finishReason = ev.finishReason;
-      usage = ev.usage ?? null;
+  let attemptId = null;
+  let aborted = false;
+  let partialText = "";
+  let partialReasoning = "";
+  try {
+    for await (const ev of stream) {
+      if (ev.type === "text_delta") {
+        partialText += ev.delta;
+        onEvent({ type: "text_delta", delta: ev.delta });
+      } else if (ev.type === "thinking_delta") {
+        partialReasoning += ev.delta;
+        onEvent({ type: "thinking_delta", delta: ev.delta });
+      } else if (ev.type === "usage_report") {
+        usage = ev.usage;
+        attemptId = ev.attemptId;
+        onEvent({ type: "request_usage", attemptId, usage });
+      } else if (ev.type === "done") {
+        message = ev.message;
+        finishReason = ev.finishReason;
+        usage = ev.usage ?? null;
+        attemptId = ev.attemptId;
+        aborted = ev.aborted === true;
+      }
     }
+  } catch (err) {
+    err.partial = { text: partialText, reasoning: partialReasoning };
+    if (!err.eventCallbackError) err.operational = true;
+    throw err;
   }
-  if (!message) throw new Error("model returned no message");
-  if (!message.content && !(message.tool_calls?.length > 0) && !signal?.aborted) {
-    throw new Error("model returned an empty response");
+  if (!message) {
+    const err = new Error("model returned no message");
+    err.operational = true;
+    err.partial = { text: partialText, reasoning: partialReasoning };
+    throw err;
+  }
+  if (!message.content && !(message.tool_calls?.length > 0) && !aborted && !signal?.aborted) {
+    const err = new Error("model returned an empty response");
+    err.operational = true;
+    err.partial = { text: partialText, reasoning: partialReasoning };
+    throw err;
   }
   onEvent({ type: "assistant_stop" });
-  return { message, finishReason, usage };
+  return { message, finishReason, usage, attemptId, aborted, partial: { text: partialText, reasoning: partialReasoning } };
 }

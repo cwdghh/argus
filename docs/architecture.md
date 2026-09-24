@@ -18,14 +18,21 @@ CLI → TUI or headless → runTurn
 `src/agent.mjs` coordinates the turn. Its supporting modules in `src/agent/`
 own model-step retries, tool dispatch, result bounds/spill files, pure turn
 bookkeeping, and usage aggregation. None imports a frontend or session storage.
-The coordinator returns messages, cwd, usage, and outcome flags; exceptions also
-carry completed turn state so frontends can preserve work already performed.
+The coordinator returns one run result with `outcome` (`completed`,
+`interrupted`, `truncated`, `failed`, or `limited`), a stable `reason`, human
+`message`, messages, partial text/reasoning, cwd, display usage, and request/tool
+attempt records. `completed` means the model ended normally, not that the task is
+correct. Operational endings return this result; unexpected programming errors
+still throw with completed turn state for the frontends to preserve.
 
 `src/llm.mjs` owns HTTP requests, timeout/retry behavior, provider cache markers,
 and streaming. `src/sse.mjs` owns pure SSE framing and delta assembly. A request
 body is built once, measured before network I/O, then passed to the transport.
 POST retries and pre-content stream retries have separate ownership. Once visible
 text or reasoning has streamed, the step is not replayed automatically.
+Each network attempt gets a local ID. Its reported usage remains attached to
+that attempt; missing usage stays unknown. Model steps and tool attempts also
+have run-scoped local IDs, separate from provider tool-call IDs.
 
 Requests ask the provider for one tool call. Providers that return a batch are
 accepted and executed sequentially. Truncated replies are retained with a flag;
@@ -33,6 +40,9 @@ their tool calls receive explicit unexecuted results and never run. Every
 completed or failed turn keeps assistant/tool pairing intact. Step limits reserve
 a follow-up model response; repeated unchanged calls and alternating no-progress
 cycles are bounded. Exact tool guarantees belong in [tools.md](tools.md).
+Observed partial text is retained once on interruption or stream failure;
+incomplete tool arguments are not executed. Local `partial`/`truncated` message
+metadata is removed from outgoing provider requests.
 
 ## Tools and filesystem boundaries
 
@@ -55,7 +65,8 @@ and admission rule are in [tool-surface.md](tool-surface.md).
 
 The agent emits `user`, `assistant_start`, `thinking_delta`, `text_delta`,
 `assistant_stop`, `assistant_end`, `tool_call`, `tool_result`, `cwd_change`,
-`usage`, `approval`, `compacted`, and `retrying` events. `transcript.mjs` owns the
+`usage`, `request_attempt`, `request_usage`, `approval`, `compacted`, and
+`retrying` events. `transcript.mjs` owns the
 shared projection of relevant events into persisted display blocks. `format.mjs`
 owns labels, previews, durations, and usage formatting.
 
@@ -76,6 +87,9 @@ I/O remains in the frontend; tests can exercise state and rendering without a TT
 
 Headless mode uses the same agent and block projector, sending assistant text to
 stdout and operational output to stderr. It supports named-session persistence.
+Both frontends show the normalized terminal outcome. Headless exits zero only
+for normal model completion, 130 for user interruption, and 1 for failed,
+truncated, or limited runs.
 
 ## Sessions and configuration
 
@@ -102,5 +116,7 @@ There is no mid-turn compaction yet.
 Turn display usage keeps the largest reported prompt and sums completion/reasoning
 counts across steps. Cached counts use the largest reported share. These are
 context/output display metrics, not billing totals for repeated requests. The
-footer uses the latest provider prompt count available; compaction uses the
-previous turn's usage through `nextContextTokens()`.
+request ledger separately sums reported counts from each actual request attempt;
+missing reports remain unknown and totals do not estimate charges. The footer
+uses the latest provider prompt count available; compaction uses the previous
+turn's display usage through `nextContextTokens()`.

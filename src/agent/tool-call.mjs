@@ -14,7 +14,7 @@ import { boundToolResult } from "./tool-result.mjs";
  *
  * @returns {Promise<{ result: object, cwd: string }>}
  */
-export async function executeToolCall(call, { cwd, signal, confirm, authorize, maxToolResultChars, toolState, onEvent = () => {} }) {
+export async function executeToolCall(call, { cwd, signal, confirm, authorize, maxToolResultChars, toolState, attemptId, onEvent = () => {} }) {
   const toolName = call?.function?.name ?? "";
   const rawArguments = call?.function?.arguments;
   const tool = findTool(toolName);
@@ -27,7 +27,7 @@ export async function executeToolCall(call, { cwd, signal, confirm, authorize, m
     argumentError = "tool arguments were not valid JSON";
   }
 
-  onEvent({ type: "tool_call", name: toolName, args, raw: rawArguments, id: call?.id });
+  onEvent({ type: "tool_call", name: toolName, args, raw: rawArguments, id: call?.id, attemptId });
 
   let result;
   if (!tool) {
@@ -71,7 +71,7 @@ export async function executeToolCall(call, { cwd, signal, confirm, authorize, m
   }
 
   result = await boundToolResult(result, maxToolResultChars);
-  onEvent({ type: "tool_result", name: toolName, ok: !result?.error, result, id: call?.id });
+  onEvent({ type: "tool_result", name: toolName, ok: !result?.error, result, id: call?.id, attemptId });
 
   let nextCwd = cwd;
   if (result && typeof result.cwd === "string" && result.cwd !== cwd) {

@@ -35,3 +35,22 @@ test("spilled output stays complete and owner-private", async (t) => {
   assert.deepEqual(JSON.parse(await readFile(result.fullPath, "utf8")), original);
   if (process.platform !== "win32") assert.equal((await stat(result.fullPath)).mode & 0o777, 0o600);
 });
+
+test("a bounded error keeps its failure reason visible", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "argus-error-spill-"));
+  const previous = process.env.ARGUS_HOME;
+  process.env.ARGUS_HOME = root;
+  t.after(async () => {
+    if (previous === undefined) delete process.env.ARGUS_HOME;
+    else process.env.ARGUS_HOME = previous;
+    await rm(root, { recursive: true, force: true });
+  });
+  const result = await boundToolResult({
+    error: true,
+    stdout: "x".repeat(2_000),
+    message: "command completion is unknown",
+  }, 700);
+  assert.equal(result.error, true);
+  assert.match(result.message, /command completion is unknown/);
+  assert.ok(JSON.stringify(result).length <= 700);
+});

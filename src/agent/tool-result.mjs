@@ -34,7 +34,11 @@ export async function boundToolResult(result, maxChars = 50_000) {
   }
 
   let fullPath = await spillFullResult(serialized);
-  const message = `tool result exceeded ${maxChars} characters`;
+  const overflowMessage = `tool result exceeded ${maxChars} characters`;
+  const sourceMessage = result?.error && typeof result.message === "string"
+    ? result.message.slice(0, 200)
+    : null;
+  const message = sourceMessage ? `${sourceMessage}; ${overflowMessage}` : overflowMessage;
 
   // Previews are JSON fragments, so embedding them re-escapes quotes/backslashes
   // and inflates the payload beyond a naive character count — binary-search the

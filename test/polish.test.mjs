@@ -71,8 +71,23 @@ test("TUI records a completed turn's working time", async (t) => {
   tui.editor.buffer = "time this";
   await tui.submit();
   assert.equal(tui.lastTurnDurationMs, 2_500);
-  assert.deepEqual(tui.blocks.at(-1), { kind: "timing", summary: "completed in 2.5s", durationMs: 2_500, usage: null });
+  assert.deepEqual(
+    { kind: tui.blocks.at(-1).kind, summary: tui.blocks.at(-1).summary, durationMs: tui.blocks.at(-1).durationMs, usage: tui.blocks.at(-1).usage, outcome: tui.blocks.at(-1).outcome },
+    { kind: "timing", summary: "completed in 2.5s", durationMs: 2_500, usage: null, outcome: "completed" },
+  );
+  assert.equal(tui.blocks.at(-1).requestUsage.attempts.length, 1);
   assert.ok(tui.transcriptLines().some((line) => line.includes("completed in 2.5s")));
+});
+
+test("TUI shows a truncated run as unfinished", async (t) => {
+  const srv = await createMockServer(() => [{ content: "partial" }, { finishReason: "length" }]);
+  t.after(() => srv.close());
+  const tui = new MinimalTui({ baseUrl: srv.url, apiKey: "", model: "m", systemPrompt: "s" });
+  tui.editor.buffer = "go";
+  await tui.submit();
+  assert.ok(tui.blocks.some((block) => block.kind === "result" && block.ok === false && /truncated/.test(block.summary)));
+  assert.equal(tui.blocks.at(-1).outcome, "truncated");
+  assert.equal(tui.blocks.at(-1).reason, "model_length");
 });
 
 test("TUI records tool time separately from total turn time", async (t) => {

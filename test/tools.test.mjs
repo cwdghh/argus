@@ -76,6 +76,13 @@ test("read pages with offset/limit", withDir(async ({ tmp, write }) => {
   assert.ok(tail.numberedText.endsWith("│ n199\n"), "reproduces the file's final newline");
 }));
 
+test("read preserves trailing spaces on the last line of a page", withDir(async ({ tmp, write }) => {
+  write("spaces.txt", "first  \nsecond\n");
+  const page = await read.execute({ path: "spaces.txt", limit: 1 }, { cwd: tmp("") });
+  assert.match(page.numberedText, /^1 │ first  \n\n\[Showing lines/);
+  assert.equal(page.nextOffset, 2);
+}));
+
 test("read refuses an offset beyond the end of the file", withDir(async ({ tmp, write }) => {
   write("short.txt", "only one line");
   const r = await read.execute({ path: "short.txt", offset: 3 }, { cwd: tmp("") });
@@ -103,6 +110,9 @@ test("runtime validation enforces the full canonical schema", () => {
   assert.match(validateToolArgs(edit, { path: "x", edits: [] }), /at least 1 item/);
   assert.match(validateToolArgs(edit, { path: "x", edits: [{ old: "x" }] }), /missing required argument: new/);
   assert.match(validateToolArgs(edit, { path: "x", edits: [{ old: "x", startLine: 1, new: "y" }] }), /exactly one/);
+  assert.match(validateToolArgs(edit, { path: "x", edits: [{ old: "x", endLine: 2, new: "y" }] }), /endLine requires startLine/);
+  assert.match(validateToolArgs(edit, { path: "x", edits: [{ startLine: 1, new: "y" }], all: true }), /all=true requires content edits only/);
+  assert.match(validateToolArgs(edit, { path: "x", edits: [{ old: "x", new: "y" }, { startLine: 2, new: "z" }], all: true }), /all=true requires content edits only/);
   assert.match(validateToolArgs(edit, { path: "x", edits: [{ startLine: 1.5, new: "y" }] }), /must be integer/);
   assert.match(validateToolArgs(edit, { path: "x", edits: [{ old: "", new: "y" }] }), /must not be empty/);
   assert.match(validateToolArgs(edit, { path: "x", edits: [{ old: "x", new: "y", surprise: true }] }), /unknown argument/);
@@ -319,11 +329,13 @@ test("edit range mode can fill an empty file", withDir(async ({ tmp, write, cont
   assert.equal(content("empty.txt"), "hello");
 }));
 
-test("bash output overflowing maxBuffer is a truncated success, not an error", withDir(async ({ dir }) => {
+test("bash output overflow reports unknown completion with captured output", withDir(async ({ dir }) => {
   const command = `node -e ${JSON.stringify("process.stdout.write('x'.repeat(2_000_000))")}`;
   const r = await findTool("bash").execute({ command }, { cwd: dir });
-  assert.equal(r.error, undefined, JSON.stringify(r).slice(0, 200));
+  assert.equal(r.error, true);
   assert.equal(r.truncated, true);
+  assert.match(r.message, /completion is unknown/);
+  assert.equal(r.cwd, undefined);
   assert.ok(r.stdout.length <= 1024 * 1024, "captured output is clipped at maxBuffer");
   assert.ok(r.stdout.length > 0);
 }));

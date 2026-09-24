@@ -15,7 +15,9 @@ Before changing the repository:
 4. [tools.md](tools.md) and [tool-surface.md](tool-surface.md) — contract and design.
 5. [conventions.md](conventions.md) — how to implement and verify changes.
 6. [improvements-plan.md](improvements-plan.md) and [NEXT_STEPS.md](../NEXT_STEPS.md)
-   — the current execution brief and ranked next actions.
+   — execution briefs and ranked next actions. For future capability work, read
+   [product-direction.md](product-direction.md) and the selected brief's design;
+   pending product choices must not be treated as accepted decisions.
 
 Then read [GAPS.md](../GAPS.md), [PROGRESS.md](../PROGRESS.md),
 [sessions.md](sessions.md), or [debug-tool-failures.md](debug-tool-failures.md) as
@@ -41,8 +43,13 @@ competing defaults, status narratives, file maps, or roadmaps.
 | Dated change history and actual verification | `PROGRESS.md` |
 | Current design questions and limitations | `GAPS.md` |
 | Ranked next actions | `NEXT_STEPS.md` |
-| Implementation scope and acceptance for the next work | `docs/improvements-plan.md` |
-| Proposed interrupt/continue interaction | `docs/interrupt-resume.md` |
+| Proposed identity and owner decision status | `docs/product-direction.md` |
+| Stable work IDs, dependencies, and future-session boundaries | `docs/improvements-plan.md` |
+| Proposed execution/checkpoint contract and acceptance | `docs/design/execution.md` |
+| Proposed interrupt/continue and steering interaction | `docs/interrupt-resume.md` |
+| Proposed context reduction and provenance | `docs/design/context.md` |
+| Proposed behavioral evaluation and verification evidence | `docs/design/evaluation.md` |
+| Proposed compatible-model fallback | `docs/design/providers.md` |
 
 ## Change workflow
 

@@ -8,6 +8,86 @@ See the [archive index](docs/archive/README.md) for provenance.
 
 ---
 
+#### 2026-09-24 — normalized run outcomes and request accounting (E1)
+
+**Status: ✅ E1 implemented; ⏳ checkpointed recovery and live-provider validation pending**
+
+- `runTurn` now returns one terminal `outcome` with a stable reason and human
+  message for normal completion, interruption, model truncation, model failure,
+  and local limits. A normal model ending is not a claim that the task is correct.
+  Both frontends show unfinished outcomes; headless exits 1 for failed,
+  truncated, or limited runs and 130 for interruption.
+- Preserved observed partial text once in replayable history after cancellation
+  or a stream failure. Incomplete tool arguments are not executed. Local partial
+  and truncation metadata is removed from provider messages. A late stop does
+  not rewrite an already completed final reply, while a pending tool batch is
+  stopped before side effects.
+- Added local run, model-step, request-attempt, and tool-attempt identifiers.
+  Actual request reports and summed reported counts remain separate from the
+  existing context display metric. Retry attempts without usage remain unknown;
+  repeated usage chunks for one request count once. Additive timing metadata
+  persists outcomes, partial data, and attempt records without changing the
+  session format version or old-session loading.
+- Updated the implemented architecture, session contract, README, gaps, and
+  roadmap. E2–E3 shell supervision and checkpoints remain future work; no
+  crash-safe continuation or billing estimate is implied by E1.
+
+**Verified in this session:** `npm run verify` checked 73 modules and 19 live
+Markdown documents; **321/321 offline tests pass** on macOS / Node v26.5.0.
+No live-provider evaluation, real-terminal check, or remote CI run was performed.
+
+#### 2026-09-24 — product choices and tool clarity
+
+**Status: ✅ D1–D3 selected and tool-focused slice complete; ⏳ future capabilities pending**
+
+- The owner delegated the primary direction: an everyday coding partner with an
+  inspectable, minimal core; recoverability when priorities conflict; and
+  human-directed execution. D4–D6 remain open in the decision ledger. The
+  tool interface was prioritized ahead of the roadmap workstreams.
+- Kept the four default tools and dependency-free runtime. Clarified their
+  model-facing descriptions and rejected ambiguous `edit` combinations:
+  `endLine` without `startLine`, and `all: true` with any range edit.
+- Preserved trailing spaces on the final line of a paged `read` result. Changed
+  `bash` capture overflow from apparent success to an explicit error with
+  unknown completion and no new cwd. Bounded results keep the error reason;
+  failed command stdout/stderr now appears in the transcript preview when it
+  fits the result cap.
+- Updated the tool contract, surface rationale, current gaps, product ledger,
+  and next-action ordering. No E0–P1 capability was implemented in this slice.
+
+**Verified in this session:** `npm run verify` checked 73 modules and 19 live
+Markdown documents; **314/314 offline tests pass** on macOS / Node v26.5.0.
+Targeted tool and format tests and `git diff --check` also passed. No live-provider
+tool-choice trials, real-terminal checks, or remote CI run were performed; model
+tool-choice quality remains unmeasured against a live provider.
+
+#### 2026-09-24 — future design and product discussion
+
+**Status: ✅ design draft prepared; ⏳ owner choices and feature implementation pending**
+
+- Added a proposed product identity and decision ledger, with explicit pending
+  status for primary use, tradeoffs, autonomy, verification, provider breadth,
+  and concept admission. No unanswered preference was treated as approval.
+- Added stable work IDs and reusable future-session briefs. Detailed proposals
+  cover outcomes/accounting, shell lifecycle, checkpoints/ownership/recovery,
+  interruption, steering, context provenance, behavioral evaluation, verification
+  evidence, and compatible-model fallback. Each defines dependencies and acceptance.
+- Preserved the earlier continuation proposal verbatim in the archive and drafted
+  a replacement. Corrected its unconditional crash-losslessness promise and its
+  assumption that continuation needs a fabricated model input-tool call. Checked
+  the OpenAI Chat message reference and function-calling guide; other compatible
+  endpoints still require their own verification.
+- Updated discovery, ownership, gaps, and recommended next actions. This is a
+  documentation-only change; the verified baseline tag remains unchanged and the
+  proposed capabilities have not been implemented.
+
+**Verified in this session:** `npm run verify` checked 73 modules and 19 live
+Markdown documents; **312/312 offline tests pass** on macOS / Node v26.5.0.
+The new archive was compared byte-for-byte with its pre-change source.
+`git diff --check` passed. No live-provider trials, real-terminal checks, or
+remote CI run was performed; this verification checks the repository and document
+links, not the effectiveness of unimplemented designs.
+
 #### 2026-09-24 — verified development baseline
 
 **Status: ✅ done**

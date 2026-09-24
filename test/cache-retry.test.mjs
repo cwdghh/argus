@@ -24,6 +24,22 @@ test("buildBody adds cache markers only when contextCache is on", () => {
   assert.deepEqual(cached.messages[1], { role: "user", content: [{ type: "text", text: "hi", cache_control: { type: "ephemeral" } }] });
 });
 
+test("buildBody omits local partial and truncation metadata from provider messages", () => {
+  const body = buildBody({
+    model: "mock",
+    systemPrompt: "s",
+    messages: [
+      { role: "assistant", content: "partial answer", partial: true },
+      { role: "assistant", content: "cut off", truncated: true },
+    ],
+    tools: [],
+  });
+  assert.deepEqual(body.messages.slice(1), [
+    { role: "assistant", content: "partial answer" },
+    { role: "assistant", content: "cut off" },
+  ]);
+});
+
 test("contextCache stamps the system + newest message only, never intermediate ones", async (t) => {
   const bodies = [];
   const srv = await createMockServer((i, body) => {
@@ -87,20 +103,19 @@ test("HTTP 429 insufficient-quota retries on its own budget, independent of ARGU
 test("exhausting the quota budget still fails the request", async (t) => {
   const srv = await createMockServer(() => ({ status: 429, body: { error: { code: "insufficientquota", message: "exceeded" } } }));
   t.after(() => srv.close());
-  await assert.rejects(
-    () => runTurn(config(srv, { maxRetries: 0, quotaRetries: 2, quotaRetryDelayMs: 1 }), [], "go"),
-    /LLM request failed \(429\)/
-  );
+  const result = await runTurn(config(srv, { maxRetries: 0, quotaRetries: 2, quotaRetryDelayMs: 1 }), [], "go");
+  assert.equal(result.outcome, "failed");
+  assert.match(result.message, /LLM request failed \(429\)/);
+  assert.equal(result.requestUsage.attempts.length, 3);
   assert.equal(srv.calls(), 3, "1 request + 2 retries");
 });
 
 test("a non-quota 429 respects only the generic retry budget", async (t) => {
   const srv = await createMockServer(() => ({ status: 429, body: { error: { code: "RateLimit" } } }));
   t.after(() => srv.close());
-  await assert.rejects(
-    () => runTurn(config(srv, { maxRetries: 0, quotaRetries: 2, quotaRetryDelayMs: 1 }), [], "go"),
-    /LLM request failed \(429\)/
-  );
+  const result = await runTurn(config(srv, { maxRetries: 0, quotaRetries: 2, quotaRetryDelayMs: 1 }), [], "go");
+  assert.equal(result.outcome, "failed");
+  assert.match(result.message, /LLM request failed \(429\)/);
   assert.equal(srv.calls(), 1, "generic budget 0 means no retry even with quotaRetries set");
 });
 

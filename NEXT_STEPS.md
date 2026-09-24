@@ -1,25 +1,28 @@
 # Next steps
 
-Ranked candidates, not commitments. [GAPS.md](GAPS.md) owns open questions;
-[the implementation brief](docs/improvements-plan.md) owns execution details.
-Completed work belongs in [PROGRESS.md](PROGRESS.md).
+Recommended ordering under the selected D1–D3 direction in
+[product direction](docs/product-direction.md). D4–D6 remain pending. Stable
+work IDs, dependencies, and reusable session requests live in
+[the implementation briefs](docs/improvements-plan.md).
+[GAPS.md](GAPS.md) owns current open questions; history lives in [PROGRESS.md](PROGRESS.md).
 
-1. **Interrupt and continue** — review the existing interaction proposal, then
-   implement lossless partial-turn persistence and explicit continuation.
-   Related: gaps 5 and 7. Begin with the brief linked above.
-2. **Broader behavioral evaluation** — a small set of coding tasks with automatic
-   outcomes and recorded provider/model baselines. Related: gap 9.
-3. **Structured compaction** — an optional semantic summary with a deterministic
-   fallback; preserve append-only source history. Related: gap 4.
-4. **Steering** — define how new input enters an active turn and is persisted.
-   Related: gap 8.
-5. **Compatible-model fallback** — retry one eligible failed step on an explicitly
-   configured fallback model, with clear events and accounting. Related: gap 6.
+1. **Establish evidence (E0):** measure representative coding tasks and use the
+   normalized E1 outcomes as the baseline. E0 can expand alongside later work.
+2. **Make stopping and recovery dependable (E2 → E3 → I1):** supervise shell
+   lifecycles, checkpoint progress, then expose explicit continuation. Treat
+   uncertain side effects as a first-class recovery case.
+3. **Make correction easy (I2):** persist steering and apply it at safe boundaries.
+4. **Preserve intent over longer tasks (C1):** start with bounded deterministic
+   context revisions; admit semantic reduction only after comparative evaluation.
+5. **Improve handoff confidence (V1):** record verification evidence and freshness.
+   Move this directly after E3 if verification trust is chosen as the top priority.
+6. **Add model fallback only with evidence (P1):** bounded recovery for observed
+   compatible-provider failures after outcome/accounting foundations exist.
 
-Lower-priority candidates remain in the corresponding gaps: truncated-outcome
-presentation, live shell output, spill retention, terminal protocol refinements,
-notifications, transcript replay, native provider support, and sandboxing.
-Mid-turn compaction and a sub-agent capability require separate design work.
+Revisit isolation, authority, budgets, and escalation before any future shift to
+unattended work; this roadmap alone does not supply those guarantees.
 
-Choose one bounded change at a time. Reconfirm the code and its owning contract;
-the archived audit's line numbers and commit instructions are historical only.
+Lower-priority possibilities remain in the corresponding gaps: terminal protocol
+refinements, notifications, sanitized replay, native providers, and sandboxing.
+Parallel tools, sub-agents, plugins, and a fifth default tool each require the
+admission decision described in product direction and the tool-surface contract.

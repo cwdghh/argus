@@ -94,16 +94,16 @@ test("an idle timeout tears down the underlying stream connection", async (t) =>
   t.after(() => new Promise((r) => srv.close(r)));
   const baseUrl = `http://127.0.0.1:${srv.address().port}/v1`;
 
-  await assert.rejects(
-    runTurn(
-      { baseUrl, apiKey: "", model: "m", systemPrompt: "s", streamIdleTimeoutMs: 60 },
-      [],
-      "hi",
-      () => {},
-      {},
-    ),
-    /idle timeout/,
+  const result = await runTurn(
+    { baseUrl, apiKey: "", model: "m", systemPrompt: "s", streamIdleTimeoutMs: 60 },
+    [],
+    "hi",
+    () => {},
+    {},
   );
+  assert.equal(result.outcome, "failed");
+  assert.match(result.message, /idle timeout/);
+  assert.equal(result.partial.text, "a");
   const deadline = Date.now() + 3000;
   while (!clientClosed && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
   assert.ok(clientClosed, "reader.cancel() tore the body down so the server saw the connection close");
@@ -205,8 +205,8 @@ test("truncated responses mark the turn truncated and never execute partial tool
   ]);
   t.after(() => srv.close());
   const result = await runTurn(config(srv), [], "go");
-  assert.equal(result.truncated, true, "the truncation is reported, not thrown away");
-  assert.equal(result.aborted, false);
+  assert.equal(result.outcome, "truncated", "the truncation is reported, not thrown away");
+  assert.equal(result.reason, "model_length");
   assert.equal(existsSync(target), false, "the un-executed tool call never ran");
   const erred = result.messages.filter((m) => m.role === "tool");
   assert.equal(erred.length, 1);
@@ -220,7 +220,9 @@ test("agent stops a runaway tool loop at the configured step limit", async (t) =
     { tool_calls: [{ index: 0, id: `c${i}`, function: { name: "bash", arguments: '{"command":"true"}' } }] },
   ]);
   t.after(() => srv.close());
-  await assert.rejects(() => runTurn(config(srv, { maxSteps: 2 }), [], "loop"), /2 model steps/);
+  const result = await runTurn(config(srv, { maxSteps: 2 }), [], "loop");
+  assert.equal(result.outcome, "limited");
+  assert.match(result.message, /2 model steps/);
   assert.equal(srv.calls(), 2);
 });
 
@@ -235,10 +237,9 @@ test("transient API failures retry, while request timeouts stay bounded", async 
 
   const slowSrv = await createMockServer(() => [{ delay: 200 }, { content: "late" }]);
   t.after(() => slowSrv.close());
-  await assert.rejects(
-    () => runTurn(config(slowSrv, { requestTimeoutMs: 20, maxRetries: 0 }), [], "timeout"),
-    /timed out/
-  );
+  const timedOut = await runTurn(config(slowSrv, { requestTimeoutMs: 20, maxRetries: 0 }), [], "timeout");
+  assert.equal(timedOut.outcome, "failed");
+  assert.match(timedOut.message, /timed out/);
 });
 
 test("a mid-stream idle timeout retries the step before any text is shown", async (t) => {
@@ -282,37 +283,44 @@ test("a step that already streamed text is never retried (no duplicated output)"
   const srv = http.createServer((req, res) => {
     calls++;
     res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } })}\n\n`);
     res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "par" } }] })}\n\n`);
     // never end -> the idle timeout fires after the partial text
   });
   await new Promise((r) => srv.listen(0, "127.0.0.1", r));
   t.after(() => new Promise((r) => srv.close(r)));
-  await assert.rejects(
-    runTurn(
-      { baseUrl: `http://127.0.0.1:${srv.address().port}/v1`, apiKey: "", model: "m", systemPrompt: "s", streamIdleTimeoutMs: 60, maxRetries: 1 },
-      [],
-      "hi",
-      () => {},
-      {},
-    ),
-    /idle timeout/,
+  const result = await runTurn(
+    { baseUrl: `http://127.0.0.1:${srv.address().port}/v1`, apiKey: "", model: "m", systemPrompt: "s", streamIdleTimeoutMs: 60, maxRetries: 1 },
+    [],
+    "hi",
+    () => {},
+    {},
   );
+  assert.equal(result.outcome, "failed");
+  assert.match(result.message, /idle timeout/);
+  assert.equal(result.partial.text, "par");
+  assert.equal(result.requestUsage.attempts[0].usage.total_tokens, 12);
+  assert.equal(result.requestUsage.totals.complete, true);
   assert.equal(calls, 1, "a content-carrying attempt is not retried");
 });
 
 test("the payload cap stops a request larger than ARGUS_MAX_REQUEST_CHARS", async (t) => {
   const srv = await createMockServer(() => [{ content: "ok" }]);
   t.after(() => srv.close());
-  await assert.rejects(
-    () => runTurn(config(srv, { maxRequestChars: 10 }), [], "x".repeat(200)),
-    /exceeds the 10-character context safety limit/
-  );
+  const result = await runTurn(config(srv, { maxRequestChars: 10 }), [], "x".repeat(200));
+  assert.equal(result.outcome, "limited");
+  assert.equal(result.reason, "request_size_limit");
+  assert.match(result.message, /exceeds the 10-character context safety limit/);
 });
 
 test("a request that exhausts its retry budget is not multiplied by the step retry", async (t) => {
   const srv = await createMockServer(() => ({ status: 500, body: { error: { message: "boom" } } }));
   t.after(() => srv.close());
-  await assert.rejects(runTurn(config(srv, { maxRetries: 2 }), [], "boom"), /LLM request failed \(500\)/);
+  const result = await runTurn(config(srv, { maxRetries: 2 }), [], "boom");
+  assert.equal(result.outcome, "failed");
+  assert.match(result.message, /LLM request failed \(500\)/);
+  assert.equal(result.requestUsage.attempts.length, 3);
+  assert.equal(result.requestUsage.totals.complete, false);
   assert.equal(srv.calls(), 3, "only the in-request budget is spent (1 + maxRetries); a step retry must not stack on top");
 });
 

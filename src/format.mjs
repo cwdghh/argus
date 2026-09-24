@@ -124,7 +124,8 @@ export function toolLabel(name, args = {}) {
  * ~20 lines / ~2KB, ending in a `… N more lines` marker when the result was
  * paged or cut. The read tool appends a continuation hint to numberedText;
  * previews strip it and derive the count from totalLines/startLine instead, so
- * paging is never reported twice. Pure and renderer-neutral — the caller adds
+ * paging is never reported twice. Failed shell output remains visible beneath
+ * its error summary. Pure and renderer-neutral — the caller adds
  * the display rail.
  */
 const PREVIEW_MAX_LINES = 20;
@@ -133,10 +134,14 @@ const SHOWING_HINT = /\n?\[Showing lines \d+-\d+ of \d+\. Use offset=\d+ to cont
 
 export function previewResult(result, { maxLines = PREVIEW_MAX_LINES, maxChars = PREVIEW_MAX_CHARS } = {}) {
   if (!result) return "";
-  if (result.error) {
-    return result.message ? String(result.message) : "…";
-  }
-  const source = pickNonEmpty(result.stdout, result.stderr, result.numberedText, result.content);
+  const errorOutput = result.error
+    ? [
+      result.stdout ? `stdout:\n${result.stdout}` : null,
+      result.stderr ? `stderr:\n${result.stderr}` : null,
+    ].filter(Boolean).join("\n")
+    : null;
+  if (result.error && !errorOutput) return result.message ? String(result.message) : "…";
+  const source = errorOutput || pickNonEmpty(result.stdout, result.stderr, result.numberedText, result.content);
   if (source == null) {
     if (result.truncated === true && typeof result.preview === "string" && result.preview) {
       const where = result.fullPath ? `; full output at ${result.fullPath}` : "";

@@ -145,7 +145,9 @@ file, overlapping replacements are rejected, and the batch is written only
 after every item succeeds. UTF-8 BOM and CRLF style are preserved. Success
 returns `{ ok: true, path, replacements, fuzzy?: true }`; failure returns a
 structured error without a partial edit. Use `edit`, rather than a shell
-text-rewrite command, for targeted text-file changes.
+text-rewrite command, for targeted text-file changes. `endLine` is valid only
+with `startLine`. `all: true` is valid only when every item uses `old`; mixed or
+range batches cannot request it.
 
 ### `bash`
 
@@ -157,10 +159,11 @@ Runs one `/bin/sh` command with a 60-second timeout and a 1 MB child-process
 buffer. It returns bounded `{ stdout, stderr, cwd? }`; a non-zero exit adds
 `error: true` and `message`. User cancellation reports `aborted: true`, while a
 deadline reports `timeout: true`. Exceeding the child capture buffer reports
-`truncated: true` with the captured output; the process may have been killed,
-so this does not establish successful command completion. A successfully
-extracted final cwd becomes the base directory for later tools. `bash` owns search, listing, environment
-inspection, builds, tests, and other open-ended CLI work; it does not replace
+`error: true` and `truncated: true` with captured output and an
+unknown-completion message. It does not supply a new cwd because the process may
+have been killed. A successfully extracted final cwd becomes the base directory
+for later tools. `bash` owns search, listing, environment inspection, builds,
+tests, and other open-ended CLI work; it does not replace
 `read`, `write`, or `edit` for ordinary text-file operations.
 
 Before execution, the loop asks the tool's approval policy whether the call
@@ -194,7 +197,8 @@ exits non-zero.
 - `ARGUS_MAX_TOOL_RESULT_CHARS` bounds each serialized result.
   `ARGUS_MAX_TURN_TOOL_RESULT_CHARS` bounds their cumulative size in one active
   turn. Oversized results retain a bounded tail preview and spill their full
-  serialized payload to an owner-private JSON file under `ARGUS_HOME/tmp`. The
+  serialized payload to an owner-private JSON file under `ARGUS_HOME/tmp`. Error
+  results retain a bounded failure reason in their top-level message. The
   `fullPath` pointer is included when it fits; `nextOffset` is preserved. Spill
   failure does not fail the turn, and spill files have no automatic retention
   yet. `ARGUS_MAX_REQUEST_CHARS` independently bounds the complete outgoing

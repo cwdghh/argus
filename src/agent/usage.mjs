@@ -71,3 +71,40 @@ export function accumulateUsage(usage, stepUsage) {
     cache_creation_input_tokens: Math.max(usage.cache_creation_input_tokens, step.cacheCreation),
   };
 }
+
+/** Keep the provider's per-request counts separate from the context display. */
+export function reportedRequestUsage(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const count = (value) => Number.isInteger(value) && value >= 0 ? value : null;
+  const prompt = count(raw.prompt_tokens);
+  const completion = count(raw.completion_tokens);
+  const total = count(raw.total_tokens);
+  if (prompt == null && completion == null && total == null) return null;
+  return {
+    prompt_tokens: prompt,
+    completion_tokens: completion,
+    total_tokens: total,
+    reasoning_tokens: count(raw.completion_tokens_details?.reasoning_tokens),
+    cached_tokens: count(raw.prompt_tokens_details?.cached_tokens),
+    cache_creation_input_tokens: count(raw.prompt_tokens_details?.cache_creation_input_tokens),
+  };
+}
+
+/** Sum only reported request counts; missing reports remain explicitly unknown. */
+export function totalReportedUsage(attempts) {
+  const fields = ["prompt_tokens", "completion_tokens", "total_tokens", "reasoning_tokens", "cached_tokens", "cache_creation_input_tokens"];
+  const totals = Object.fromEntries(fields.map((field) => [field, null]));
+  let complete = true;
+  for (const attempt of attempts) {
+    if (!attempt.usage) {
+      complete = false;
+      continue;
+    }
+    if (attempt.usage.prompt_tokens == null || attempt.usage.completion_tokens == null || attempt.usage.total_tokens == null) complete = false;
+    for (const field of fields) {
+      const value = attempt.usage[field];
+      if (value != null) totals[field] = (totals[field] ?? 0) + value;
+    }
+  }
+  return { ...totals, complete };
+}

@@ -30,8 +30,9 @@ export const bashTool = {
     description:
       "Run one shell command for search, listing, environment inspection, builds, tests, or other CLI work. " +
       "Do not use shell commands to read, create, or edit text files when read/write/edit applies. " +
-      "Returns bounded stdout/stderr; cd changes the working directory for later tools. The timeout " +
-      "is 60 seconds. A best-effort destructive-command backstop requires approval.",
+      "Returns bounded stdout/stderr; output overflow reports an error because completion is unknown. " +
+      "A reported final cwd becomes the working directory for later tools. The timeout is 60 seconds. " +
+      "A best-effort destructive-command backstop requires approval.",
     parameters: {
       type: "object",
       properties: {
@@ -94,14 +95,14 @@ export const bashTool = {
         // execAsync throws on non-zero exit OR on abort; surface either cleanly.
         const parsed = extractCwd(err.stderr ?? "", marker);
         if (err.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
-          // The command ran but its output overflowed the 1MB capture buffer.
-          // That is a truncated success, not a failure: surface what was
-          // captured so the model sees the output instead of a bogus error.
+          // Node may kill the child on capture overflow, so its completion
+          // status is unknown even if the captured text looks successful.
           return {
+            error: true,
             stdout: err.stdout ?? "",
             stderr: parsed.stderr,
             truncated: true,
-            ...(parsed.cwd ? { cwd: parsed.cwd } : {}),
+            message: "command output exceeded the 1MB capture limit; command completion is unknown",
           };
         }
         if (err.name === "AbortError") {

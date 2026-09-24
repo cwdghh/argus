@@ -49,6 +49,7 @@ export function consumeAgentEvent(blocks, ev, { durationMs } = {}) {
         // the turn's tool message, so re-storing it is pure JSONL amplification.
         label: toolLabel(ev.name, ev.args),
         ...(ev.id ? { id: ev.id } : {}),
+        ...(ev.attemptId ? { attemptId: ev.attemptId } : {}),
       });
       break;
     case "tool_result": {
@@ -60,6 +61,7 @@ export function consumeAgentEvent(blocks, ev, { durationMs } = {}) {
         summary,
         ...(durationMs != null ? { durationMs } : {}),
         ...(ev.id ? { id: ev.id } : {}),
+        ...(ev.attemptId ? { attemptId: ev.attemptId } : {}),
         // A preview that adds nothing beyond the one-line summary is noise.
         ...(detail && detail !== summary ? { detail } : {}),
       });

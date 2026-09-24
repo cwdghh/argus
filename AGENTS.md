@@ -31,7 +31,9 @@ model. The default tool set is deliberately tiny: `read`, `write`, `edit`, `bash
 | `src/theme.mjs` | Colors / styling tokens |
 | `src/config.mjs` | Env-driven config |
 | `docs/` | Architecture, tool contract, tool-surface decisions, self-updating guide, debugging saved sessions |
-| `docs/improvements-plan.md` | Implementation brief for the leading candidate — read before new work |
+| `docs/improvements-plan.md` | Stable work IDs, dependencies, and future-session briefs — read before new work |
+| `docs/product-direction.md` | Proposed product identity and pending owner decisions |
+| `docs/design/` | Proposed execution, context, evaluation/evidence, and provider designs |
 | `docs/conventions.md` | Code, testing, commit, and reference-tag conventions |
 | `docs/sessions.md` | Session record format, compatibility, and recovery |
 | `scripts/` | Offline repository checks and isolated test runner |
