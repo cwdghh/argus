@@ -33,7 +33,7 @@ export const KEY_HELP = `## Keyboard shortcuts
 
 - Esc — abort the active turn
 - Ctrl-C — abort; press again to force quit (or quit immediately when idle)
-- Ctrl-D — delete under the cursor, or quit when the prompt is empty
+- Ctrl-D — delete under the cursor, or quit when idle and the prompt is empty
 - Ctrl-L — clear and redraw the screen
 
 ### Browse the transcript

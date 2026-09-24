@@ -1,28 +1,7 @@
-/**
- * Public API of the session layer (the former src/session.mjs).
- *
- * Everything outside this package imports from here:
- *   - store.mjs  — filesystem + JSONL store, naming, listing, deletion,
- *                  renaming, pruning, and the writable Session handle
- *   - resume.mjs — folder-scoped default session resolution
- *   - data.mjs   — sessionData / sessionConfig reconstruction
- */
-export {
-  Session,
-  deleteSession,
-  listSessions,
-  loadSession,
-  nameError,
-  newSessionName,
-  pruneSessions,
-  renameSession,
-  sanitizeName,
-  scanSessionMeta,
-  sessionFilePath,
-  sessionSummaries,
-  sessionsDir,
-  toolSurfaceHash,
-  toolSurfaceSnapshot,
-} from "./store.mjs";
+/** Public session API. Callers outside session/ import only from here. */
+export { Session, toolSurfaceHash, toolSurfaceSnapshot } from "./store.mjs";
+export { deleteSession, listSessions, pruneSessions, renameSession, sessionSummaries } from "./catalog.mjs";
+export { loadSession, scanSessionMeta } from "./reader.mjs";
+export { nameError, newSessionName, sanitizeName, sessionFilePath, sessionsDir } from "./paths.mjs";
 export { defaultSessionName, latestSessionForCwd } from "./resume.mjs";
 export { configRecord, sessionConfig, sessionData } from "./data.mjs";

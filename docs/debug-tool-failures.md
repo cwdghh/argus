@@ -1,121 +1,76 @@
-# Finding tool failures in saved sessions
+# Inspecting saved tool failures
 
-Every turn argus runs is persisted as JSONL under
-`~/.argus/sessions/<name>.jsonl` (or `$ARGUS_HOME/sessions` when `ARGUS_HOME`
-is set) — **including** turns that failed or were interrupted. A failed tool
-call is kept verbatim in the transcript as a `tool` message whose `content` is
-the serialized `{ error: true, message, ... }` object, so the raw material for
-post-hoc failure analysis is already on disk. This page explains how to find it
-without adding any machinery.
+Failed and interrupted turns are retained in the session JSONL. The record format
+and recovery behavior are in [sessions.md](sessions.md); result semantics are in
+[tools.md](tools.md).
 
-Read `docs/tools.md` for the tool contract and `docs/architecture.md` for the
-session store before relying on details here.
+Each `turn.messages` array contains assistant tool calls followed by `tool`
+messages. A tool message's `content` is itself a **JSON string**, so the file has
+two serialization layers. Searching the raw line for `"error":true` is unreliable:
+the inner quotes are escaped. Parse the outer record and then its tool content.
 
-## Where the failures live
+## Inspect one session
 
-Two representations matter:
-
-- **The loop (`src/agent.mjs`)** returns a failed tool result to the model as a
-  `tool` message:
-  `{ role: "tool", tool_call_id, content: JSON.stringify(result) }`, where the
-  serialized `result` has `error: true` plus a `message` (and often `path`,
-  `code`, `cwd`, etc.).
-- **The session file** stores every completed, failed, and interrupted turn
-  (`type: "turn"`), along with `config`, `messages`, and `blocks` (the
-  on-screen transcript, which includes the error block). The JSONL is
-  append-only; a torn final record is tolerated with a warning, and the schema
-  snapshot (`type: "tools"`) is written whenever the tool surface changes so
-  historical handling stays precise.
-
-## Finding failures with grep
-
-The simplest, dependency-free query targets the serialized `error: true` that
-the loop writes into every failed tool result:
+Replace the filename below with a saved session name. When using a custom
+`ARGUS_HOME`, point the command at its `sessions` directory.
 
 ```bash
-# Enumerate every failure across all saved sessions, one JSON line each.
-grep -h '"error":true' ~/.argus/sessions/*.jsonl
+node --input-type=module - "$HOME/.argus/sessions/my-task.jsonl" <<'NODE'
+import { createReadStream } from "node:fs";
+import { createInterface } from "node:readline";
 
-# Include the session name so you can trace the surrounding turn.
-grep -H '"error":true' ~/.argus/sessions/*.jsonl
-
-# Only `edit` failures, showing the message:
-grep -h '"error":true' ~/.argus/sessions/*.jsonl | grep -o '"message": *"[^"]*"'
+const input = createReadStream(process.argv[2]);
+const lines = createInterface({ input, crlfDelay: Infinity });
+let lineNumber = 0;
+for await (const line of lines) {
+  lineNumber++;
+  let record;
+  try { record = JSON.parse(line); }
+  catch { console.error(`unparseable record at line ${lineNumber}`); continue; }
+  if (record?.type !== "turn") continue;
+  const calls = new Map();
+  for (const message of record.messages ?? []) {
+    for (const call of message.tool_calls ?? []) calls.set(call.id, call.function);
+    if (message.role !== "tool") continue;
+    let result;
+    try { result = JSON.parse(message.content); } catch { continue; }
+    if (!result?.error) continue;
+    const call = calls.get(message.tool_call_id);
+    console.log(JSON.stringify({
+      line: lineNumber,
+      tool: call?.name,
+      id: message.tool_call_id,
+      message: result.message,
+    }));
+  }
+}
+NODE
 ```
 
-Notes on the pattern:
+The reported line identifies the whole saved turn. Inspect that record's assistant
+call for the exact arguments and its matching result for the failure. Call IDs
+should be interpreted in conversation order because providers may reuse them in
+later replies.
 
-- `"error":true` (no space) is the exact serialization the agent writes. A
-  broader grep for `"error":` would also match `{ error: ... }` blocks from
-  `bash` non-zero exits and structured read messages — useful when you want
-  every structured failure, not just tool mutations.
-- The `tool_call` that preceded a failed result lives one JSON array earlier
-  in the same `messages`, showing the tool name and **exact arguments the model
-  chose**. Read a session file with your editor and search backwards from a hit
-  to see the full call + failure pair.
+## Interpret the result
 
-## Trending with a short pipe
+- `{error: true}` describes a tool rejection or execution failure. A shell command
+  returning nonzero can be an expected task result, such as a search with no match.
+- Authorization denials appear in the tool result; approval decisions also produce
+  transcript events. Headless execution cannot ask for interactive approval.
+- Turn-level failures, such as a provider timeout or request-size guard, can appear
+  only as display error blocks. Inspect `turn.blocks` as well as tool messages.
+- Interrupted/truncated calls can have synthetic unexecuted results. They record
+  that no side effect ran, rather than an executor failure.
+- Timing blocks retain outcome text and available provider usage. Partial network
+  replies without usage do not establish a token count.
 
-Because JSONL is one object per line and each failure already carries
-`message` (and the query above adds the session name), a one-liner can group
-by failure message:
+For historical configuration, fold preceding `config`, `model`, `cwd`, and `tools`
+records and apply the turn's own config fields. The latest metadata is not enough
+for a turn created before a configuration change. Inspect the tool snapshot named
+by `toolSurfaceHash`; do not assume today's registry describes an old request.
 
-```bash
-grep -h '"error":true' ~/.argus/sessions/*.jsonl \
-  | grep -o '"message": *"[^"]*"' \
-  | sort | uniq -c | sort -rn
-```
-
-This is the "where did `edit` fail most, and with what message?" summary — no
-code change, no new module.
-
-## Distinguishing real failures from other `error` texts
-
-Not everything with `error` is a tool failure:
-
-- `bash` results with a non-zero exit add `error: true` plus `message` — that
-  is often the *expected* result of a search that found nothing, not a tool
-  crash.
-- Read results for a missing file, a too-large line, or an offset past EOF are
-  structured errors too.
-- Turn-level failures (provider errors, abort) are surfaced as `blocks` of
-  kind `error` with the exception text, and a `timing` block records the
-  `outcome` (`completed` / `failed` / `interrupted`) plus real token usage.
-- Authorization denials are `result` blocks (`ok: false`, summary
-  `denied: <tool> ...`), distinct from execution failures.
-
-For a precise per-tool audit, the strongest signal is the `tool` message's
-serialized result: if `content` contains `{}` around an `"error"` field with
-the tool's own failure text, it is a genuine tool rejection.
-
-## Reconstructing a full failure turn
-
-The session file already contains everything needed to re-run or inspect a
-failed turn exactly:
-
-- `config` (model, base URL, system prompt) on the turn;
-- `messages` — the verbatim requests and replies, including the assistant's
-  `tool_call` and the loop's serialized `tool` result;
-- `toolSurfaceHash` plus the `tools` snapshot line, so you know which schema
-  was in force;
-- `blocks` — the rendered transcript as the user saw it (including the error
-  block), which `sessionData` in `src/session/data.mjs` reassembles for the
-  TUI and headless mode.
-
-`npm start` resumes the newest session used in the current folder; use
-`npm start -- --session <name>` to open a specific one, and read the `.jsonl`
-directly for the exact JSON details.
-
-## Why we don't need a separate failure log
-
-- Every outcome — success, failure, interrupt — is already persisted; adding a
-  second write path would duplicate the transcript and cost disk for a signal
-  that is already queryable.
-- The tool-surface hash + snapshot keep historical traces meaningful even as
-  schemas evolve.
-- The opt-in `npm run eval:tools` evaluator already emits structured per-task
-  traces (including invalid calls) for *controlled* experiments; these
-  instructions cover the *real-usage* case from saved sessions.
-- If a recurring failure surfaces, the agreed improvement path is to refine the
-  relevant tool description or schema (see `docs/tool-surface.md`), backed by
-  the evidence gathered here.
+Saved transcripts are inspection evidence, not exact HTTP recordings. For repeatable
+behavior measurements, use the opt-in `npm run eval:tools` harness in isolated
+workspaces. A recurring failure should guide a targeted change backed by tests,
+under the admission rule in [tool-surface.md](tool-surface.md).

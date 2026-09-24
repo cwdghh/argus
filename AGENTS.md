@@ -13,23 +13,29 @@ model. The default tool set is deliberately tiny: `read`, `write`, `edit`, `bash
 | Path | Purpose |
 |------|---------|
 | `src/main.mjs` | Entry point / CLI |
-| `src/agent.mjs` | The agent loop (call model → run tools → repeat) |
+| `src/agent.mjs` | Turn coordinator (call model → run tools → repeat) |
+| `src/agent/` | `model-step.mjs` (stream retry), `tool-call.mjs` (dispatch), `tool-result.mjs` (bounds/spill), `turn-state.mjs` (protocol/loop guards), `usage.mjs` (accounting) |
 | `src/llm.mjs` | Streaming chat client: network, retries, timeouts |
 | `src/sse.mjs` | Pure SSE framing + chat-delta folding (protocol layer of `llm.mjs`) |
-| `src/tools.mjs` | Tool registry + fs/shell execution layer (`read`, `write`, `edit`, `bash`) |
+| `src/tools.mjs` | Model-visible tool registry and file-tool adapters |
+| `src/tools/` | `bash.mjs` (shell policy/execution), `validate.mjs` (schema validation), `atomic-write.mjs` (file replacement) |
 | `src/edit-engine.mjs` | Pure exact/fuzzy/range text-edit engine |
 | `src/read-bounds.mjs` | Bounded-memory file scanning + read line/byte caps |
 | `src/tool-state.mjs` | Same-turn read coverage/hash state for safe range edits |
 | `src/compact.mjs` | Context compaction |
-| `src/session/` | JSONL session persistence: `store.mjs` (fs + writable handle), `resume.mjs` (folder-scoped default), `data.mjs` (reconstruction) — import from `index.mjs` |
+| `src/session/` | `paths.mjs` (naming), `catalog.mjs` (discovery/housekeeping), `reader.mjs` (streaming loads), `store.mjs` (writer), `resume.mjs` (folder matching), `data.mjs` (reconstruction) — import from `index.mjs` |
 | `src/headless.mjs` | One-shot CLI mode (no TUI) |
-| `src/tui.mjs` + `src/tui/*.mjs` | Terminal UI: controller + pure widgets (editor, keys, suggestions, frames, markdown, blocks, commands, layout, lifecycle) |
+| `src/tui.mjs` + `src/tui/*.mjs` | Terminal UI: controller; input/turn orchestration; editor, keys, suggestions, frames, markdown, blocks, commands, layout, lifecycle |
 | `src/format.mjs` | Neutral value formatting (durations, tokens, result summaries) |
 | `src/transcript.mjs` | Shared transcript block folding (used by TUI + headless) |
 | `src/theme.mjs` | Colors / styling tokens |
 | `src/config.mjs` | Env-driven config |
 | `docs/` | Architecture, tool contract, tool-surface decisions, self-updating guide, debugging saved sessions |
-| `docs/improvements-plan.md` | The current implementation plan (audit-derived workstreams, ranked) — read before starting new work |
+| `docs/improvements-plan.md` | Implementation brief for the leading candidate — read before new work |
+| `docs/conventions.md` | Code, testing, commit, and reference-tag conventions |
+| `docs/sessions.md` | Session record format, compatibility, and recovery |
+| `scripts/` | Offline repository checks and isolated test runner |
+| `.github/workflows/verify.yml` | CI verification matrix |
 | `docs/archive/` | Frozen history & executed one-time plans (read only when needed) |
 | `PROGRESS.md` | What we've done (append on real change) |
 | `GAPS.md` | Open design questions |
@@ -40,7 +46,8 @@ model. The default tool set is deliberately tiny: `read`, `write`, `edit`, `bash
 > ownership, the verify/record workflow, boundaries); `docs/architecture.md` —
 > how the code fits together; `docs/tools.md` — the tool contract;
 > `docs/tool-surface.md` — the canonical tool-set decisions and rationale;
-> `docs/debug-tool-failures.md` — how to find tool failures in saved session
+> `docs/conventions.md` — engineering conventions; `docs/sessions.md` — session
+> records and recovery; `docs/debug-tool-failures.md` — how to find tool failures in saved session
 > transcripts. README is
 > the user-facing view; `PROGRESS.md`/`GAPS.md`/`NEXT_STEPS.md` are the
 > current state. See `docs/self-updating.md` for the bootstrap reading order.
@@ -65,9 +72,10 @@ same change. See `docs/self-updating.md` for the workflow.
 - **Never edit `PROGRESS.md` in place.** Append dated entries, newest first;
   add a dated correction note if one turns out wrong. An argus that rewrites
   its own history can't be trusted to review its own work.
-- **The human reviews and commits.** Verification actually runs in this
-  session is listed in the PROGRESS entry; claims beyond that are wishes, not
-  statuses. See `docs/self-updating.md`.
+- **The human reviews and commits by default.** An explicit request to commit
+  or tag the finished outcome authorizes that local action. List verification
+  actually run in the PROGRESS entry; claims beyond that are not statuses.
+  See `docs/self-updating.md` and `docs/conventions.md`.
 
 ## How to run
 

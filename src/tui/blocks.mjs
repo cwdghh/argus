@@ -7,7 +7,7 @@
 import { formatDuration, formatTokens, toolLabel } from "../format.mjs";
 import { styleText } from "./renderers.mjs";
 import { markdownLines, renderSimple } from "./markdown.mjs";
-import { theme } from "../theme.mjs";
+import { theme, themeRevision } from "../theme.mjs";
 
 
 // Only text-carrying blocks (user/thinking/assistant) mutate after creation,
@@ -23,9 +23,9 @@ const blockLinesCache = new WeakMap();
  */
 export function blockLinesCached(block, width) {
   const entry = blockLinesCache.get(block);
-  if (entry && entry.width === width && entry.text === block.text) return entry.lines;
+  if (entry && entry.width === width && entry.text === block.text && entry.themeRevision === themeRevision) return entry.lines;
   const lines = blockLines(block, width);
-  blockLinesCache.set(block, { width, text: block.text, lines });
+  blockLinesCache.set(block, { width, text: block.text, themeRevision, lines });
   return lines;
 }
 

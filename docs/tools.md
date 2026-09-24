@@ -86,6 +86,13 @@ does not strip a newline already present. Success returns
 `{ ok: true, path, bytes, finalNewline, newlineAdded }`. Filesystem failures
 return `{ error: true, path?, message, code? }`.
 
+Creation installs a completed temporary file with an exclusive link, so a
+concurrent writer cannot defeat no-overwrite protection. Overwrite and edit use
+atomic replacement, preserve existing POSIX permission bits, and follow existing
+symlinks to their targets. Dangling symlinks are rejected rather than replaced.
+Replacement does not preserve inode identity or hard-link relationships and is
+not an fsync/power-loss durability guarantee.
+
 The newline decision is required and separate from `content` because live
 models can omit an invisible trailing character even when prose asks for it.
 Use `write`, rather than shell redirection or a heredoc, to create text files.
@@ -146,11 +153,13 @@ text-rewrite command, for targeted text-file changes.
 { command: nonEmptyString }
 ```
 
-Runs one shell command with a 60-second timeout and a 1 MB child-process
+Runs one `/bin/sh` command with a 60-second timeout and a 1 MB child-process
 buffer. It returns bounded `{ stdout, stderr, cwd? }`; a non-zero exit adds
 `error: true` and `message`. User cancellation reports `aborted: true`, while a
-deadline reports `timeout: true`. A successfully extracted final cwd becomes
-the base directory for later tools. `bash` owns search, listing, environment
+deadline reports `timeout: true`. Exceeding the child capture buffer reports
+`truncated: true` with the captured output; the process may have been killed,
+so this does not establish successful command completion. A successfully
+extracted final cwd becomes the base directory for later tools. `bash` owns search, listing, environment
 inspection, builds, tests, and other open-ended CLI work; it does not replace
 `read`, `write`, or `edit` for ordinary text-file operations.
 
@@ -169,16 +178,27 @@ exits non-zero.
 
 ## Loop-level guarantees
 
-- Exactly one tool call may appear in a provider reply. A reply containing
-  several is rejected before any call runs.
+- Requests ask for one tool call, but provider replies containing several are
+  accepted and executed sequentially in reply order. Validation, authorization,
+  cwd changes, budgets, and freshness apply to each call. Calls in a batch are
+  not a transaction: completed side effects remain if a later call fails.
 - The third consecutive identical call with the same result is refused as a
-  no-progress loop. Intervening work resets the streak.
+  no-progress loop. After three unchanged A/B cycles, another A is refused too.
+  A different next call is allowed to break the cycle.
+- A reply with `finish_reason: "length"` returns a truncated turn. Its partial
+  text is retained and every unexecuted tool call gets an explicit error result.
+  Failed and interrupted turns also repair missing results beside their own
+  assistant reply, keeping the saved history replayable.
 - A tool call is not run on the final allowed model step; one step is reserved
   for the model to interpret and report its result.
 - `ARGUS_MAX_TOOL_RESULT_CHARS` bounds each serialized result.
   `ARGUS_MAX_TURN_TOOL_RESULT_CHARS` bounds their cumulative size in one active
-  turn. The complete outgoing request is also checked against the context
-  character safety limit before network I/O.
+  turn. Oversized results retain a bounded tail preview and spill their full
+  serialized payload to an owner-private JSON file under `ARGUS_HOME/tmp`. The
+  `fullPath` pointer is included when it fits; `nextOffset` is preserved. Spill
+  failure does not fail the turn, and spill files have no automatic retention
+  yet. `ARGUS_MAX_REQUEST_CHARS` independently bounds the complete outgoing
+  request before network I/O.
 - Invalid JSON, unknown tools, invalid arguments, authorization denial, and
   execution failures become structured tool errors when recovery is safe.
 

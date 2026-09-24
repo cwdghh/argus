@@ -1,87 +1,15 @@
 /**
- * The tools the agent can call. Registry entries have this shape:
- *
- *   {
- *     name:        string        – unique name the model references
- *     description: string        – tells the model when/how to use it
- *     parameters:  JSON Schema   – describes/validates the arguments
- *     risk:        string        – model-invisible policy classification
- *     validate:    (args) => ?string  – optional semantic validation
- *     approval:    (args) => ?string  – optional approval reason
- *     execute:     (args, ctx) => any – returns a JSON-serialisable value
- *   }
- *
- * The schema is the contract between the model and your code: the model only
- * knows what you tell it here, so good descriptions matter.
- *
- * This file is the registry + the shell/fs execution layer. The pure engines
- * it delegates to live beside it:
- *   - src/edit-engine.mjs — exact/fuzzy/range text editing
- *   - src/read-bounds.mjs — bounded-memory scanning + line/byte caps
- *   - src/tool-state.mjs — same-turn range-edit freshness (owned by the loop)
- *
- * See docs/tools.md for the full contract and change workflow.
+ * The model-visible four-tool registry. Schemas and descriptions live here;
+ * pure editing/reading engines and filesystem/shell adapters own execution.
+ * See docs/tools.md for the contract and docs/tool-surface.md for rationale.
  */
-import { access, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { exec } from "node:child_process";
-import { promisify } from "node:util";
-import { randomUUID } from "node:crypto";
-import { basename, dirname, join, resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { applyEditsToContent, detectLineEnding, normalizeLineEndings, restoreLineEndings } from "./edit-engine.mjs";
 import { formatBytes, readFileWindow } from "./read-bounds.mjs";
-
-const execAsync = promisify(exec);
-// Patterns that are dangerous enough to require confirmation before running.
-const DESTRUCTIVE_PATTERNS = [
-  /\brm\b[^\n;&|]*(?:^|\s)(?:-[a-z]*r[a-z]*|--recursive)(?:\s|$)/i, // recursive rm, incl. split flags
-  /\bdd\b/, // raw block-device copy
-  /\bmkfs(\.\w+)?\b/,
-  /\bmke2fs\b/,
-  /\bfdisk\b/,
-  /\bparted\b/,
-  /\bshutdown\b/,
-  /\breboot\b/,
-  /\bhalt\b/,
-  /\bpoweroff\b/,
-  /:\(\)\s*\{\s*:\|\s*:\s*&\s*\}\s*:/, // fork bomb
-];
-
-function isDestructive(command) {
-  const joined = String(command).replace(/\\\r?\n/g, " ");
-  return DESTRUCTIVE_PATTERNS.some((re) => re.test(joined));
-}
-
-/**
- * Write `data` to `file` atomically: write to a uniquely-named temp file in the
- * same directory, then rename() it over the target. A crash mid-write can never
- * leave the user's file truncated — the target only ever sees the old or the
- * new complete content. The temp name is created with "wx" so two concurrent
- * writers never clobber each other's scratch file.
- *
- * `noOverwrite` preserves the write tool's "protect existing files" promise
- * (rename() would silently replace them); a pre-rename existence probe mirrors
- * the old `flag: "wx"` error for callers that need it.
- */
-async function atomicWriteFile(file, data, { noOverwrite = false } = {}) {
-  if (noOverwrite) {
-    try {
-      await access(file);
-      return { skipped: true };
-    } catch {
-      // target is free — fall through to the write
-    }
-  }
-  const dir = dirname(file);
-  const tmp = join(dir, `.argus-tmp-${basename(file)}-${randomUUID()}`);
-  try {
-    await writeFile(tmp, data, { encoding: "utf8", flag: "wx" });
-    await rename(tmp, file);
-    return {};
-  } catch (err) {
-    await rm(tmp, { force: true }).catch(() => {});
-    throw err;
-  }
-}
+import { atomicWriteFile } from "./tools/atomic-write.mjs";
+import { bashTool } from "./tools/bash.mjs";
+export { validateToolArgs } from "./tools/validate.mjs";
 
 function fitReadResult({ file, lines, startDisplay, totalLines, endsWithNewline, maxChars = 50_000 }) {
   const gutter = String(Math.max(1, totalLines)).length;
@@ -315,102 +243,7 @@ export const tools = [
       return out;
     },
   },
-  {
-    name: "bash",
-    risk: "shell",
-    description:
-      "Run one shell command for search, listing, environment inspection, builds, tests, or other CLI work. " +
-      "Do not use shell commands to read, create, or edit text files when read/write/edit applies. " +
-      "Returns bounded stdout/stderr; cd changes the working directory for later tools. The timeout " +
-      "is 60 seconds. A best-effort destructive-command backstop requires approval.",
-    parameters: {
-      type: "object",
-      properties: {
-        command: { type: "string", minLength: 1, description: "The shell command to run" },
-      },
-      required: ["command"],
-      additionalProperties: false,
-    },
-    validate({ command }) {
-      return command.trim() ? null : "bash argument command must not be blank";
-    },
-    approval({ command }) {
-      return isDestructive(command) ? "command matched the destructive-shell backstop" : null;
-    },
-    async execute({ command }, ctx = {}) {
-      const cwd = ctx.cwd || process.cwd();
-      const cmd = String(command).trim();
-
-      if (isDestructive(cmd) && !ctx.approved) {
-        const request = {
-          tool: "bash",
-          args: { command },
-          cwd,
-          risk: "shell",
-          reason: "command matched the destructive-shell backstop",
-        };
-        if (ctx.authorize) {
-          const ok = await ctx.authorize(request);
-          if (!ok) return { error: true, message: `denied: destructive command not approved: ${cmd.slice(0, 80)}` };
-        } else if (ctx.confirm) {
-          const ok = await ctx.confirm(command);
-          if (!ok) return { error: true, message: `denied: destructive command not approved: ${cmd.slice(0, 80)}` };
-        } else {
-          return { error: true, message: `blocked: destructive command requires approval: ${cmd.slice(0, 80)}` };
-        }
-      }
-
-      // A shell command can mutate any path even when it exits non-zero. Once
-      // execution is authorized, conservatively invalidate every read stamp.
-      ctx.toolState?.invalidateAll();
-
-      // Ask the shell for its final cwd, rather than trying to parse `cd`
-      // syntax. This handles quotes and compound commands without polluting
-      // the command's stdout.
-      const marker = `__ARGUS_CWD_${randomUUID()}__`;
-      const wrapped = `{\n${command}\n}; __argus_status=$?; printf '\\n${marker}%s\\n' "$PWD" >&2; exit $__argus_status`;
-      try {
-        const { stdout, stderr } = await execAsync(wrapped, {
-          cwd,
-          timeout: ctx.timeoutMs ?? 60_000,
-          maxBuffer: 1024 * 1024,
-          // Always /bin/sh, never the caller's $SHELL: the {…}; $? cwd wrapper
-          // is POSIX syntax and breaks under fish/csh aliases.
-          shell: "/bin/sh",
-          ...(ctx.signal ? { signal: ctx.signal } : {}),
-        });
-        const parsed = extractCwd(stderr, marker);
-        return { stdout, stderr: parsed.stderr, ...(parsed.cwd ? { cwd: parsed.cwd } : {}) };
-      } catch (err) {
-        // execAsync throws on non-zero exit OR on abort; surface either cleanly.
-        const parsed = extractCwd(err.stderr ?? "", marker);
-        if (err.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
-          // The command ran but its output overflowed the 1MB capture buffer.
-          // That is a truncated success, not a failure: surface what was
-          // captured so the model sees the output instead of a bogus error.
-          return {
-            stdout: err.stdout ?? "",
-            stderr: parsed.stderr,
-            truncated: true,
-            ...(parsed.cwd ? { cwd: parsed.cwd } : {}),
-          };
-        }
-        if (err.name === "AbortError") {
-          return { error: true, aborted: true, message: "command aborted" };
-        }
-        if (err.killed && err.signal) {
-          return { error: true, timeout: true, message: `command timed out after ${ctx.timeoutMs ?? 60_000}ms` };
-        }
-        return {
-          error: true,
-          stdout: err.stdout ?? "",
-          stderr: parsed.stderr,
-          message: err.message,
-          ...(parsed.cwd ? { cwd: parsed.cwd } : {}),
-        };
-      }
-    },
-  },
+  bashTool,
 ];
 
 /**
@@ -420,64 +253,4 @@ export const tools = [
  */
 export function findTool(name) {
   return tools.find((t) => t.name === name);
-}
-
-function extractCwd(stderr, marker) {
-  const text = String(stderr);
-  const index = text.lastIndexOf(marker);
-  if (index === -1) return { stderr: text, cwd: null };
-  const end = text.indexOf("\n", index);
-  const cwd = text.slice(index + marker.length, end === -1 ? undefined : end).trim();
-  const before = text.slice(0, index).replace(/\n$/, "");
-  const after = end === -1 ? "" : text.slice(end + 1);
-  return { stderr: before + after, cwd: cwd || null };
-}
-
-function validateSchemaValue(value, schema, label) {
-  const expected = schema?.type;
-  const valid =
-    expected === "array"
-      ? Array.isArray(value)
-      : expected === "object"
-        ? value !== null && typeof value === "object" && !Array.isArray(value)
-        : expected === "integer"
-          ? Number.isInteger(value)
-          : expected == null || typeof value === expected;
-  if (!valid) return `${label} must be ${expected}`;
-
-  if (typeof value === "string" && schema.minLength != null && value.length < schema.minLength) {
-    return `${label} must not be empty`;
-  }
-  if (typeof value === "number" && schema.minimum != null && value < schema.minimum) {
-    return `${label} must be at least ${schema.minimum}`;
-  }
-  if (Array.isArray(value)) {
-    if (schema.minItems != null && value.length < schema.minItems) return `${label} must contain at least ${schema.minItems} item`;
-    for (let i = 0; i < value.length; i++) {
-      const error = validateSchemaValue(value[i], schema.items ?? {}, `${label}[${i}]`);
-      if (error) return error;
-    }
-  }
-  if (expected === "object") {
-    for (const name of schema.required ?? []) {
-      if (!Object.hasOwn(value, name)) return `${label} is missing required argument: ${name}`;
-    }
-    for (const [name, child] of Object.entries(value)) {
-      const childSchema = schema.properties?.[name];
-      if (!childSchema) {
-        if (schema.additionalProperties === false) return `${label} has unknown argument: ${name}`;
-        continue;
-      }
-      const error = validateSchemaValue(child, childSchema, `${label}.${name}`);
-      if (error) return error;
-    }
-  }
-  return null;
-}
-
-/** Validate the model's arguments against the advertised schema and semantics. */
-export function validateToolArgs(tool, args) {
-  const error = validateSchemaValue(args, tool.parameters ?? { type: "object" }, `${tool.name} arguments`);
-  if (error) return error;
-  return tool.validate?.(args) ?? null;
 }

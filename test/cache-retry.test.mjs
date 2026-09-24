@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runTurn, accumulateUsage } from "../src/agent.mjs";
+import { runTurn } from "../src/agent.mjs";
+import { accumulateUsage } from "../src/agent/usage.mjs";
 import { buildBody } from "../src/llm.mjs";
 import { runHeadless } from "../src/headless.mjs";
 import { createMockServer } from "./helpers/mock-llm.mjs";

@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createMockServer } from "./helpers/mock-llm.mjs";
-import { runTurn, executeToolCall, accumulateUsage, canonicalToolCall } from "../src/agent.mjs";
+import { runTurn } from "../src/agent.mjs";
+import { executeToolCall } from "../src/agent/tool-call.mjs";
+import { accumulateUsage } from "../src/agent/usage.mjs";
+import { canonicalToolCall } from "../src/agent/turn-state.mjs";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

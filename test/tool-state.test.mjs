@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { executeToolCall } from "../src/agent.mjs";
+import { executeToolCall } from "../src/agent/tool-call.mjs";
 import { createToolState } from "../src/tool-state.mjs";
 
 const call = (name, args, id = name) => ({ id, function: { name, arguments: JSON.stringify(args) } });

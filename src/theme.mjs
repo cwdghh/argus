@@ -38,8 +38,10 @@ export const darkTheme = {
 
 /** Mutable theme used at render time. Defaults to light. */
 export const theme = { ...lightTheme };
+export let themeRevision = 0;
 
 /** Switch the active palette ("light" | "dark"). */
 export function setTheme(name) {
   Object.assign(theme, name === "dark" ? darkTheme : lightTheme);
+  themeRevision++;
 }

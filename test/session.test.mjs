@@ -281,11 +281,11 @@ test("the static config is persisted once, never per turn", async () => {
   assert.equal(loaded.meta.config.baseUrl, "http://x");
 });
 
-test("scanSessionMeta reads only the head records, not the turns", async () => {
+test("scanSessionMeta returns metadata without retaining turn payloads", async () => {
   const s = new Session("head-scan", config);
   await s.setCwd("/work");
   await s.setConfig(config);
-  // A rich turn full of content the meta scan must never parse.
+  // A rich turn full of content the meta scan need not deserialize.
   await s.appendTurn({
     config: sessionConfig(config),
     messages: [{ role: "user", content: "boom".repeat(10_000) }],
@@ -294,7 +294,7 @@ test("scanSessionMeta reads only the head records, not the turns", async () => {
   const meta = await scanSessionMeta("head-scan");
   assert.equal(meta.cwd, "/work");
   assert.equal(meta.config.systemPrompt, "s");
-  assert.ok(!meta.warnings, "the meta scan never sees turn content");
+  assert.ok(!meta.warnings, "discovery does not collect full-load warnings");
 });
 
 test("a torn/corrupt session cannot block default-session resolution", async () => {

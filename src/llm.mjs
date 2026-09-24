@@ -75,8 +75,7 @@ export function buildBody({ model, systemPrompt, messages, tools, contextCache }
       },
     })),
     tool_choice: "auto",
-    // One tool call per model step: sequential, audit-friendly, and it keeps
-    // the loop tight (fewer ways for the model to keep generating).
+    // Ask for one call; agent.mjs executes provider batches sequentially.
     parallel_tool_calls: false,
     stream: true,
     stream_options: { include_usage: true },
@@ -196,15 +195,15 @@ async function request({ baseUrl, apiKey, body, signal, requestTimeoutMs, maxRet
 export function abortableDelay(ms, signal) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
-      },
-      { once: true }
-    );
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 

@@ -8,6 +8,8 @@ in `PROGRESS.md`), never a rewrite.
 | File | What it holds |
 |------|---------------|
 | `progress-through-2026-08-17.md` | `PROGRESS.md` entries dated 2026-08-17 and earlier (moved 2026-08-23) |
+| `progress-through-2026-09-09.md` | Verbatim prior live progress log, preserved at the 2026-09-24 baseline; original entry dates retained |
+| `improvements-plan-2026-09-24.md` | Original W1–W6 audit plan, superseded by the live implementation brief; deferred items remain in the live gap/priority documents |
 | `refactor-plan.md` | The 2026-08-17 refactor proposal + execution record (frozen) |
 
 When to archive (see `docs/self-updating.md` → Archiving):

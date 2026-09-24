@@ -5,7 +5,7 @@
  * from a session's raw turns; `sessionConfig` picks the safe, credential-
  * free config subset to persist with each turn. Pure functions with one
  * home each, so the TUI and headless mode can never drift apart. Recovery
- * warnings from a torn final JSONL record travel with the reconstructed data.
+ * warnings from damaged JSONL records travel with the reconstructed data.
  */
 export function sessionData(data) {
   const blocks = [];

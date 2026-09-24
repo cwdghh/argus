@@ -1,6 +1,6 @@
 # Tool surface — canonical decisions
 
-**Status: decided and implemented (2026-08-24).** This file owns the answer to
+**Status: implemented.** This file owns the answer to
 which tools argus exposes to the model and the design rules for that surface.
 `docs/tools.md` owns the executable contract; this file records the rationale.
 
@@ -25,9 +25,9 @@ model request.
 
 1. **One canonical input shape.** The schema and recursive runtime validation
    agree. There are no hidden model-call aliases or legacy executor shapes.
-2. **One tool per model step.** The provider receives the sequential hint and
-   the loop rejects a multi-call reply before recording it or running a side
-   effect.
+2. **Sequential execution.** The provider receives the single-call hint. If it
+   returns several calls, the loop executes them in order under the same policy
+   and budgets; it never runs tools in parallel.
 3. **Descriptions own tool mechanics.** The system prompt carries repository
    behavior, not a second copy of parameter and result guidance. Each
    description also states its boundary with `bash`, so ordinary text-file
@@ -53,25 +53,25 @@ model request.
    changes. Old executor compatibility code is therefore unnecessary for
    auditability.
 
-## Decision log
+## Current decision register
 
 | # | Decision | Resolution |
 |---|----------|------------|
-| D1 | Default set | **Decided 2026-08-23:** keep exactly `read`, `write`, `edit`, `bash`; test-enforced. |
-| D2 | Calls per model step | **Decided 2026-08-24:** exactly one; reject provider violations before side effects. |
-| D3 | Repetition guard | **Decided 2026-08-24:** refuse the third consecutive identical call with the same result. Work between repeated calls resets the streak. |
-| D4 | Model-visible `edit` shape | **Decided 2026-08-23:** canonical `edits[]` only. |
-| D5 | Legacy top-level `edit` fields | **Decided 2026-08-24:** remove them from validation, execution, and tests. Session schema snapshots preserve history without executable aliases. |
-| D6 | Search/list tools | **Decided 2026-08-24:** do not add them; `bash` owns this job until behavioral evidence shows a material deficit. |
-| D7 | Schema validation | **Decided 2026-08-24:** recursively enforce the advertised minimal subset (`type`, `required`, `additionalProperties`, `items`, `minItems`, `minimum`, `minLength`) and use semantic validators for cross-field rules. |
-| D8 | Risk declaration | **Decided 2026-08-24:** add model-invisible risk classes and structured authorization requests. Keep the shell pattern gate as a backstop. |
-| D9 | Result convention | **Decided 2026-08-24:** structured errors; natural success payloads; structured continuation for bounded results; distinct timeout and abort states. |
-| D10 | Names | **Decided 2026-08-24:** keep the familiar four names; renaming adds churn without evidence of better tool choice. |
-| D11 | Freshness and parallelism | **Decided 2026-08-24:** same-turn range freshness is loop-scoped state; execution remains sequential. |
-| D12 | Extra model-visible metadata | **Decided 2026-08-24:** keep essential bounds in descriptions; do not add a second metadata protocol. |
-| D13 | Prompt duplication | **Decided 2026-08-24:** remove repeated tool mechanics from the default system prompt (119 words to 59). |
-| D14 | Tool-choice evaluation | **Decided 2026-08-24:** keep an opt-in real-model evaluator for content edit, range edit, uncued numbered-read editing, shell search, and file creation with/without a final newline. The harness is shipped; provider baselines are measurements, not test-suite claims. |
-| D15 | `/exit` and `/quit` | **Decided 2026-08-24:** retain the harmless user-facing alias; it costs the model nothing. |
+| D1 | Default set | keep exactly `read`, `write`, `edit`, `bash`; test-enforced. |
+| D2 | Calls per model step | Request one; accept provider batches and execute sequentially. Historical changes are recorded in [PROGRESS.md](../PROGRESS.md). |
+| D3 | Repetition guard | Bound identical and alternating no-progress cycles while allowing different work to break the cycle; see [tools.md](tools.md). |
+| D4 | Model-visible `edit` shape | canonical `edits[]` only. |
+| D5 | Legacy top-level `edit` fields | remove them from validation, execution, and tests. Session schema snapshots preserve history without executable aliases. |
+| D6 | Search/list tools | do not add them; `bash` owns this job until behavioral evidence shows a material deficit. |
+| D7 | Schema validation | recursively enforce the advertised minimal subset (`type`, `required`, `additionalProperties`, `items`, `minItems`, `minimum`, `minLength`) and use semantic validators for cross-field rules. |
+| D8 | Risk declaration | add model-invisible risk classes and structured authorization requests. Keep the shell pattern gate as a backstop. |
+| D9 | Result convention | structured errors; natural success payloads; structured continuation for bounded results; distinct timeout and abort states. |
+| D10 | Names | keep the familiar four names; renaming adds churn without evidence of better tool choice. |
+| D11 | Freshness and parallelism | same-turn range freshness is loop-scoped state; execution remains sequential. |
+| D12 | Extra model-visible metadata | keep essential bounds in descriptions; do not add a second metadata protocol. |
+| D13 | Prompt duplication | remove repeated tool mechanics from the default system prompt (119 words to 59). |
+| D14 | Tool-choice evaluation | keep an opt-in real-model evaluator for content edit, range edit, uncued numbered-read editing, shell search, and file creation with/without a final newline. The harness is shipped; provider baselines are measurements, not test-suite claims. |
+| D15 | `/exit` and `/quit` | retain the harmless user-facing alias; it costs the model nothing. |
 
 ## Evaluated alternatives
 

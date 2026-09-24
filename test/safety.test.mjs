@@ -4,7 +4,7 @@ import { mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findTool } from "../src/tools.mjs";
-import { executeToolCall } from "../src/agent.mjs";
+import { executeToolCall } from "../src/agent/tool-call.mjs";
 import { MinimalTui } from "../src/tui.mjs";
 
 const bash = findTool("bash");

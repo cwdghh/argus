@@ -32,46 +32,23 @@
  *   /help             show local commands
  *   @ / slash        live suggestions; Up/Down + Tab to pick, Esc to dismiss
  */
-import { runTurn } from "./agent.mjs";
-import { nextContextTokens } from "./compact.mjs";
-import { formatDuration } from "./format.mjs";
-import { appendBlock, consumeAgentEvent } from "./transcript.mjs";
-import { theme } from "./theme.mjs";
-import { sessionConfig } from "./session/index.mjs";
+import { appendBlock } from "./transcript.mjs";
+import { theme, themeRevision } from "./theme.mjs";
 import { Editor } from "./tui/editor.mjs";
 import { COMMANDS } from "./tui/commands.mjs";
 import { footerText, headerText } from "./tui/frames.mjs";
-import { decodeEscape } from "./tui/keys.mjs";
 import { buildFrame } from "./tui/layout.mjs";
 import { refreshGitStatus, startTui, stopTui } from "./tui/lifecycle.mjs";
 import { acceptSuggestion, computeSuggestion } from "./tui/suggestions.mjs";
 import {
   styleText,
   stripAnsi,
-  previousCharIndex,
-  nextCharIndex,
-  previousWordIndex,
 } from "./tui/renderers.mjs";
 import { blockLinesCached } from "./tui/blocks.mjs";
+import * as input from "./tui/input.mjs";
+import { submitTurn } from "./tui/turn.mjs";
 
 const ESC = "\x1b";
-// Pastes beyond either bound render the submitted user block as `[pasted N …]`
-// instead of flooding the transcript; the full text still persists and is what
-// actually reaches the model.
-const PASTE_ABBREV_CHARS = 1000;
-const PASTE_ABBREV_LINES = 20;
-// Agent events whose block projection changes the transcript; only these
-// invalidate the rendered-line cache (usage/cwd_change/assistant_* do not).
-const BLOCK_PROJECTING_EVENTS = new Set([
-  "thinking_delta",
-  "text_delta",
-  "tool_call",
-  "tool_result",
-  "approval",
-  "compacted",
-  "retrying",
-]);
-
 export class MinimalTui {
   constructor(config, opts = {}) {
     this.config = config;
@@ -148,10 +125,11 @@ export class MinimalTui {
     this._lines = null;
     this._linesWidth = -1;
     this._linesStamp = -1;
+    this._linesThemeRevision = -1;
   }
 
   transcriptLines() {
-    if (this._lines && this._linesWidth === this.width && this._linesStamp === this._renderStamp) {
+    if (this._lines && this._linesWidth === this.width && this._linesStamp === this._renderStamp && this._linesThemeRevision === themeRevision) {
       return this._lines;
     }
     const out = [];
@@ -181,6 +159,7 @@ export class MinimalTui {
     this._lines = out;
     this._linesWidth = this.width;
     this._linesStamp = this._renderStamp;
+    this._linesThemeRevision = themeRevision;
     return out;
   }
 
@@ -254,125 +233,7 @@ export class MinimalTui {
     this.dirtyRendered = true;
   }
 
-  async submit() {
-    if (this.mode !== "idle") return;
-    if (this.pendingConfirm) return; // a confirmation is in flight; Enter submits y/n via insertText
-    const text = this.editor.buffer.trim();
-    if (!text) return;
-    const pasteMeta = this.editor.lastPaste;
-    this.editor.lastPaste = null;
-    this.editor.draft = null;
-    this.editor.buffer = "";
-    this.editor.cursor = 0;
-    this.suggestion = null;
-    if (text.startsWith("/")) {
-      await this.runCommand(text);
-      return;
-    }
-    this.mode = "working";
-    this.activityStartedAt = this.now();
-    this.lastClockTick = -1;
-    this.turnUsage = null;
-    this.dirtyRendered = true;
-
-    if (this.editor.history[this.editor.history.length - 1] !== text) this.editor.history.push(text);
-    this.editor.historyIndex = -1;
-    const turnStart = this.blocks.length;
-    this.pushBlock({ kind: "user", text: this.userPromptText(text, pasteMeta) });
-
-    const ac = new AbortController();
-    this.abortController = ac;
-    let savedMessages = [{ role: "user", content: text }];
-    let outcome = "completed";
-    try {
-      const { messages, aborted, cwd } = await runTurn(this.config, this.history, text, (ev) => {
-        // Mode/live-state tracking is frontend-specific; the blocks both
-        // frontends persist come from the shared consumeAgentEvent so the TUI
-        // and headless can never drift (W6.6).
-        if (ev.type === "tool_call") {
-          this.activeToolStartedAt = this.now();
-          this.activeTool = { name: ev.name, args: ev.args };
-          if (this.mode !== "aborting") this.mode = "working";
-        } else if (ev.type === "thinking_delta") {
-          this.mode = "thinking";
-        } else if (ev.type === "text_delta" || ev.type === "tool_result" || ev.type === "compacted" || ev.type === "retrying") {
-          if (this.mode !== "aborting") this.mode = "working";
-        } else if (ev.type === "cwd_change") {
-          this.cwd = ev.cwd;
-          if (this.session) this.session.setCwd(ev.cwd).catch(() => {});
-        } else if (ev.type === "usage") {
-          this.turnUsage = ev.usage;
-        }
-        if (ev.type === "tool_result") {
-          // The one block field the projector can't derive: the tool's wall time.
-          const durationMs = this.activeToolStartedAt == null ? null : this.now() - this.activeToolStartedAt;
-          this.activeToolStartedAt = null;
-          this.activeTool = null;
-          consumeAgentEvent(this.blocks, ev, { durationMs });
-        } else {
-          consumeAgentEvent(this.blocks, ev);
-        }
-        // The projector mutates this.blocks directly (bypassing pushBlock), so
-        // bump the render stamp for exactly the events that produced blocks.
-        if (BLOCK_PROJECTING_EVENTS.has(ev.type)) this._renderStamp++;
-        this.dirtyRendered = true;
-      }, {
-        signal: ac.signal,
-        cwd: this.cwd,
-        authorize: (request) => this.confirm(request),
-        // Real tokens of the context this turn will re-send (previous request's
-        // prompt + its completion); feeds the 200K-token compaction trigger.
-        lastTokens: nextContextTokens(this.lastTurnUsage),
-      });
-      savedMessages = messages;
-      this.history.push(...messages);
-      if (typeof cwd === "string") this.cwd = cwd;
-      if (aborted || ac.signal.aborted) {
-        outcome = "interrupted";
-        this.pushBlock({ kind: "result", ok: false, summary: "⏹ interrupted" });
-      }
-    } catch (err) {
-      savedMessages = err.turnMessages ?? savedMessages;
-      this.history.push(...savedMessages);
-      if (ac.signal.aborted) {
-        outcome = "interrupted";
-        this.pushBlock({ kind: "result", ok: false, summary: "⏹ interrupted" });
-      } else {
-        outcome = "failed";
-        this.pushBlock({ kind: "error", text: err.message });
-      }
-    } finally {
-      const durationMs = this.activityStartedAt == null ? 0 : this.now() - this.activityStartedAt;
-      this.lastTurnDurationMs = durationMs;
-      this.lastTurnUsage = this.turnUsage;
-      this.pushBlock({ kind: "timing", summary: `${outcome} in ${formatDuration(durationMs)}`, durationMs, usage: this.turnUsage });
-      if (this.session) {
-        try {
-          await this.session.setCwd(this.cwd);
-          // Static config (incl. systemPrompt) is persisted once per session,
-          // not with every turn; appendTurn stores only the model delta.
-          await this.session.setConfig(this.config);
-          await this.session.appendTurn({
-            config: sessionConfig(this.config),
-            messages: savedMessages,
-            blocks: this.blocks.slice(turnStart),
-          });
-        } catch (err) {
-          this.pushBlock({ kind: "error", text: `could not save session: ${err.message}` });
-        }
-      }
-      this.abortController = null;
-      this.aborting = false;
-      this.activeTool = null;
-      this.activeToolStartedAt = null;
-      this.activityStartedAt = null;
-      this.mode = "idle";
-      // Leave the scroll anchor alone: a user who scrolled back during
-      // generation keeps reading the same spot instead of being yanked to
-      // the bottom when the turn ends. The default (null) follows anyway.
-      this.dirtyRendered = true;
-    }
-  }
+  submit() { return submitTurn(this); }
 
   async runCommand(text) {
     this.editor.historyIndex = -1;
@@ -493,114 +354,20 @@ export class MinimalTui {
 
   // ---- raw input parsing --------------------------------------------------
 
-  onData(chunk) {
-    this.rawBuf += this.decoder.decode(chunk, { stream: true });
-    this.consumeInput();
-  }
+  onData(chunk) { return input.onData(this, chunk); }
 
-  consumeInput() {
-    if (this.pasting) {
-      const end = this.rawBuf.indexOf("\x1b[201~");
-      if (end === -1) return;
-      // Normalize CRLF/CR to LF but keep every other byte — a paste is data,
-      // not key presses, so control bytes must not be interpreted (W1).
-      const pasted = this.rawBuf.slice(0, end).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-      this.rawBuf = this.rawBuf.slice(end + 6);
-      this.pasting = false;
-      this.pasteLiteral(pasted);
-      this.consumeInput();
-      return;
-    }
-    const esc = this.rawBuf.indexOf("\x1b");
-    if (esc === -1) {
-      if (this.rawBuf) {
-        this.insertText(this.rawBuf);
-        this.rawBuf = "";
-      }
-      this.clearEscTimeout();
-      return;
-    }
-    if (esc > 0) {
-      this.insertText(this.rawBuf.slice(0, esc));
-      this.rawBuf = this.rawBuf.slice(esc);
-    }
-    if (this.tryEscape()) {
-      this.clearEscTimeout();
-      this.consumeInput();
-    } else if (this.rawBuf === "\x1b") {
-      this.scheduleEscTimeout();
-    }
-  }
+  consumeInput() { return input.consumeInput(this); }
 
-  scheduleEscTimeout() {
-    if (this.escTimer) return;
-    this.escTimer = setTimeout(() => {
-      this.escTimer = null;
-      if (this.stopped) return;
-      if (this.rawBuf === "\x1b") {
-        this.rawBuf = "";
-        this.runAction({ type: "escape" });
-      }
-    }, 60);
-  }
+  scheduleEscTimeout() { return input.scheduleEscTimeout(this); }
 
-  clearEscTimeout() {
-    if (this.escTimer) {
-      clearTimeout(this.escTimer);
-      this.escTimer = null;
-    }
-  }
+  clearEscTimeout() { return input.clearEscTimeout(this); }
 
-  tryEscape() {
-    const decoded = decodeEscape(this.rawBuf);
-    if (!decoded) return false;
-    this.rawBuf = this.rawBuf.slice(decoded.consumed);
-    if (decoded.pasting) this.pasting = true;
-    else if (decoded.action) this.runAction(decoded.action);
-    return true;
-  }
+  tryEscape() { return input.tryEscape(this); }
 
-  insertText(text) {
-    if (this.pendingConfirm) return this.confirmKey(text);
-    for (const ch of text) {
-      const cp = ch.codePointAt(0);
-      if (cp < 32 || cp === 127) {
-        if (cp === 1) this.editor.cursor = 0; // Ctrl-A
-        else if (cp === 9) this.completePath(); // Tab
-        else if (cp === 3) this.handleCtrlC();
-        else if (cp === 4) {
-          // Ctrl-D quits only on an empty buffer *while idle* — mid-turn it must
-          // not exit (the mode guard mirrors Esc / Ctrl-C).
-          if (!this.editor.buffer && this.mode === "idle") this.stop();
-          else if (this.editor.buffer) this.deleteAtCursor();
-        } else if (cp === 5) this.editor.cursor = this.editor.buffer.length; // Ctrl-E
-        else if (cp === 11) this.deleteToLineEnd(); // Ctrl-K
-        else if (cp === 12) this.redraw(); // Ctrl-L
-        else if (cp === 21) this.deleteToLineStart(); // Ctrl-U
-        else if (cp === 23) { // Ctrl-W
-          const previous = previousWordIndex(this.editor.buffer, this.editor.cursor);
-          this.editor.buffer = this.editor.buffer.slice(0, previous) + this.editor.buffer.slice(this.editor.cursor);
-          this.editor.cursor = previous;
-        } else if (cp === 13 || cp === 10) {
-          this.submit();
-        } else if (cp === 127 || cp === 8) {
-          this.backspace();
-        }
-        this.dirtyRendered = true;
-        continue;
-      }
-      this.editor.insert(String.fromCodePoint(cp));
-      this.dirtyRendered = true;
-    }
-    this.refreshSuggestions();
-  }
+  insertText(text) { return input.insertText(this, text); }
 
   /** A potential y/n input while a confirmation is pending (Enter or a paste). */
-  confirmKey(text) {
-    const ch = String(text).trim().toLowerCase()[0];
-    if (ch === "y") this.resolveConfirm(true);
-    else if (ch === "n") this.resolveConfirm(false);
-  }
+  confirmKey(text) { return input.confirmKey(this, text); }
 
   /**
    * Insert a bracketed-paste payload literally, bypassing the per-character
@@ -608,18 +375,7 @@ export class MinimalTui {
    * text, and embedded newlines must never fire submit() — the payload lands in
    * one editor.insert() call.
    */
-  pasteLiteral(text) {
-    if (this.pendingConfirm) return this.confirmKey(text);
-    this.editor.insert(text);
-    // Large pastes abbreviate the rendered user block (W1): record the shape
-    // so submit() knows when the prompt came straight from a paste.
-    const lines = text.split("\n").length;
-    if (text.length > PASTE_ABBREV_CHARS || lines > PASTE_ABBREV_LINES) {
-      this.editor.lastPaste = { chars: text.length, lines, text: text.trim() };
-    }
-    this.dirtyRendered = true;
-    this.refreshSuggestions();
-  }
+  pasteLiteral(text) { return input.pasteLiteral(this, text); }
 
   /**
    * The text of the submitted `user` block. A large paste renders as a marker
@@ -627,14 +383,7 @@ export class MinimalTui {
    * only when it is exactly what is submitted — edits after the paste keep the
    * real text visible.
    */
-  userPromptText(text, pasteMeta) {
-    if (!pasteMeta) return text;
-    if (text !== pasteMeta.text) return text;
-    if (pasteMeta.chars > PASTE_ABBREV_CHARS || pasteMeta.lines > PASTE_ABBREV_LINES) {
-      return pasteMeta.lines > 1 ? `[pasted ${pasteMeta.lines} lines]` : `[pasted ${pasteMeta.chars} chars]`;
-    }
-    return text;
-  }
+  userPromptText(text, pasteMeta) { return input.userPromptText(text, pasteMeta); }
 
   backspace() {
     this.editor.backspace();
@@ -652,99 +401,7 @@ export class MinimalTui {
     process.stdout.write(`${ESC}[2J${ESC}[H`);
   }
 
-  runAction(action) {
-    if (this.stopped) return;
-    switch (action.type) {
-      case "exit":
-        return this.stop();
-      case "enter":
-        return this.submit();
-      case "shiftenter":
-        this.insertNewline();
-        break;
-      case "backspace":
-        this.backspace();
-        break;
-      case "delete":
-        this.deleteAtCursor();
-        break;
-      case "left":
-        this.editor.cursor = previousCharIndex(this.editor.buffer, this.editor.cursor);
-        this.refreshSuggestions();
-        break;
-      case "right":
-        this.editor.cursor = nextCharIndex(this.editor.buffer, this.editor.cursor);
-        this.refreshSuggestions();
-        break;
-      case "up":
-        if (this.suggestion) {
-          this.suggestionMove(-1);
-          break;
-        }
-        if (this.editor.buffer.includes("\n")) {
-          if (this.moveCaretVertical(-1)) break;
-        }
-        this.historyUp();
-        return;
-      case "down":
-        if (this.suggestion) {
-          this.suggestionMove(1);
-          break;
-        }
-        if (this.editor.buffer.includes("\n")) {
-          if (this.moveCaretVertical(1)) break;
-        }
-        this.historyDown();
-        return;
-      case "pageup":
-        // "Up" = toward older content: decrease the absolute first-line index.
-        this.scrollOffset =
-          this.scrollOffset == null
-            ? Math.max(0, this.maxScroll() - this.transcriptHeight())
-            : Math.max(0, this.scrollOffset - this.transcriptHeight());
-        break;
-      case "pagedown":
-        if (this.scrollOffset != null) {
-          const max = this.maxScroll();
-          this.scrollOffset = Math.min(this.scrollOffset + this.transcriptHeight(), max);
-          // Reaching the bottom resumes following the latest output.
-          if (this.scrollOffset >= max) this.scrollOffset = null;
-        }
-        break;
-      case "home":
-        this.scrollOffset = 0;
-        break;
-      case "end":
-        this.scrollOffset = null;
-        break;
-      case "escape":
-        if (this.pendingConfirm) this.resolveConfirm(false);
-        else if (this.mode !== "idle") this.abortTurn();
-        else if (this.suggestion) {
-          this.suggestion = null;
-        }
-        // else: a multiline draft is left untouched — never flatten silently
-        // (the editor's history draft slot already protects it on Up/Down).
-        break;
-      case "wheel":
-        if (action.dir > 0) {
-          // Wheel up: toward older content.
-          this.scrollOffset =
-            this.scrollOffset == null
-              ? Math.max(0, this.maxScroll() - 3)
-              : Math.max(0, this.scrollOffset - 3);
-        } else if (this.scrollOffset != null) {
-          // Wheel down: toward the bottom; reaching it resumes following.
-          const max = this.maxScroll();
-          this.scrollOffset = Math.min(this.scrollOffset + 3, max);
-          if (this.scrollOffset >= max) this.scrollOffset = null;
-        }
-        break;
-      default:
-        return;
-    }
-    this.dirtyRendered = true;
-  }
+  runAction(action) { return input.runAction(this, action); }
 
   historyUp() {
     this.editor.historyUp();

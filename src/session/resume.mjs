@@ -4,7 +4,9 @@
  * a repo picks the session that worked there — without ever auto-resuming
  * a session from an unrelated folder.
  */
-import { listSessions, newSessionName, scanSessionMeta } from "./store.mjs";
+import { listSessions } from "./catalog.mjs";
+import { newSessionName } from "./paths.mjs";
+import { scanSessionMeta } from "./reader.mjs";
 
 // How many of the newest sessions the folder-matched default resume considers.
 // A recency-prioritized search stays fast on startup; older sessions remain
@@ -33,8 +35,8 @@ export async function latestSessionForCwd(cwd, { limit = RESUME_SCAN_LIMIT } = {
   for (const item of bounded) {
     let meta;
     try {
-      // Head-only scan: only the leading cwd/model/config records are needed,
-      // not a full transcript rebuild. A torn session must not block startup
+      // Scan metadata through the entire file to honor later cwd changes,
+      // without retaining or reconstructing turns. A torn session must not block startup
       // — skip it and keep looking (loadSession will warn if it is resumed).
       meta = await scanSessionMeta(item.name);
     } catch {
@@ -52,4 +54,3 @@ export async function latestSessionForCwd(cwd, { limit = RESUME_SCAN_LIMIT } = {
 export async function defaultSessionName(cwd) {
   return (await latestSessionForCwd(cwd)) ?? newSessionName();
 }
-

@@ -1,79 +1,25 @@
-# NEXT_STEPS.md — candidate directions for argus
+# Next steps
 
-**Purpose:** a short list of concrete work that has not shipped, ranked by
-likely value. This is a planning reference, not a commitment. Shipped work
-belongs in `PROGRESS.md`; current design questions belong in `GAPS.md`.
+Ranked candidates, not commitments. [GAPS.md](GAPS.md) owns open questions;
+[the implementation brief](docs/improvements-plan.md) owns execution details.
+Completed work belongs in [PROGRESS.md](PROGRESS.md).
 
-The canonical four-tool surface and its loop/freshness policy were completed on
-2026-08-24. See `docs/tool-surface.md`; do not reopen it here without behavioral
-evidence.
+1. **Interrupt and continue** — review the existing interaction proposal, then
+   implement lossless partial-turn persistence and explicit continuation.
+   Related: gaps 5 and 7. Begin with the brief linked above.
+2. **Broader behavioral evaluation** — a small set of coding tasks with automatic
+   outcomes and recorded provider/model baselines. Related: gap 9.
+3. **Structured compaction** — an optional semantic summary with a deterministic
+   fallback; preserve append-only source history. Related: gap 4.
+4. **Steering** — define how new input enters an active turn and is persisted.
+   Related: gap 8.
+5. **Compatible-model fallback** — retry one eligible failed step on an explicitly
+   configured fallback model, with clear events and accounting. Related: gap 6.
 
-## Current plan — see `docs/improvements-plan.md`
+Lower-priority candidates remain in the corresponding gaps: truncated-outcome
+presentation, live shell output, spill retention, terminal protocol refinements,
+notifications, transcript replay, native provider support, and sandboxing.
+Mid-turn compaction and a sub-agent capability require separate design work.
 
-A full-repo audit (incl. `references/pi`) produced a verified, workstreamed plan:
-`docs/improvements-plan.md` is the source of truth. Its top picks, in suggested
-order:
-
-1. **W6 — Feature backlog** — interrupt→continue, render cache, structured
-   compaction, fallback model, steering.
-
-## Practical improvements
-
-### 1. Broader behavioral evals
-
-- **What:** grow beyond the opt-in `npm run eval:tools` surface checks into a
-  small set of coding tasks with automated outcomes and recorded provider
-  baselines.
-- **Why:** deterministic tests protect the implementation and the existing
-  evaluator protects basic tool choice, but neither measures general coding
-  quality after prompt or model changes.
-- **Considerations:** keep real-API cost explicit; choose tasks that predict
-  real usefulness; avoid provider-specific score theater.
-
-### 2. Desktop notifications for long tasks
-
-- **What:** notify when a turn exceeding a configurable threshold completes.
-- **Why:** useful after switching away from a long model or test run.
-- **Considerations:** macOS/Linux/Windows mechanisms differ; keep terminal-only
-  identity and failure behavior simple.
-
-## Larger design directions
-
-### 3. Smarter context summaries
-
-- **What:** optionally use model-generated summaries for older turns instead of
-  only deterministic digests.
-- **Why:** may retain intent and decisions better in very long sessions.
-- **Considerations:** adds latency, cost, and a second model call whose failure
-  must not damage the append-only source history.
-
-### 4. Native multi-provider support
-
-- **What:** support a non-OpenAI-compatible provider such as Anthropic, or add
-  a small provider registry.
-- **Why:** expands endpoint choice beyond the already broad compatible API.
-- **Considerations:** provider-specific message/tool/usage semantics can erode
-  the project's minimal, auditable loop.
-
-### 5. Transcript replay tests
-
-- **What:** replay sanitized real-session traces through a deterministic model
-  fixture.
-- **Why:** preserves real call-shape regressions that hand-written cases may
-  miss. Tool-surface hashes and snapshots now make historical traces precise.
-- **Considerations:** strip secrets and unstable paths; separate deterministic
-  protocol replay from live-model behavioral evaluation.
-
-### 6. Process sandbox
-
-- **What:** run shell commands inside an isolation boundary rather than directly
-  on the host.
-- **Why:** materially stronger safety than the current approval backstop.
-- **Considerations:** containers/seccomp/platform differences add substantial
-  complexity and may conflict with the dependency-free, host-native design.
-
-## How to use this file
-
-Choose one item only after checking its related gap and current code. When it
-ships, append the verified work to `PROGRESS.md` and remove it here; do not keep
-duplicate status narratives.
+Choose one bounded change at a time. Reconfirm the code and its owning contract;
+the archived audit's line numbers and commit instructions are historical only.

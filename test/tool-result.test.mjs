@@ -1,0 +1,37 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { boundToolResult } from "../src/agent/tool-result.mjs";
+
+test("a long spill path cannot exceed the result cap or discard read continuation", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "argus-long-spill-"));
+  const previous = process.env.ARGUS_HOME;
+  process.env.ARGUS_HOME = join(root, ...Array(6).fill("long-home".repeat(10)));
+  t.after(async () => {
+    if (previous === undefined) delete process.env.ARGUS_HOME;
+    else process.env.ARGUS_HOME = previous;
+    await rm(root, { recursive: true, force: true });
+  });
+  const result = await boundToolResult({ error: true, nextOffset: 42, stdout: "x".repeat(2000) + "TAIL" }, 500);
+  assert.ok(JSON.stringify(result).length <= 500);
+  assert.equal(result.nextOffset, 42);
+  assert.equal(result.error, true);
+  assert.match(result.preview, /TAIL/);
+});
+
+test("spilled output stays complete and owner-private", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "argus-private-spill-"));
+  const previous = process.env.ARGUS_HOME;
+  process.env.ARGUS_HOME = root;
+  t.after(async () => {
+    if (previous === undefined) delete process.env.ARGUS_HOME;
+    else process.env.ARGUS_HOME = previous;
+    await rm(root, { recursive: true, force: true });
+  });
+  const original = { stdout: "x".repeat(2000) };
+  const result = await boundToolResult(original, 700);
+  assert.deepEqual(JSON.parse(await readFile(result.fullPath, "utf8")), original);
+  if (process.platform !== "win32") assert.equal((await stat(result.fullPath)).mode & 0o777, 0o600);
+});
