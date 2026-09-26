@@ -8,6 +8,13 @@ See the [archive index](docs/archive/README.md) for provenance.
 
 ---
 
+#### 2026-09-26 — remote verification of terminal-agent foundations
+
+Commit `4ca52e1` was pushed to `origin/main`. The [Verify workflow](https://github.com/cwdghh/argus/actions/runs/36246372596)
+completed successfully for Ubuntu and macOS on Node 22 and 24 (four jobs).
+This updates the earlier entry's “remote CI not run” status; no paid live-provider
+coding or continuation trials have been performed.
+
 #### 2026-09-26 — verification correction and context retrieval check
 
 The entry below recorded 365 tests before the final omitted-constraint retrieval
