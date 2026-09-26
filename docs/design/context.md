@@ -78,8 +78,9 @@ belong to the session host; the context reducer remains a pure transformation
 where possible. Referenced artifacts remain while their session remains unless
 the user explicitly removes them. Missing artifacts produce an honest unavailable
 reference. Implement retention alongside publication, not as a cleanup afterthought.
-The first slice bounds the digest and paged reads, but not total artifact bytes
-across repeated revisions; that limit remains a follow-up.
+The first slice bounds the digest and paged reads. It atomically replaces one
+session-scoped indexed source artifact instead of accumulating a full copy per
+revision; its size still grows with the covered history.
 
 Do not add embeddings, cross-project memory, a database, or a new retrieval tool
 in C1. Those need separate evidence and ownership decisions.

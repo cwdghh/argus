@@ -20,6 +20,25 @@ import { consumeAgentEvent } from "./transcript.mjs";
 import { summarizeEvidence } from "./agent/evidence.mjs";
 
 export async function runHeadless(config, prompt, { session, cwd, stdout, stderr, continueRun = false, resolution = null, checkCommands = [] } = {}) {
+  const controller = new AbortController();
+  const termination = { signal: controller.signal, requested: false };
+  let forceTimer = null;
+  const onSigterm = () => {
+    termination.requested = true;
+    controller.abort();
+    forceTimer = setTimeout(() => process.exit(143), 4_000);
+  };
+  process.once("SIGTERM", onSigterm);
+  try {
+    return await runHeadlessOnce(config, prompt, { session, cwd, stdout, stderr, continueRun, resolution,
+      checkCommands, termination });
+  } finally {
+    process.removeListener("SIGTERM", onSigterm);
+    clearTimeout(forceTimer);
+  }
+}
+
+async function runHeadlessOnce(config, prompt, { session, cwd, stdout, stderr, continueRun, resolution, checkCommands, termination }) {
   // Streams are injectable so tests can capture output without monkeypatching.
   const writeOut = stdout || ((s) => process.stdout.write(s));
   const writeErr = stderr || ((s) => process.stderr.write(s));
@@ -116,6 +135,7 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
         }
       },
       {
+        signal: termination.signal,
         cwd: activeCwd,
         artifactDir: session?.artifactDir?.(),
         ...(parentRunId ? { parentRunId } : {}),
@@ -199,9 +219,10 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
   }
 
   if (error) {
-    process.exitCode = 1;
+    process.exitCode = termination.requested ? 143 : 1;
     return;
   }
   if (sawText || result.outcome === "interrupted") writeOut("\n");
-  process.exitCode = result.outcome === "completed" ? 0 : result.outcome === "interrupted" ? 130 : 1;
+  process.exitCode = termination.requested ? 143
+    : result.outcome === "completed" ? 0 : result.outcome === "interrupted" ? 130 : 1;
 }

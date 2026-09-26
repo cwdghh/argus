@@ -74,6 +74,7 @@ export function attachInput(tui) {
  * clock, git polling, input attachment, and background-adaptive theme.
  */
 export function startTui(tui) {
+  process.once("SIGTERM", () => { void stopOnSignal(tui); });
   process.stdin.setRawMode(true);
   process.stdin.resume();
   // Clear the whole screen up front so we start from a clean slate rather than
@@ -110,11 +111,22 @@ export function startTui(tui) {
   });
 }
 
+/** Request a cooperative stop, then restore the terminal within a fixed bound. */
+export async function stopOnSignal(tui, stop = stopTui) {
+  if (tui.stopped) return;
+  if (tui.mode !== "idle") tui.abortTurn();
+  const deadline = Date.now() + 3_000;
+  while (tui.abortController && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  await stop(tui, 143, 500);
+}
+
 /**
  * Tear down the TUI and exit: stop clocks, flush pending session writes, restore
  * terminal modes, exit 0.
  */
-export async function stopTui(tui) {
+export async function stopTui(tui, exitCode = 0, flushMs = null) {
   if (tui.stopped) return;
   tui.stopped = true;
   clearInterval(tui.timer);
@@ -123,7 +135,9 @@ export async function stopTui(tui) {
   // Flush the queued session writes (e.g. a just-finished turn) before exit so
   // a Ctrl-D right after Enter doesn't drop the last persisted record.
   try {
-    await tui.session?.writeQueue?.catch?.(() => {});
+    const pending = tui.session?.writeQueue?.catch?.(() => {});
+    if (flushMs == null) await pending;
+    else await Promise.race([pending, new Promise((resolve) => setTimeout(resolve, flushMs))]);
   } catch {
     // the queue has no catch surface; non-fatal
   }
@@ -132,5 +146,5 @@ export async function stopTui(tui) {
   process.stdin.pause();
   tui.decoder.decode();
   process.stdout.write(`${ESC}[?25h\n`);
-  process.exit(0);
+  process.exit(exitCode);
 }

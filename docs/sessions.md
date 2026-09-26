@@ -90,7 +90,8 @@ new run with `parentRunId`; it does not change the earlier run's outcome.
 ## Private artifacts and lifecycle
 
 The stable `sessionId` names a private artifact directory under
-`ARGUS_HOME/context`. Context source files and bounded shell/spill files use
+`ARGUS_HOME/context`. The indexed context source is atomically replaced as it
+grows, while bounded shell/spill files use
 owner-only permissions and survive session rename. Deleting or pruning a
 session removes its artifact directory; active ownership blocks housekeeping.
 Unnamed headless runs use the general private `ARGUS_HOME/tmp` spill directory,

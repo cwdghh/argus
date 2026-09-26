@@ -8,6 +8,22 @@ See the [archive index](docs/archive/README.md) for provenance.
 
 ---
 
+#### 2026-09-26 — bounded artifact growth and SIGTERM shutdown
+
+- Replaced per-revision full-history context artifacts with one atomically
+  replaced, indexed source file per session. Older covered messages remain
+  available, while stored source bytes no longer multiply with each revision.
+- Added cooperative SIGTERM handling to the TUI and headless frontend. Both
+  request cancellation and exit 143; the TUI restores terminal modes within a
+  bounded shutdown, and headless saves an interrupted outcome when possible.
+
+**Verified in this session:** `npm run verify` checked 91 modules and 19 live
+documents; **369/369 offline tests pass** on macOS / Node v26.5.0.
+`git diff --check` passed. A real pseudo-terminal smoke check observed TUI
+exit 143 and restored bracketed-paste mode after SIGTERM. A child-process test
+observed headless exit 143 and a saved interrupted outcome. This does not test
+power loss or guarantee that every effect settles before a forced deadline.
+
 #### 2026-09-26 — remote verification of terminal-agent foundations
 
 Commit `4ca52e1` was pushed to `origin/main`. The [Verify workflow](https://github.com/cwdghh/argus/actions/runs/36246372596)

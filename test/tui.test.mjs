@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MinimalTui } from "../src/tui.mjs";
+import { stopOnSignal } from "../src/tui/lifecycle.mjs";
 import { formatChars } from "../src/format.mjs";
 import { SLASH_COMMANDS } from "../src/tui/commands.mjs";
 import { suggestionLines } from "../src/tui/suggestions.mjs";
@@ -1097,4 +1098,17 @@ test("footer shows confirm phase distinctly", () => {
   t.mode = "confirm";
   const f = t.footer().replace(/\x1b\[[0-9;]*m/g, "");
   assert.ok(f.startsWith("confirm"), "footer names the confirm phase");
+});
+
+test("SIGTERM requests cancellation and bounded terminal cleanup", async () => {
+  const tui = {
+    stopped: false, mode: "working", abortController: {}, aborted: false,
+    abortTurn() { this.aborted = true; this.abortController = null; },
+  };
+  let stopped;
+  await stopOnSignal(tui, async (_tui, exitCode, flushMs) => {
+    stopped = { exitCode, flushMs };
+  });
+  assert.equal(tui.aborted, true);
+  assert.deepEqual(stopped, { exitCode: 143, flushMs: 500 });
 });

@@ -34,8 +34,8 @@ against the coding suite, mid-run reduction, and a better response when pinned
 current material alone exceeds the request cap. A digest can still omit an
 important constraint; the indexed source is the recovery path. See
 [architecture](docs/architecture.md) and [context design](docs/design/context.md).
-Source artifacts currently duplicate covered history at each new revision, so
-long-lived sessions need a measured artifact-size and retention policy.
+The source artifact is replaced atomically at each new revision and grows with
+the covered history; very long sessions still need a measured size policy.
 
 ## 5. Session persistence
 
@@ -59,7 +59,7 @@ See [P1](docs/design/providers.md).
 The current loop limits, outcomes, supervised shell, bounded artifacts, and
 continuation are in [tools](docs/tools.md), [architecture](docs/architecture.md),
 and [sessions](docs/sessions.md). Open: descendants that detach from the owned
-process group, explicit SIGTERM behavior, and a live-provider continuation
+process group and a live-provider continuation
 matrix. The short live output preview and Esc cancellation passed a local
 mock-provider check in a real TTY. Exact-once effects
 are not guaranteed after an uncertain crash.

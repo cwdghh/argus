@@ -26,15 +26,18 @@ an instruction pointer inside a shell process.
 | SIGTERM / terminal shutdown | Attempt bounded cooperative checkpoint and cleanup; exit with explicit interruption status where possible. |
 
 The TUI `/continue` and headless `--continue --session` paths are implemented.
-SIGTERM-specific exit handling and machine-readable headless results remain open.
+The TUI handles SIGTERM with cooperative cancellation, a bounded flush, terminal
+restoration, and exit 143. Headless mode cancels an active run, saves its
+interrupted outcome when possible, and exits 143 after SIGTERM. Machine-readable
+headless results remain open.
 Keep continuation separate from selecting/loading a saved session. Completion, truncation, failure, and
 interruption should each offer context-appropriate follow-up wording. Continuing
 must not change a historical outcome to completed; it creates a linked run.
 
 Headless mode returns 130 for user interruption and 1 for failed, truncated, or
 limited outcomes. Successful model termination can exit zero but does not
-certify task correctness. A machine-readable result option and SIGTERM-specific
-code remain open. Headless continuation is explicit, targets a named session,
+certify task correctness. A machine-readable result option remains open.
+Headless continuation is explicit, targets a named session,
 and fails
 clearly when user input is needed; it must not wait forever for a hidden prompt.
 

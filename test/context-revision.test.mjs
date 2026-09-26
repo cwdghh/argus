@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { maybeCompact, sourceHash } from "../src/compact.mjs";
@@ -63,6 +63,32 @@ test("private context artifact is retrievable after rename and removed with its 
   assert.equal(existsSync(saved.artifactPath), true);
   await deleteSession("context-new");
   assert.equal(existsSync(saved.artifactPath), false);
+});
+
+test("repeated revisions replace one complete source artifact", async (t) => {
+  const home = mkdtempSync(join(tmpdir(), "argus-context-replace-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const previous = process.env.ARGUS_HOME;
+  process.env.ARGUS_HOME = home;
+  t.after(() => {
+    if (previous === undefined) delete process.env.ARGUS_HOME;
+    else process.env.ARGUS_HOME = previous;
+  });
+  const session = new Session("context-replace", { model: "mock" });
+  await session.beginRun({ runId: "r1", prompt: "new", model: "mock", cwd: home });
+  const history = [pair(1), pair(2), pair(3)].flat();
+  const first = maybeCompact(history, { compactAtChars: 1, keepTurns: 1,
+    turnSizes: [2, 2, 2] }).revision;
+  const savedFirst = await session.saveContextRevision(first, history.slice(0, first.coveredMessages));
+  const extended = [...history, ...pair(4)];
+  const second = maybeCompact(extended, { compactAtChars: 1, keepTurns: 1,
+    turnSizes: [2, 2, 2, 2], previousRevision: savedFirst }).revision;
+  const savedSecond = await session.saveContextRevision(second, extended.slice(0, second.coveredMessages));
+  await session.endRun("r1", { messages: [{ role: "user", content: "new" }], blocks: [] });
+  assert.equal(savedSecond.artifactPath, savedFirst.artifactPath);
+  assert.deepEqual(readdirSync(session.artifactDir()), ["source.txt"]);
+  assert.match(readFileSync(savedSecond.artifactPath, "utf8"), /task 1/);
+  assert.match(readFileSync(savedSecond.artifactPath, "utf8"), /task 3/);
 });
 
 test("agent saves a context revision before sending its bounded model request", async (t) => {

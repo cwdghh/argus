@@ -19,7 +19,9 @@ export async function writeContextArtifact(sessionId, revision, messages) {
   const dir = contextDir(sessionId);
   await mkdir(dir, { recursive: true, mode: 0o700 });
   await chmod(dir, 0o700);
-  const file = join(dir, `${revision.sourceHash}.txt`);
+  // A later revision contains the earlier prefix. Replace one indexed source
+  // file atomically instead of retaining another full copy at every reduction.
+  const file = join(dir, "source.txt");
   const sections = messages.map(linesFor);
   const header = [
     "# Argus context source (private session artifact)",

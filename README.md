@@ -57,6 +57,8 @@ a slow tool is identified in the footer.
 - PgUp/PgDn and the mouse wheel scroll; Home/End jump to the top or latest output.
 - Esc interrupts a running turn. Ctrl-C interrupts, and a second press forces exit;
   when idle it exits. Ctrl-D exits only when idle with an empty editor.
+- SIGTERM requests cancellation, gives the active run a bounded chance to save,
+  restores terminal modes, and exits 143.
 - `/help` and `/keys` show the complete in-app reference.
 
 `@path` is a reference for the model to read visibly, not eager file injection:
@@ -118,9 +120,9 @@ commands requiring human approval are blocked in headless mode.
 not run the command automatically. Argus reports whether the model ran it,
 its observed status, and whether later work made its evidence stale. Checks
 not designated this way remain ordinary shell observations.
-Exit status is 0 when the model ends normally, 130 when interrupted, and 1 for
-failed, truncated, or locally limited runs. Normal completion does not certify
-the requested work is correct.
+Exit status is 0 when the model ends normally, 130 when interrupted, 143 after
+SIGTERM, and 1 for failed, truncated, or locally limited runs. Normal completion
+does not certify the requested work is correct.
 
 ## Execution and limits
 

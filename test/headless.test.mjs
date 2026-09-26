@@ -3,12 +3,46 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 
 process.env.ARGUS_HOME = mkdtempSync(join(tmpdir(), "argus-headless-test-"));
 
 const { runHeadless } = await import("../src/headless.mjs");
 const { Session, loadSession } = await import("../src/session/index.mjs");
 const { createMockServer } = await import("./helpers/mock-llm.mjs");
+
+test("headless SIGTERM cancels an active shell and exits 143 with a saved outcome", async (t) => {
+  const srv = await createMockServer((index) => index === 0
+    ? [{ tool_calls: [{ index: 0, id: "c1", function: { name: "bash", arguments: '{"command":"sleep 10"}' } }] }]
+    : [{ content: "finished" }]);
+  t.after(() => srv.close());
+  const child = spawn(process.execPath, ["src/main.mjs", "wait", "--session", "sigterm-child"], {
+    cwd: new URL("..", import.meta.url).pathname,
+    env: { ...process.env, ARGUS_BASE_URL: srv.url, ARGUS_API_KEY: "", ARGUS_MODEL: "mock",
+      ARGUS_MAX_RETRIES: "0" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  t.after(() => { if (child.exitCode == null) child.kill("SIGKILL"); });
+  let stderr = "";
+  const toolStarted = new Promise((resolve) => child.stderr.on("data", (chunk) => {
+    stderr += chunk.toString();
+    if (stderr.includes("⚙ bash")) resolve();
+  }));
+  await Promise.race([toolStarted, new Promise((_, reject) => {
+    setTimeout(() => reject(new Error(stderr || "tool did not start")), 5_000).unref();
+  })]);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  child.kill("SIGTERM");
+  const [code, signal] = await Promise.race([once(child, "exit"),
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error("headless did not exit after SIGTERM")), 6_000).unref();
+    })]);
+  assert.equal(signal, null);
+  assert.equal(code, 143);
+  const loaded = await loadSession("sigterm-child");
+  assert.equal(loaded.turns.at(-1).blocks.find((block) => block.kind === "timing").outcome, "interrupted");
+});
 
 test("headless: text -> stdout, tool -> stderr, session + cwd saved", async (t) => {
   const srv = await createMockServer((i) => {
