@@ -1,8 +1,9 @@
 /** Saved-session discovery and explicit housekeeping operations. */
 import { readdir, stat, rm, access, rename, open } from "node:fs/promises";
 import { join, basename } from "node:path";
-import { ensureDir, nameError, sanitizeName, sessionFilePath, sessionsDir } from "./paths.mjs";
-import { loadSession } from "./reader.mjs";
+import { contextDir, ensureDir, nameError, sanitizeName, sessionFilePath, sessionsDir } from "./paths.mjs";
+import { loadSession, scanSessionMeta } from "./reader.mjs";
+import { acquireSessionOwnership } from "./ownership.mjs";
 
 /** List sessions (name, file, mtime, size), newest first. Stats run
  *  concurrently — startup calls this a few times in a row and a directory with
@@ -68,14 +69,21 @@ export async function pruneSessions(keep, { exclude } = {}) {
     }
     doomed.push(item.file);
   }
-  await Promise.all(
-    doomed.map((file) =>
-      rm(file, { force: true }).catch(() => {
-        // unreadable/racing file: leave it alone
-      })
-    )
-  );
-  return doomed.length;
+  const removed = await Promise.all(doomed.map(async (file) => {
+    let release;
+    try {
+      release = await acquireSessionOwnership(file);
+      const metadata = await scanSessionMeta(basename(file, ".jsonl"));
+      await rm(file, { force: true });
+      if (metadata.sessionId) await rm(contextDir(metadata.sessionId), { recursive: true, force: true });
+      return true;
+    } catch {
+      return false; // active owner or unreadable/racing file: leave it alone
+    } finally {
+      if (release) await release();
+    }
+  }));
+  return removed.filter(Boolean).length;
 }
 
 /** Delete one saved session by exact name, never the explicitly excluded one. */
@@ -83,11 +91,16 @@ export async function deleteSession(name, { exclude } = {}) {
   const safe = sanitizeName(name);
   if (!safe) throw new Error(nameError(name) ?? `invalid session name: ${name}`);
   if (safe === exclude) throw new Error(`cannot delete the active session: ${safe}`);
+  const release = await acquireSessionOwnership(sessionFilePath(safe));
   try {
+    const metadata = await scanSessionMeta(safe);
     await rm(sessionFilePath(safe));
+    if (metadata.sessionId) await rm(contextDir(metadata.sessionId), { recursive: true, force: true });
   } catch (err) {
     if (err.code === "ENOENT") throw new Error(`session not found: ${safe}`);
     throw err;
+  } finally {
+    await release();
   }
   return safe;
 }
@@ -111,11 +124,20 @@ export async function renameSession(oldName, nextName, handle = null) {
   if (!safe) throw new Error(nameError(nextName) ?? `invalid session name: ${nextName}`);
   if (safe === oldName) return safe;
   if (handle?.writeQueue) await handle.writeQueue.catch(() => {});
+  if (handle?.activeRun) throw new Error("cannot rename a session while a run is active");
 
   await ensureDir();
   const oldFile = sessionFilePath(oldName);
   const nextFile = sessionFilePath(safe);
+  const release = await acquireSessionOwnership(oldFile);
+  try {
+    return await moveSession(oldFile, nextFile, safe, handle);
+  } finally {
+    await release();
+  }
+}
 
+async function moveSession(oldFile, nextFile, safe, handle) {
   // Reserve the destination with O_CREAT|O_EXCL so rename() below can never
   // clobber a file another process created between a check and the move
   // (TOCTOU). The empty placeholder is replaced by the moved file, or removed

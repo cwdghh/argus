@@ -11,6 +11,7 @@
     "start": "node --env-file-if-exists=.env src/main.mjs",
     "test": "node scripts/test.mjs",
     "eval:tools": "node --env-file-if-exists=.env eval/tool-choice.mjs",
+    "eval:coding": "node --env-file-if-exists=.env eval/coding.mjs",
     "check": "node scripts/check.mjs",
     "verify": "npm run check && npm test"
   },

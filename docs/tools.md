@@ -155,16 +155,32 @@ range batches cannot request it.
 { command: nonEmptyString }
 ```
 
-Runs one `/bin/sh` command with a 60-second timeout and a 1 MB child-process
-buffer. It returns bounded `{ stdout, stderr, cwd? }`; a non-zero exit adds
-`error: true` and `message`. User cancellation reports `aborted: true`, while a
-deadline reports `timeout: true`. Exceeding the child capture buffer reports
-`error: true` and `truncated: true` with captured output and an
-unknown-completion message. It does not supply a new cwd because the process may
-have been killed. A successfully extracted final cwd becomes the base directory
-for later tools. `bash` owns search, listing, environment inspection, builds,
+Runs one `/bin/sh` command with a 60-second timeout and a 1 MB combined
+stdout/stderr preview cap. It continues draining beyond that cap, setting
+`outputTruncated: true` while retaining the actual exit status. Results carry
+`stdout`, `stderr`, `exitCode` (or `null`), `signal` (or `null`), and
+`termination` (`completed`, `cancelled`, `timeout`, `spawn_error`, or
+`cleanup_uncertain`). A non-zero exit adds `error: true` and `message`.
+Cancellation adds `aborted: true`; a deadline adds `timeout: true`. Output
+remains available on those paths. A successfully extracted final cwd is returned
+only after ordinary process completion and becomes the base directory for later
+tools. `bash` owns search, listing, environment inspection, builds,
 tests, and other open-ended CLI work; it does not replace
 `read`, `write`, or `edit` for ordinary text-file operations.
+
+On POSIX systems, the shell starts in an owned process group. Cancellation or
+timeout sends SIGTERM, then SIGKILL after 500 ms, and stops waiting after a
+further bounded cleanup period. Descendants that detach from that group can
+escape; `cleanup_uncertain` means even the bounded close did not settle. This
+is process control, not a sandbox. A capped live output preview reaches the
+TUI footer. When output exceeds the 1 MB in-memory preview, private stdout and
+stderr artifacts retain up to 8 MB combined; `artifactTruncated` identifies a
+larger stream, and `artifactError` identifies a failed artifact write. A file
+write failure does not stop pipe draining or change the observed command exit.
+Named sessions keep artifacts with their private session directory and remove
+them on session deletion; unnamed headless runs use the general private temp
+directory. On unsupported hosts only the immediate shell is signalled; no
+descendant cleanup guarantee is made.
 
 Before execution, the loop asks the tool's approval policy whether the call
 needs authorization. Recursive removal, raw disk tools, filesystem formatters,
@@ -197,11 +213,13 @@ exits non-zero.
 - `ARGUS_MAX_TOOL_RESULT_CHARS` bounds each serialized result.
   `ARGUS_MAX_TURN_TOOL_RESULT_CHARS` bounds their cumulative size in one active
   turn. Oversized results retain a bounded tail preview and spill their full
-  serialized payload to an owner-private JSON file under `ARGUS_HOME/tmp`. Error
+  serialized payload to an owner-private JSON file. Named sessions keep this
+  file in their artifact directory; unnamed runs use `ARGUS_HOME/tmp`. Error
   results retain a bounded failure reason in their top-level message. The
-  `fullPath` pointer is included when it fits; `nextOffset` is preserved. Spill
-  failure does not fail the turn, and spill files have no automatic retention
-  yet. `ARGUS_MAX_REQUEST_CHARS` independently bounds the complete outgoing
+  `fullPath` pointer is included when it fits; `nextOffset` and shell
+  exit/termination/truncation facts are preserved. Spill failure does not fail
+  the turn. Unnamed temp files have no automatic retention.
+  `ARGUS_MAX_REQUEST_CHARS` independently bounds the complete outgoing
   request before network I/O.
 - Invalid JSON, unknown tools, invalid arguments, authorization denial, and
   execution failures become structured tool errors when recovery is safe.

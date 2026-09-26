@@ -53,6 +53,7 @@ test("summarize: marks paged and truncated results with the more-lines count", (
     "1 │ line one · … 1000 more lines"
   );
   assert.equal(summarize({ numberedText: "1 │ line one", totalLines: 200, endLine: 200 }), "1 │ line one", "complete reads get no marker");
+  assert.equal(summarize({ stdout: "done", exitCode: 0, outputTruncated: true }), "stdout: done · … (truncated)");
 });
 
 test("toolLabel: names the path or command, counts content instead of dumping it", () => {

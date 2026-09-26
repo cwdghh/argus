@@ -1,81 +1,104 @@
 # Session records and recovery
 
-This file owns the persisted session format. The public API is
-`src/session/index.mjs`; [architecture.md](architecture.md) describes its module
-boundaries. For inspecting failures, see [debug-tool-failures.md](debug-tool-failures.md).
+This file owns the persisted session format. All callers import
+`src/session/index.mjs`. The frontend interaction is in [README](../README.md);
+the module flow is in [architecture](architecture.md).
 
 ## Storage and records
 
-Each named session is an append-only `<name>.jsonl` file in the `sessions`
-subdirectory of `ARGUS_HOME`. Configuration and path defaults are documented in
-[.env.example](../.env.example). Session names are ASCII letters, digits, `-`,
-and `_`, start with a letter or digit, and fit within 249 characters. The name
-lives in the filename, so renaming does not rewrite history.
+Each named session is an append-only `<name>.jsonl` file below `ARGUS_HOME/sessions`.
+Names use ASCII letters, digits, `-`, and `_`, begin with a letter or digit, and
+fit within 249 characters. Renaming changes the filename, not old records. The
+API key is excluded from the persisted `config` allowlist.
 
-| Record type | Contents and meaning |
+| Record | Meaning |
 | --- | --- |
-| `meta` | Format `version: 1`, initial model-visible `tools` snapshot and `toolSurfaceHash`. |
-| `cwd` | Current working directory; later records supersede earlier ones. |
-| `model` | Per-session model override; later records supersede earlier ones. |
-| `config` | Credential-free configuration, including system prompt and endpoint, written on change. |
-| `tools` | A changed model-visible schema snapshot and its `hash`. |
-| `turn` | The model used, messages generated during the turn, display blocks, and `toolSurfaceHash`. |
+| `meta` | Version 2 for new files, stable `sessionId`, initial model-visible tool snapshot and hash. Version 1 files remain readable. |
+| `cwd`, `model`, `config`, `tools` | Ordered metadata updates. `config` contains only credential-free fields. |
+| `turn` | Legacy complete turn; still read and accepted by the legacy append API. |
+| `run_start` | Version 2 run ID, sequence 0, user prompt, cwd, model, and optional parent run ID. |
+| `checkpoint` | Next contiguous sequence for a complete assistant step, bounded partial text delta, authorized tool intent, tool result, or applied steering. |
+| `run_end` | Final sequence with one complete turn projection: messages, display blocks, and configuration delta. It replaces a duplicate `turn` record. |
+| `resolution` | Explicit user choice to retry or abandon an uncertain attempt. |
+| `steering` | Persisted queued, applied, or cancelled instruction with a local ID. |
+| `context_revision` | Bounded deterministic digest, covered source range/hash, retained message IDs, and private retrieval artifact path. |
+| `session_id` | Adds a stable artifact identity when an older session first needs one. |
 
-Metadata can appear **between any two turns**. New turn records serialize `type`
-first so metadata discovery can skip deserializing their payloads. Readers also
-accept older records with a different field order. Unknown record types are
-ignored to permit additive format extensions.
+Metadata may appear between run records. Journal sequences count only
+`run_start`, `checkpoint`, and `run_end`. Timing blocks may carry outcome,
+request usage, tool attempts, and designated verification evidence. Local
+`partial` and `truncated` message flags are removed from outgoing provider
+requests. Sessions are evidence of what Argus recorded, not byte-for-byte HTTP
+replays or proof that the requested coding task is correct.
 
-`configRecord()` in `session/data.mjs` owns the persisted configuration allowlist.
-The API key is excluded. New frontend turns store only the model in their `config`
-field; earlier records can carry the larger configuration there. To inspect the
-configuration for a historical turn, fold metadata in file order up to that turn,
-then apply its `config` fields. The final metadata state alone is insufficient
-when a session changed configuration.
+## Write ordering and ownership
 
-Messages record the user prompt, assistant tool calls, and serialized tool
-results. Display blocks additionally retain reasoning, previews, authorization,
-and timing. A partial assistant message has local `partial: true` metadata, and
-a truncated model reply has local `truncated: true` metadata; neither flag is
-sent as a provider message field. New timing blocks may record `runId`, terminal
-`outcome`/`reason`, observed `partial` text/reasoning, per-request usage and
-tool-attempt IDs. Earlier timing blocks without these fields remain readable.
-Request totals sum reported counts only; `complete: false` means at least one
-attempt lacks a full core usage report. These fields support inspection of the
-conversation and schema in use. Compacted requests, transport extensions, and
-interrupted network streams are not byte-for-byte HTTP request recordings.
+The host passes awaited run-start/checkpoint callbacks to the agent. The agent
+does not import persistence. The writer syncs the user instruction before the
+first model request, a complete assistant call before its tools, tool intent
+after validation and approval but before invocation, and the result before a
+dependent call or model step. Text deltas are saved in chunks of at most 4096
+characters and at visible streaming boundaries; abrupt termination may lose
+text since the last acknowledged chunk. A completed `run_end` contains the final
+frontend transcript exactly once.
+
+One session writer owns a lock for an active run; other metadata/legacy writes
+take it for their individual append. The lock has an owner PID, host, and random
+token. A dead local PID can be recovered under a separate recovery guard. An
+ambiguous live PID, another host, an incomplete lock, or an existing recovery
+guard blocks writing rather than stealing ownership. This is local filesystem
+coordination; network filesystem guarantees are not claimed. Syncs cover file
+content boundaries, while power loss and directory-sync support vary by host.
+
+An intent without a result is **execution uncertain**. Arbitrary shell and file
+effects cannot be made exactly once with the journal. Recovery never invokes a
+tool automatically. The user must inspect uncertain effects and record retry or
+abandon before continuation. A persisted result is reused as history, not
+executed again. A restart can continue a verified prefix but cannot restore a
+network stream or a shell instruction pointer.
+
+If a frontend encounters an unexpected error before it receives a terminal run
+result, it releases writer ownership without writing `run_end`. The TUI requires
+the user to reload that session so the saved prefix and any uncertain effects
+are shown before new work. Headless exits with an error and leaves the prefix
+for explicit continuation.
 
 ## Reading and recovery
 
-- Full loads stream one JSONL line at a time, accumulating valid turns. Invalid
-  JSON and non-record values are skipped with line-number warnings, including
-  interior damage. Unknown record types are ignored. Recovery does not imply
-  that omitted damaged turns can be reconstructed.
-- Metadata discovery scans the entire file to find the latest cwd/model/config,
-  without retaining turns. Current turn records are skipped before JSON parsing;
-  legacy turn records may still need parsing. Memory is bounded by one record
-  plus metadata, not a fixed byte cap on an individual record.
-- Folder-scoped default resume considers the newest 20 sessions and chooses the
-  newest whose final cwd equals or sits below the launch folder. Unreadable
-  candidates are skipped. Explicit resume performs a full load and shows warnings.
-- Before appending to an existing file, the writer separates any unterminated
-  final record with a newline. Subsequent valid records remain independently
-  recoverable, and existing bytes are not rewritten.
+Readers keep legacy `turn` records in order and place journaled runs at their
+`run_start` position. A valid `run_end` contributes one final turn. An unfinished
+run contributes its contiguous saved prefix and a warning. Unstarted calls get
+local `not_executed` results; a call with intent but no result gets
+`execution_uncertain`. These describe Argus state and preserve assistant/tool
+pairing. Partial assistant text is retained once as lower-priority assistant
+content. A malformed tail yields the earlier valid prefix; an interior gap
+marks the active run damaged and prevents later records from being trusted for
+that run. Legacy malformed lines are skipped with line-number warnings.
 
-## Writing and lifecycle
+Folder-scoped startup considers the newest 20 sessions and selects the newest
+matching cwd. Metadata discovery scans the file without retaining turn payloads.
+Explicit resume loads the transcript and warnings. The writer separates a torn
+last line before appending; it does not rewrite historical bytes. Unknown record
+types are ignored for additive compatibility, but older binaries may omit newer
+run records and are not safe downgrade writers.
 
-One `Session` handle serializes its writes. Metadata deduplication happens inside
-that queue and advances only after a successful append; failed writes can retry
-the same value. This is single-writer persistence, not cross-process locking.
-Session storage uses directory mode `0700` and file mode `0600` on POSIX systems.
+Queued steering is acknowledged only after its record is synced. A steering
+checkpoint also marks it applied if a later applied-state record was lost in a
+crash. Pending instructions are restored on restart. A linked continuation is a
+new run with `parentRunId`; it does not change the earlier run's outcome.
 
-Each turn references its schema hash. A changed surface adds a `tools` record;
-old executor aliases are unnecessary. The writable handle and the UI switch
-sessions together. Rename drains queued writes before moving and repointing the
-handle; deletion requires an exact inactive name. Configured retention preserves
-the active session and applies in both frontends.
+## Private artifacts and lifecycle
 
-Session data is never migrated or pruned merely by a source refactor. Cleanup is
-an explicit command or the user's configured retention policy. Interrupt and
-continue with crash-safe checkpoints remains planned in
-[interrupt-resume.md](interrupt-resume.md); a turn is still saved only at its end.
+The stable `sessionId` names a private artifact directory under
+`ARGUS_HOME/context`. Context source files and bounded shell/spill files use
+owner-only permissions and survive session rename. Deleting or pruning a
+session removes its artifact directory; active ownership blocks housekeeping.
+Unnamed headless runs use the general private `ARGUS_HOME/tmp` spill directory,
+which currently has no automatic retention. Artifact paths can become unavailable
+after explicit deletion or an external filesystem change; a saved pointer does
+not guarantee the file still exists.
+
+The current offline tests include crash-prefix reading, a child-process crash
+after intent, competing writers, torn records, legacy turns, and artifact
+cleanup. These establish those tested cases, not power-loss durability or
+universal provider compatibility.

@@ -17,29 +17,61 @@ import { nextContextTokens } from "./compact.mjs";
 import { loadSession, sessionConfig, sessionData } from "./session/index.mjs";
 import { formatDuration, summarize, toolLabel } from "./format.mjs";
 import { consumeAgentEvent } from "./transcript.mjs";
+import { summarizeEvidence } from "./agent/evidence.mjs";
 
-export async function runHeadless(config, prompt, { session, cwd, stdout, stderr } = {}) {
+export async function runHeadless(config, prompt, { session, cwd, stdout, stderr, continueRun = false, resolution = null, checkCommands = [] } = {}) {
   // Streams are injectable so tests can capture output without monkeypatching.
   const writeOut = stdout || ((s) => process.stdout.write(s));
   const writeErr = stderr || ((s) => process.stderr.write(s));
 
   // Resume session history if one is given.
   let history = [];
+  let historyTurnSizes = [];
+  let contextRevision = null;
   let activeCwd = cwd ?? process.cwd();
   // Real tokens of the context this turn will re-send, from the last
   // persisted turn's usage (null -> the char safety net applies).
   let lastUsage = null;
+  let parentRunId = null;
   if (session) {
     const loaded = await loadSession(session.name);
-    const { history: saved, cwd: savedCwd, model, blocks: savedBlocks, warnings } = sessionData(loaded);
+    const { history: saved, turnSizes, contextRevision: savedRevision, cwd: savedCwd, model, blocks: savedBlocks, warnings } = sessionData(loaded);
     history = saved;
+    historyTurnSizes = turnSizes;
+    contextRevision = savedRevision;
     activeCwd = cwd ?? savedCwd ?? process.cwd();
     if (savedCwd) session.lastCwd = savedCwd;
     if (loaded?.meta?.toolSurfaceHash) session.lastToolSurfaceHash = loaded.meta.toolSurfaceHash;
+    if (loaded?.meta?.sessionId) {
+      session.sessionId = loaded.meta.sessionId;
+      session.sessionIdWritten = true;
+    }
     // Honor a persisted per-session model override (e.g. set by /model).
     if (model) config = { ...config, model };
     lastUsage = [...savedBlocks].reverse().find((block) => block.kind === "timing")?.usage ?? null;
     for (const warning of warnings) writeErr(`warning: ${warning}\n`);
+    const recovered = [...(loaded?.meta?.unfinishedRuns ?? [])].reverse().find((run) => run.resolution !== "continued");
+    const timing = [...savedBlocks].reverse().find((block) => block.kind === "timing");
+    const target = recovered ?? (timing?.outcome && timing.outcome !== "completed" ? { runId: timing.runId } : null);
+    if (continueRun) {
+      if (!target?.runId) throw new Error("no unfinished run to continue in this session");
+      if (target.uncertainCalls?.length && !target.resolution && !resolution) {
+        throw new Error(`run ${target.runId} has uncertain tool effects; inspect them, then pass --resolve retry or abandon`);
+      }
+      if (resolution) {
+        if (!target.uncertainCalls?.length) throw new Error("--resolve applies only to an uncertain tool attempt");
+        await session.resolveRun(target.runId, resolution);
+      }
+      parentRunId = target.runId;
+      const decision = resolution ?? target.resolution;
+      const note = decision === "retry" ? " The user chose retry; inspect existing effects before repeating anything."
+        : decision === "abandon" ? " The user chose abandon; do not repeat the uncertain attempt." : "";
+      prompt = `Continue the previous task from recorded progress. Inspect the current workspace and do not repeat completed tool actions.${note}${prompt ? ` ${prompt}` : ""}`;
+    } else if (recovered?.uncertainCalls?.length && !recovered.resolution) {
+      throw new Error(`run ${recovered.runId} has uncertain tool effects; inspect them before starting another task`);
+    }
+  } else if (continueRun) {
+    throw new Error("continuation requires a named session");
   }
 
   // Build display blocks alongside events (mirrors the TUI) so a turn saved to
@@ -50,6 +82,7 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
   let sawText = false;
   let result = null;
   let error = null;
+  let journalRunId = null;
   const startedAt = Date.now();
   try {
     result = await runTurn(
@@ -82,7 +115,25 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
           writeErr(`retrying (${why}, attempt ${ev.attempt}/${ev.budget}) in ${formatDuration(ev.delayMs)}\n`);
         }
       },
-      { cwd: activeCwd, lastTokens: nextContextTokens(lastUsage) }
+      {
+        cwd: activeCwd,
+        artifactDir: session?.artifactDir?.(),
+        ...(parentRunId ? { parentRunId } : {}),
+        lastTokens: nextContextTokens(lastUsage),
+        historyTurnSizes,
+        contextRevision,
+        ...(session?.saveContextRevision ? {
+          onContextRevision: (revision, source) => session.saveContextRevision(revision, source),
+        } : {}),
+        checkCommands,
+        ...(session?.beginRun ? {
+          onRunStart: async (data) => {
+            await session.beginRun(data);
+            journalRunId = data.runId;
+          },
+          onCheckpoint: ({ runId, kind, ...payload }) => session.checkpoint(runId, kind, payload),
+        } : {}),
+      }
     );
   } catch (err) {
     error = err;
@@ -96,11 +147,18 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
     else blocks.push({ kind: "result", ok: false, summary: `${result.outcome}: ${detail}` });
     writeErr(`\n${result.outcome === "failed" ? "error" : result.outcome}: ${detail}\n`);
   }
+  const evidenceSummary = summarizeEvidence(result?.evidence);
+  if (evidenceSummary) {
+    blocks.push({ kind: "result", ok: result.evidence.checks.every((check) => check.state === "passed" && check.freshness === "fresh"),
+      summary: `checks: ${evidenceSummary}` });
+    writeErr(`checks: ${evidenceSummary}\n`);
+  }
 
   // Persist the turn (including error blocks) regardless of outcome. A timing
   // block carries the real provider usage so later headless/TUI runs on this
   // session can drive compaction from real tokens.
   if (session) {
+    if (journalRunId && error) await session.leaveRunUnfinished();
     const finalCwd = result?.cwd ?? error?.cwd;
     if (finalCwd) {
       try {
@@ -122,16 +180,22 @@ export async function runHeadless(config, prompt, { session, cwd, stdout, stderr
         partial: result.partial,
         requestUsage: result.requestUsage,
         toolAttempts: result.toolAttempts,
+        evidence: result.evidence,
       } : {}),
     });
     // The static config (incl. the often-large systemPrompt) is persisted once
     // per session; the turn itself stores only the model delta.
     await session.setConfig(config);
-    await session.appendTurn({
+    const turn = {
       config: sessionConfig(config),
       messages: result?.messages ?? error?.turnMessages ?? [{ role: "user", content: prompt }],
       blocks,
-    });
+    };
+    // A thrown checkpoint error can occur after an effect. Keep the synced
+    // prefix unfinished so recovery can flag uncertainty instead of sealing
+    // an error snapshot as a complete run.
+    if (journalRunId && !error) await session.endRun(journalRunId, turn);
+    else if (!journalRunId && !error) await session.appendTurn(turn);
   }
 
   if (error) {

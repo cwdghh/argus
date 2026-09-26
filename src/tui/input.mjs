@@ -75,7 +75,17 @@ export function tryEscape(tui) {
 }
 
 export function insertText(tui, text) {
-  if (tui.pendingConfirm) return tui.confirmKey(text);
+  if (tui.pendingConfirm) {
+    if (text.startsWith("/") || tui.editor.buffer.startsWith("/")) {
+      for (const ch of text) {
+        if (ch === "\r" || ch === "\n") tui.submit();
+        else tui.editor.insert(ch);
+      }
+      tui.dirtyRendered = true;
+      return;
+    }
+    return tui.confirmKey(text);
+  }
   for (const ch of text) {
     const cp = ch.codePointAt(0);
     if (cp < 32 || cp === 127) {
@@ -116,7 +126,14 @@ export function confirmKey(tui, text) {
 }
 
 export function pasteLiteral(tui, text) {
-  if (tui.pendingConfirm) return tui.confirmKey(text);
+  if (tui.pendingConfirm) {
+    if (text.startsWith("/steer ")) {
+      tui.editor.insert(text);
+      tui.dirtyRendered = true;
+      return;
+    }
+    return tui.confirmKey(text);
+  }
   tui.editor.insert(text);
   // Large pastes abbreviate the rendered user block (W1): record the shape
   // so submit() knows when the prompt came straight from a paste.

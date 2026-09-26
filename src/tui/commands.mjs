@@ -79,6 +79,103 @@ export const COMMANDS = [
     },
   },
   {
+    name: "/resolve",
+    args: "<retry|abandon>",
+    description: "record how to handle an uncertain tool attempt after a crash",
+    async run(tui, args) {
+      if (args.length !== 1 || !["retry", "abandon"].includes(args[0])) {
+        tui.pushBlock({ kind: "error", text: "usage: /resolve <retry|abandon>" });
+        return;
+      }
+      const pending = [...tui.unfinishedRuns].reverse().find((run) => run.uncertainCalls?.length && !run.resolution);
+      if (!pending || !tui.session?.resolveRun) {
+        tui.pushBlock({ kind: "error", text: "no unresolved tool attempt in this session" });
+        return;
+      }
+      await tui.withLocalTask(async () => {
+        await tui.session.resolveRun(pending.runId, args[0]);
+        pending.resolution = args[0];
+        tui.pushBlock({ kind: "result", ok: true, summary: `recorded ${args[0]} for run ${pending.runId}; use /continue to proceed` });
+      });
+    },
+  },
+  {
+    name: "/steer",
+    args: "<text|list|cancel ID>",
+    description: "queue a correction during a run; inspect or cancel queued corrections",
+    async run(tui, args) {
+      if (args[0] === "list") {
+        tui.pushBlock({ kind: "assistant", text: tui.steeringQueue.length
+          ? tui.steeringQueue.map((item) => `${item.id.slice(0, 8)} — ${item.text}`).join("\n")
+          : "No queued steering." });
+      } else if (args[0] === "cancel" && args[1]) {
+        const item = tui.steeringQueue.find((queued) => queued.id.startsWith(args[1]));
+        if (!item) tui.pushBlock({ kind: "error", text: "no queued steering matches that ID" });
+        else {
+          await tui.withLocalTask(async () => {
+            await tui.session.settleSteering(item.runId, item.id, "cancelled");
+            tui.steeringQueue = tui.steeringQueue.filter((queued) => queued.id !== item.id);
+            tui.pushBlock({ kind: "result", ok: true, summary: `steering cancelled (${item.id.slice(0, 8)})` });
+          });
+        }
+      } else {
+        tui.pushBlock({ kind: "error", text: "use /steer <text> while Argus is working" });
+      }
+    },
+  },
+  {
+    name: "/check",
+    args: "<command|list|clear>",
+    description: "designate an exact shell command as a check for the next turn",
+    run(tui, args) {
+      if (args[0] === "list") {
+        tui.pushBlock({ kind: "assistant", text: tui.checkCommands.length
+          ? tui.checkCommands.map((command) => `- ${command}`).join("\n") : "No checks designated." });
+      } else if (args[0] === "clear") {
+        tui.checkCommands = [];
+        tui.pushBlock({ kind: "result", ok: true, summary: "designated checks cleared" });
+      } else if (args.length) {
+        const command = args.join(" ").trim();
+        if (!tui.checkCommands.includes(command)) tui.checkCommands.push(command);
+        tui.pushBlock({ kind: "result", ok: true, summary: `check registered for next turn: ${command}` });
+      } else {
+        tui.pushBlock({ kind: "error", text: "usage: /check <exact shell command>, /check list, or /check clear" });
+      }
+    },
+  },
+  {
+    name: "/continue",
+    description: "continue the latest unfinished run using saved progress",
+    async run(tui, args) {
+      if (args.length) {
+        tui.pushBlock({ kind: "error", text: "/continue does not take arguments" });
+        return;
+      }
+      const latestTiming = [...tui.blocks].reverse().find((block) => block.kind === "timing");
+      const recovered = [...tui.unfinishedRuns].reverse().find((run) => run.resolution !== "continued");
+      const target = recovered ?? (latestTiming?.outcome && latestTiming.outcome !== "completed"
+        ? { runId: latestTiming.runId }
+        : null);
+      if (!target?.runId) {
+        tui.pushBlock({ kind: "error", text: "no unfinished run to continue" });
+        return;
+      }
+      if (target.uncertainCalls?.length && !target.resolution) {
+        tui.pushBlock({ kind: "error", text: `run ${target.runId} has uncertain tool effects; inspect them, then use /resolve retry or /resolve abandon` });
+        return;
+      }
+      tui.nextContinuationParent = target.runId;
+      const resolution = target.resolution === "retry"
+        ? " The user explicitly chose retry for the uncertain attempt; inspect current effects before repeating it."
+        : target.resolution === "abandon"
+          ? " The user chose to abandon the uncertain attempt; do not repeat it."
+          : "";
+      tui.editor.buffer = `Continue the previous task from recorded progress. Inspect the current workspace and do not repeat completed tool actions.${resolution}`;
+      tui.editor.cursor = tui.editor.buffer.length;
+      await tui.submit();
+    },
+  },
+  {
     name: "/show",
     args: "<n>",
     description: "print transcript block n in full (tool results and read previews)",

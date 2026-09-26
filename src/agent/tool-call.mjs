@@ -14,7 +14,7 @@ import { boundToolResult } from "./tool-result.mjs";
  *
  * @returns {Promise<{ result: object, cwd: string }>}
  */
-export async function executeToolCall(call, { cwd, signal, confirm, authorize, maxToolResultChars, toolState, attemptId, onEvent = () => {} }) {
+export async function executeToolCall(call, { cwd, signal, confirm, authorize, maxToolResultChars, toolState, attemptId, beforeExecute, artifactDir, onEvent = () => {} }) {
   const toolName = call?.function?.name ?? "";
   const rawArguments = call?.function?.arguments;
   const tool = findTool(toolName);
@@ -30,6 +30,7 @@ export async function executeToolCall(call, { cwd, signal, confirm, authorize, m
   onEvent({ type: "tool_call", name: toolName, args, raw: rawArguments, id: call?.id, attemptId });
 
   let result;
+  let executed = false;
   if (!tool) {
     result = { error: true, message: `unknown tool: ${toolName || "(missing name)"}` };
   } else if (argumentError) {
@@ -54,6 +55,11 @@ export async function executeToolCall(call, { cwd, signal, confirm, authorize, m
           }
         }
         if (!result) {
+          if (beforeExecute) {
+            try { await beforeExecute({ tool: tool.name, args, cwd }); }
+            catch (error) { error.persistenceFailure = true; throw error; }
+          }
+          executed = true;
           result = await tool.execute(args, {
             signal,
             cwd,
@@ -62,15 +68,18 @@ export async function executeToolCall(call, { cwd, signal, confirm, authorize, m
             approved,
             maxResultChars: maxToolResultChars,
             toolState,
+            onOutput: (stream, text) => onEvent({ type: "tool_output", name: toolName, stream, text, attemptId }),
+            artifactDir,
           });
         }
       } catch (err) {
+        if (err.persistenceFailure) throw err;
         result = { error: true, message: `tool threw: ${err.message}` };
       }
     }
   }
 
-  result = await boundToolResult(result, maxToolResultChars);
+  result = await boundToolResult(result, maxToolResultChars, artifactDir);
   onEvent({ type: "tool_result", name: toolName, ok: !result?.error, result, id: call?.id, attemptId });
 
   let nextCwd = cwd;
@@ -78,5 +87,5 @@ export async function executeToolCall(call, { cwd, signal, confirm, authorize, m
     nextCwd = result.cwd;
     onEvent({ type: "cwd_change", cwd: nextCwd });
   }
-  return { result, cwd: nextCwd };
+  return { result, cwd: nextCwd, executed };
 }

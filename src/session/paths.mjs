@@ -8,6 +8,11 @@ export function sessionsDir() {
   return join(argusHome(), "sessions");
 }
 
+export function contextDir(sessionId) {
+  if (!/^[a-f0-9-]{36}$/i.test(String(sessionId))) throw new Error("invalid session artifact identity");
+  return join(argusHome(), "context", sessionId);
+}
+
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
 
 // NAME_MAX on common filesystems is 255 bytes per path component, and names

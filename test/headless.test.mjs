@@ -44,6 +44,44 @@ test("headless: text -> stdout, tool -> stderr, session + cwd saved", async (t) 
   assert.equal(toolBlock.id, "c1", "the call id is persisted so /show can link the result");
 });
 
+test("headless continuation gates uncertain effects and records an explicit disposition", async (t) => {
+  const srv = await createMockServer(() => [{ content: "continued" }]);
+  t.after(() => srv.close());
+  const config = { baseUrl: srv.url, apiKey: "", model: "mock", systemPrompt: "s" };
+  const interrupted = new Session("hs-uncertain", config);
+  await interrupted.beginRun({ runId: "old", prompt: "make file", cwd: process.cwd(), model: "mock" });
+  await interrupted.checkpoint("old", "assistant", { message: {
+    role: "assistant", content: "", tool_calls: [{ id: "call", type: "function", function: { name: "bash", arguments: '{"command":"touch x"}' } }],
+  } });
+  await interrupted.checkpoint("old", "tool_intent", { ordinal: 1, callId: "call", tool: "bash", cwd: process.cwd() });
+  await interrupted.ownerRelease(); // simulate process death after the synced intent
+  const resumed = new Session("hs-uncertain", config);
+  await assert.rejects(runHeadless(config, "", { session: resumed, continueRun: true, stdout: () => {}, stderr: () => {} }), /uncertain tool effects/);
+  await runHeadless(config, "", { session: resumed, continueRun: true, resolution: "abandon", stdout: () => {}, stderr: () => {} });
+  const loaded = await loadSession("hs-uncertain");
+  assert.equal(loaded.turns.length, 2);
+  assert.equal(loaded.turns[0].recovered, true);
+  assert.match(loaded.turns[1].messages[0].content, /user chose abandon/);
+  assert.equal(loaded.meta.unfinishedRuns[0].resolution, "continued");
+  process.exitCode = 0;
+});
+
+test("headless check evidence contradicts unsupported model success prose", async (t) => {
+  const srv = await createMockServer((index) => index === 0
+    ? [{ tool_calls: [{ index: 0, id: "failed-check", function: { name: "bash", arguments: '{"command":"exit 1"}' } }] }]
+    : [{ content: "All tests passed." }]);
+  t.after(() => srv.close());
+  const config = { baseUrl: srv.url, apiKey: "", model: "mock", systemPrompt: "s" };
+  const session = new Session("hs-check-honesty", config);
+  const err = [];
+  await runHeadless(config, "check it", { session, checkCommands: ["exit 1"], stdout: () => {}, stderr: (s) => err.push(s) });
+  assert.match(err.join(""), /checks: exit 1: failed/);
+  const loaded = await loadSession("hs-check-honesty");
+  assert.equal(loaded.turns[0].blocks.at(-1).evidence.checks[0].state, "failed");
+  assert.equal(loaded.turns[0].messages.at(-1).content, "All tests passed.");
+  process.exitCode = 0;
+});
+
 test("headless: error -> exitCode 1 and error block saved", async (t) => {
   const srv = await createMockServer(() => {
     throw new Error("boom");
@@ -163,7 +201,7 @@ test("headless: persisted usage drives real-token compaction on a resumed run", 
 
   assert.ok(err.join("").includes("compacted"), "persisted real tokens trigger compaction on resume");
   assert.ok(
-    lastBody.messages.some((m) => m.role === "system" && /Summary of earlier/.test(m.content)),
+    lastBody.messages.some((m) => m.role === "assistant" && /context digest/.test(m.content)),
     "the compacted summary is sent",
   );
   const users = lastBody.messages.filter((m) => m.role === "user").map((m) => m.content);

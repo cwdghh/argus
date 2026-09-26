@@ -58,6 +58,14 @@ export class MinimalTui {
       this.blocks.unshift({ kind: "result", ok: true, summary: `resumed session${opts.sessionName ? ` ${opts.sessionName}` : ""}` });
     }
     this.history = opts.initialHistory ?? [];
+    this.historyTurnSizes = opts.initialHistoryTurnSizes ?? [];
+    this.contextRevision = opts.initialContextRevision ?? null;
+    this.unfinishedRuns = opts.unfinishedRuns ?? [];
+    this.recoveryRequired = false;
+    this.nextContinuationParent = null;
+    this.steeringQueue = opts.pendingSteering ?? [];
+    this.activeRunId = null;
+    this.checkCommands = [];
     this.sessionName = opts.sessionName ?? null;
     this.session = opts.session ?? null;
     this.newSession = opts.newSession ?? null;
@@ -75,6 +83,10 @@ export class MinimalTui {
     // history, and the history walk index. The TUI reads and writes
     // `this.editor.*` directly — there is no second API surface.
     this.editor = new Editor();
+    if (this.steeringQueue.length) {
+      this.editor.buffer = this.steeringQueue.map((item) => item.text).join("\n");
+      this.editor.cursor = this.editor.buffer.length;
+    }
     this.editor.history = this.history
       .filter((message) => message.role === "user" && typeof message.content === "string")
       .map((message) => message.content);
@@ -269,6 +281,14 @@ export class MinimalTui {
     this.cwd = next.cwd ?? process.cwd();
     this.config = { ...this.config, model: next.model ?? this.defaultModel };
     this.history = next.history ?? [];
+    this.historyTurnSizes = next.turnSizes ?? [];
+    this.contextRevision = next.contextRevision ?? null;
+    this.unfinishedRuns = next.unfinishedRuns ?? [];
+    this.recoveryRequired = false;
+    this.nextContinuationParent = null;
+    this.steeringQueue = next.pendingSteering ?? [];
+    this.activeRunId = null;
+    this.checkCommands = [];
     this.blocks = [...(next.blocks ?? []), { kind: "result", ok: true, summary }];
     this._renderStamp++;
     this.lastTurnDurationMs = [...(next.blocks ?? [])].reverse().find((block) => block.kind === "timing")?.durationMs ?? null;
@@ -279,6 +299,8 @@ export class MinimalTui {
     this.editor.historyIndex = -1;
     this.editor.draft = null;
     this.editor.lastPaste = null;
+    this.editor.buffer = this.steeringQueue.map((item) => item.text).join("\n");
+    this.editor.cursor = this.editor.buffer.length;
     this.scrollOffset = null;
     this.suggestion = null;
     this.refreshGitStatus();

@@ -1,9 +1,12 @@
 # Interrupt, continue, and steering
 
-Status: **replacement proposal for discussion, 2026-09-24**. Work IDs I1–I2.
+Status: **core interaction implemented; qualification and refinements remain**.
+Work IDs I1–I2.
 The earlier proposal is preserved [verbatim in the archive](archive/interrupt-resume-2026-09-24.md).
-Its earlier discussion approval does not imply approval of this revised design.
-The proposed execution guarantees are owned by [E1–E3](design/execution.md).
+The implemented commands and limits live in [README](../README.md),
+[architecture](architecture.md), and [sessions](sessions.md). This file retains
+the design reasoning and the remaining verification matrix. Execution boundaries
+are owned by [E1–E3](design/execution.md).
 
 ## I1 — Stop and continue
 
@@ -22,16 +25,17 @@ an instruction pointer inside a shell process.
 | Restart with unfinished run | Show the recovered prefix, uncertainty, and continuation action; never execute automatically. |
 | SIGTERM / terminal shutdown | Attempt bounded cooperative checkpoint and cleanup; exit with explicit interruption status where possible. |
 
-These are proposed controls, not current commands. Keep continuation separate
-from selecting/loading a saved session. Completion, truncation, failure, and
+The TUI `/continue` and headless `--continue --session` paths are implemented.
+SIGTERM-specific exit handling and machine-readable headless results remain open.
+Keep continuation separate from selecting/loading a saved session. Completion, truncation, failure, and
 interruption should each offer context-appropriate follow-up wording. Continuing
 must not change a historical outcome to completed; it creates a linked run.
 
-Headless mode should return nonzero on failed, truncated, interrupted, and limited
-outcomes; use 130/143 for SIGINT/SIGTERM where conventional, 1 for other unsuccessful
-outcomes. Successful model termination can exit zero but does not certify task
-correctness. Document exact codes and a machine-readable result option before
-shipping. Headless continuation must be explicit, target a session/run, and fail
+Headless mode returns 130 for user interruption and 1 for failed, truncated, or
+limited outcomes. Successful model termination can exit zero but does not
+certify task correctness. A machine-readable result option and SIGTERM-specific
+code remain open. Headless continuation is explicit, targets a named session,
+and fails
 clearly when user input is needed; it must not wait forever for a hidden prompt.
 
 ## Transcript and protocol projection
@@ -70,13 +74,13 @@ extensions require their own adapter policy; do not infer them from text fields.
 
 ## I2 — Steering an active run
 
-Begin with an explicit `/steer <text>` action while work is active. Ordinary typed
+The TUI accepts explicit `/steer <text>` while work is active. Ordinary typed
 input remains a next-turn draft. Accepted steering is acknowledged only after it
 is persisted, with a local ID and state: queued, applied, or cancelled. The user
 can inspect/remove queued instructions before application. A submission race at
 run completion must become a visible queued follow-up, never disappear.
 
-Apply queued steering in FIFO order at the next safe boundary:
+Queued steering is applied in FIFO order at the next safe boundary:
 
 - During model streaming: finish that response, record it, then consume steering
   before dispatching its tools. Mark skipped calls `not_executed` and ask the model
@@ -96,9 +100,9 @@ not every `role: user` message, to define compaction and usage groups. On restar
 restore queued steering and offer continuation; do not auto-apply it into a new
 unrelated task. Active session switching must first settle or stop the run.
 
-A combined stop-and-steer shortcut is a later ergonomic refinement over these
-same primitives. Queue size/text limits should reuse bounded input practices and
-be stated in the user-facing contract. Steering needs no additional model tool.
+A combined stop-and-steer shortcut remains a later ergonomic refinement.
+The implemented queue holds at most eight instructions of 4096 characters each.
+Steering needs no additional model tool.
 
 ## Verification and delivery gates
 

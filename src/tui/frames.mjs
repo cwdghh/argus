@@ -43,7 +43,8 @@ export function statusText(s) {
     const toolElapsed =
       s.activeTool && s.activeToolStartedAt != null ? Math.max(0, now - s.activeToolStartedAt) : null;
     if (s.activeTool && toolElapsed != null && toolElapsed >= ACTIVE_TOOL_DELAY_MS && s.activeTool.name) {
-      return `${spinner} ${toolLabel(s.activeTool.name, s.activeTool.args)} ${formatDuration(toolElapsed)}${tokens ? ` · ${tokens}` : ""}`;
+      return `${spinner} ${toolLabel(s.activeTool.name, s.activeTool.args)} ${formatDuration(toolElapsed)}` +
+        `${s.activeTool.outputPreview ? ` · ${s.activeTool.outputPreview}` : ""}${tokens ? ` · ${tokens}` : ""}`;
     }
     return `${spinner} ${s.mode} ${formatDuration(elapsed)}${tokens ? ` · ${tokens}` : ""}`;
   }

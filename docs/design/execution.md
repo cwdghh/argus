@@ -1,19 +1,24 @@
 # Execution outcomes and recoverable progress
 
-Status: **E1 implemented; E2–E3 proposed**. This file owns the future shell and
-checkpoint designs. The implemented E1 result and accounting contract lives in
-[architecture.md](../architecture.md) and [sessions.md](../sessions.md).
-Interaction belongs in [interrupt-resume.md](../interrupt-resume.md).
+Status: **E1–E3 core implemented; qualification remains**. This file retains the
+design and acceptance matrix. The implemented shell contract is in
+[tools.md](../tools.md), journal/ownership contract in [sessions.md](../sessions.md),
+and coordinator flow in [architecture.md](../architecture.md). Interaction is in
+[interrupt-resume.md](../interrupt-resume.md).
 
 ## E1 — Honest outcomes and request accounting
 
 Implemented in the coordinator, transport, both frontends, and additive timing
 metadata. The current contract is in [architecture.md](../architecture.md) and
-[sessions.md](../sessions.md). E1 does not add checkpoints: a crash can still
-lose the active turn, and a run that completed but failed to save has separate
-persistence health. E2–E3 below address execution and recovery boundaries.
+[sessions.md](../sessions.md). E1 alone did not add checkpoints; E3 now saves
+acknowledged boundaries, while text since the last one can still be lost.
 
 ## E2 — Shell lifecycle and output
+
+The implemented process/result contract, bounded private artifacts, and short
+live TUI preview are in [tools.md](../tools.md). A local mock-provider check in
+a real TTY confirmed the preview and Esc cancellation; the remaining cases
+below still need broader qualification.
 
 Replace buffered `exec` with a supervised `spawn` implementation using the
 existing shell/command contract. Separate four facts: exit status, termination
@@ -59,11 +64,11 @@ must not import session storage. Rendering deltas remain lightweight events;
 checkpoint persistence has explicit backpressure and error handling. Avoid a
 generic event bus or duplicated frontend journal writers.
 
-Proposed records: `run_start`, `checkpoint`, `run_end`, each versioned and carrying
+Implemented records: `run_start`, `checkpoint`, `run_end`, each versioned and carrying
 run ID plus a monotonically increasing sequence. A checkpoint can carry a completed
 assistant step, a partial text snapshot, tool intent, or tool result. Use bounded
 per-step snapshots/deltas rather than writing an ever-growing whole transcript.
-The exact schema is finalized in E3 and then becomes owned by `sessions.md`.
+The authoritative schema is in [sessions.md](../sessions.md).
 
 Required ordering for tool execution:
 
@@ -113,10 +118,13 @@ legacy fixture loads; reopen/continue without repeated known side effects.
 Compare projected messages, evidence, cwd, and usage before and after restart.
 Kill-injection tests demonstrate process-crash recovery, not power-loss durability.
 
-## Delivery boundaries
+## Remaining qualification
 
-E1 can ship independently. E2 can follow E1 without introducing persistence.
-Split E3 into reader/schema fixtures, writer/ownership, and coordinator integration
-if needed; each commit must be usable and pass existing verification. Keep new
-records behind an explicit development gate until end-to-end recovery passes.
-Do not ship a UI promise of recoverability before its persistence gate passes.
+Offline tests cover representative shell floods, cancellation, escalation,
+artifact failure, journal gaps, competing writers, and SIGKILL before intent,
+after intent, and after a saved result. A frontend regression also keeps a run
+unfinished when saving a result fails after its effect. Expand crash injection
+to the remaining boundaries, including disk-full and permission failures.
+Live output, Esc cancellation, and steering were checked in a real TTY against
+a local mock provider. Continuation with live providers remains unverified.
+These checks must be reported separately from the current offline suite.

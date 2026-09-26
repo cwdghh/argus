@@ -23,8 +23,8 @@ test("above threshold: drops oldest turns, keeps recent + summary", () => {
   const r = maybeCompact(history, { compactAtChars: 100, keepTurns: 3 });
   assert.equal(r.compacted, true);
   assert.equal(r.dropped, 7);
-  assert.equal(r.history[0].role, "system");
-  assert.match(r.history[0].content, /Summary of earlier/);
+  assert.equal(r.history[0].role, "assistant");
+  assert.match(r.history[0].content, /lower-trust task data/);
   assert.match(r.history[0].content, /answer 0/);
   assert.match(r.history[0].content, /user 0/, "summary should preserve the user's intent");
   const users = r.history.filter((m) => m.role === "user").map((m) => m.content);
@@ -59,7 +59,7 @@ test("agent emits compacted event and sends summary", async (t) => {
     { compactAtChars: 100, keepTurns: 3 }
   );
   assert.ok(ev.includes("compacted"), "compacted event missing");
-  assert.ok(lastBody.messages.some((m) => m.role === "system" && /Summary/.test(m.content)), "summary not sent");
+  assert.ok(lastBody.messages.some((m) => m.role === "assistant" && /context digest/.test(m.content)), "summary not sent");
   const users = lastBody.messages.filter((m) => m.role === "user").map((m) => m.content);
   assert.deepEqual(users, ["user 7", "user 8", "user 9", "new"]);
 });
@@ -85,29 +85,6 @@ test("compaction defaults resolve environment values lazily and default to 200k 
     if (origChars === undefined) delete process.env.ARGUS_COMPACT_AT;
     else process.env.ARGUS_COMPACT_AT = origChars;
   }
-});
-
-test("a continued interrupt history keeps the partial assistant text once", () => {
-  // Mirrors docs/interrupt-resume.md §6.2: a partial assistant message is
-  // persisted, then continued over (assistant(request_input) -> tool ->
-  // assistant). Whatever the callback stack reconstructs, the partial text
-  // must appear in the message history exactly once — never twice (which
-  // would inflate the provider's real prompt count on the next request), never
-  // zero (which would blind the model to what the user refers to).
-  const partial = "part of an answer[INTERRUPTED]";
-  const history = [
-    { role: "user", content: "do the thing" },
-    { role: "assistant", content: partial },
-    {
-      role: "assistant",
-      content: null,
-      tool_calls: [{ id: "req_1", type: "function", function: { name: "request_input", arguments: "{}" } }],
-    },
-    { role: "tool", tool_call_id: "req_1", content: "finish it" },
-    { role: "assistant", content: "and the rest of the answer" },
-  ];
-  const sent = JSON.stringify(history);
-  assert.equal(sent.split(partial).length - 1, 1, "partial text appears exactly once in the messages");
 });
 
 test("compactBudgetTokens returns the real-token limit", () => {
@@ -175,7 +152,9 @@ test("repeated compaction carries the previous summary forward", () => {
   const r1 = maybeCompact(history, { compactAtChars: 100, keepTurns: 3 });
   assert.match(r1.history[0].content, /user 0/, "first summary covers the oldest turns");
 
-  const r2 = maybeCompact([...r1.history, ...turn(12), ...turn(13)], { compactAtChars: 100, keepTurns: 3 });
+  const completeHistory = [...history, ...turn(12), ...turn(13)];
+  const r2 = maybeCompact(completeHistory, { compactAtChars: 100, keepTurns: 3,
+    previousRevision: r1.revision, turnSizes: Array(14).fill(2) });
   assert.match(r2.history[0].content, /user 3/, "the earlier summary survives re-compaction");
   assert.match(r2.history[0].content, /user 9/, "newly dropped turns are folded in");
   const users = r2.history.filter((m) => m.role === "user").map((m) => m.content);

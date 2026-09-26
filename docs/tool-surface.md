@@ -35,8 +35,8 @@ model request.
    reads and mutations remain attributable to the structured tools.
 4. **Failures are data.** Tool failures return `{ error: true, message, ... }`
    so the model can recover. Mutating successes keep `ok: true`; `read` and
-   `bash` return their natural payloads. Shell capture overflow is an error with
-   unknown completion, not evidence that the command succeeded.
+   `bash` return their natural payloads. Shell output truncation is independent
+   of the observed exit status; an unobserved exit remains unknown.
 5. **Output is bounded twice.** Every result has a per-result character cap,
    and every active turn has a cumulative tool-result budget. `read` also has
    line and byte bounds with structured pagination.

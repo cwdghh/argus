@@ -11,6 +11,7 @@ import { buildRequestBody, runModelStep } from "./agent/model-step.mjs";
 import { executeToolCall } from "./agent/tool-call.mjs";
 import { accumulateUsage, reportedRequestUsage, totalReportedUsage } from "./agent/usage.mjs";
 import { canonicalToolCall, detectCallLoop, LOOP_WINDOW, protocolSafeMessages, stableStringify } from "./agent/turn-state.mjs";
+import { createEvidence, workspaceFingerprint } from "./agent/evidence.mjs";
 
 /**
  * Run one user prompt through the tool-calling loop.
@@ -32,6 +33,11 @@ import { canonicalToolCall, detectCallLoop, LOOP_WINDOW, protocolSafeMessages, s
  *   compactAtChars?: number,
  *   keepTurns?: number,
  *   lastTokens?: number|null,
+ *   onRunStart?: (data: object) => Promise<void>,
+ *   onCheckpoint?: (data: object) => Promise<void>,
+ *   contextRevision?: object,
+ *   historyTurnSizes?: number[],
+ *   onContextRevision?: (revision: object, source: Array) => Promise<object>,
  * }} [opts]
  * @returns {Promise<{ runId: string, outcome: string, reason: string|null, messages: Array, partial: object|null, finalText: string, cwd: string, usage: object|null, requestUsage: object }>}
  */
@@ -53,8 +59,36 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
   const runId = randomUUID();
   const requestAttempts = [];
   const toolAttempts = [];
+  const evidence = createEvidence(opts.checkCommands ?? [],
+    opts.checkCommands?.length ? workspaceFingerprint(cwd) : null, cwd);
   let steps = 0;
   let turnToolResultChars = 0;
+  let toolOrdinal = 0;
+  let pendingText = "";
+  let pendingReasoning = "";
+  let lastSnapshotAt = Date.now();
+  let snapshotQueue = Promise.resolve();
+
+  const flushSnapshot = () => {
+    if (!opts.onCheckpoint || (!pendingText && !pendingReasoning)) return snapshotQueue;
+    const text = pendingText;
+    const reasoning = pendingReasoning;
+    pendingText = "";
+    pendingReasoning = "";
+    for (let offset = 0; offset < Math.max(text.length, reasoning.length); offset += 4_096) {
+      const chunk = { runId, kind: "partial_delta", text: text.slice(offset, offset + 4_096),
+        reasoning: reasoning.slice(offset, offset + 4_096) };
+      snapshotQueue = snapshotQueue.then(() => opts.onCheckpoint(chunk));
+      snapshotQueue.catch(() => {}); // observed at the next awaited boundary
+    }
+    lastSnapshotAt = Date.now();
+    return snapshotQueue;
+  };
+  const checkpoint = async (kind, payload = {}) => {
+    if (!opts.onCheckpoint) return;
+    await flushSnapshot();
+    await opts.onCheckpoint({ runId, kind, ...payload });
+  };
 
   // Everything created during this turn (assistant replies + tool results).
   const turnMessages = [{ role: "user", content: userMessage }];
@@ -67,6 +101,10 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
   let usage = null;
 
   const emit = (event) => {
+    if (event.type === "text_delta") pendingText += event.delta;
+    else if (event.type === "thinking_delta") pendingReasoning += event.delta;
+    if ((pendingText.length + pendingReasoning.length >= 4_096 || Date.now() - lastSnapshotAt >= 2_000) &&
+        (pendingText || pendingReasoning)) flushSnapshot();
     if (event.type === "request_attempt") {
       requestAttempts.push({ id: event.attemptId, modelStepId: `${runId}:step:${steps}`, model: event.model, usage: null });
     } else if (event.type === "request_usage") {
@@ -99,11 +137,13 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
     usage,
     requestUsage: { attempts: requestAttempts, totals: totalReportedUsage(requestAttempts) },
     toolAttempts,
+    evidence: evidence.result(),
+    contextRevision,
   });
 
   // Keep the model context within the window: drop the oldest turns and replace
   // them with a compact summary when the history grows too large.
-  const { history: sendHistory, compacted } = maybeCompact(history, {
+  let { history: sendHistory, compacted, revision: contextRevision } = maybeCompact(history, {
     compactAtTokens: opts.compactAtTokens,
     compactAtChars: opts.compactAtChars,
     keepTurns: opts.keepTurns,
@@ -111,6 +151,8 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
     // carry (see compact.mjs `nextContextTokens`); falls back to the char
     // safety net before the first usage report.
     lastTokens: opts.lastTokens,
+    previousRevision: opts.contextRevision,
+    turnSizes: opts.historyTurnSizes,
   });
   if (compacted) emit({ type: "compacted" });
 
@@ -119,7 +161,36 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
   // A/B/A/B alternation that a plain repeat-streak would reset on every change.
   const loopWindow = [];
 
+  const applySteering = async (calls, startIndex, ordinalBase) => {
+    const queued = await opts.takeSteering?.() ?? [];
+    if (queued.length === 0) return false;
+    for (let index = startIndex; index < calls.length; index++) {
+      const call = calls[index];
+      const result = { error: true, code: "not_executed", message: "superseded by steering; this tool call never ran" };
+      const message = { role: "tool", tool_call_id: call.id, content: JSON.stringify(result) };
+      await checkpoint("tool_result", { ordinal: ordinalBase + index + 1, message });
+      turnMessages.push(message);
+      emit({ type: "tool_call", name: call.function?.name ?? "", args: {}, id: call.id });
+      emit({ type: "tool_result", name: call.function?.name ?? "", ok: false, result, id: call.id });
+    }
+    for (const item of queued) {
+      await checkpoint("steering", { id: item.id, text: item.text });
+      turnMessages.push({ role: "user", content: item.text });
+      await opts.markSteeringApplied?.(item);
+      emit({ type: "steering", id: item.id, text: item.text });
+    }
+    return true;
+  };
+
   try {
+    if (opts.onRunStart) await opts.onRunStart({ runId, prompt: userMessage, cwd, model: config.model,
+      ...(opts.parentRunId ? { parentRunId: opts.parentRunId } : {}) });
+    if (compacted && contextRevision && opts.onContextRevision) {
+      contextRevision = await opts.onContextRevision(contextRevision, history.slice(0, contextRevision.coveredMessages));
+      sendHistory = maybeCompact(history, { previousRevision: contextRevision,
+        lastTokens: 0, compactAtChars: Infinity, keepTurns: opts.keepTurns,
+        turnSizes: opts.historyTurnSizes }).history;
+    }
     while (true) {
       if (steps >= maxSteps) {
         return finish("limited", "step_limit", { message: `agent stopped after ${maxSteps} model steps (ARGUS_MAX_STEPS)` });
@@ -143,6 +214,7 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
         { body, onEvent: emit, signal, stepRetries }
       );
       recordStepUsage(attemptId, stepUsage);
+      await flushSnapshot();
 
       // Partial tool arguments are diagnostic only. Keep observed text once.
       if (aborted) {
@@ -158,6 +230,7 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
         // turn still satisfies tool-call pairing.
         reply.truncated = true;
         turnMessages.push(reply);
+        await checkpoint("assistant", { message: reply });
         for (const call of toolCalls) {
           turnMessages.push({
             role: "tool",
@@ -176,23 +249,34 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
       // still observe cancellation before dispatching any side effect.
       if (signal?.aborted && toolCalls.length > 0) {
         turnMessages.push(reply);
+        await checkpoint("assistant", { message: reply });
         return finish("interrupted", "user_abort");
       }
 
       // The assistant message becomes part of the conversation only after its
       // tool-call shape is known to be protocol-safe.
       turnMessages.push(reply);
+      await checkpoint("assistant", { message: reply });
       if (toolCalls.length === 0) {
         // No tools requested -> the model gave its final answer.
         emit({ type: "assistant_end", text: reply.content ?? "" });
         return finish("completed", null, { finalText: reply.content ?? "" });
       }
 
+      const ordinalBase = toolOrdinal;
+      toolOrdinal += toolCalls.length;
+
       // Execute each requested tool call in sequence and feed the results back as
       // `tool` messages. Some endpoints ignore `parallel_tool_calls:false` and
       // return several at once; they still never run in parallel, and each is
       // executed exactly once. The model does not actually run anything itself.
-      for (const call of toolCalls) {
+      let steered = false;
+      for (let callIndex = 0; callIndex < toolCalls.length; callIndex++) {
+        if (await applySteering(toolCalls, callIndex, ordinalBase)) {
+          steered = true;
+          break;
+        }
+        const call = toolCalls[callIndex];
         const repeatKey = canonicalToolCall(call);
         const loop = detectCallLoop(repeatKey, loopWindow);
         if (loop) {
@@ -221,17 +305,27 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
           resultError: null,
         };
         toolAttempts.push(toolAttempt);
-        const { result, cwd: nextCwd } = await executeToolCall(call, {
+        let toolArgs = {};
+        try { toolArgs = JSON.parse(call?.function?.arguments ?? "{}"); } catch { /* executor reports invalid JSON */ }
+        const toolCwd = cwd;
+        const checkFingerprint = evidence.beforeTool(toolAttempt.name, toolArgs, toolCwd);
+        const toolStartedAt = new Date().toISOString();
+        const { result, cwd: nextCwd, executed } = await executeToolCall(call, {
           cwd,
           signal,
           confirm,
           authorize,
           maxToolResultChars: Math.min(maxToolResultChars, remainingToolChars),
+          artifactDir: opts.artifactDir,
           toolState,
           onEvent: emit,
           attemptId: toolAttemptId,
+          beforeExecute: ({ tool, args, cwd: toolCwd }) => checkpoint("tool_intent", {
+            ordinal: ordinalBase + callIndex + 1, callId: call.id, tool, args, cwd: toolCwd,
+          }),
         });
         toolAttempt.resultError = result?.error === true;
+        const toolEndedAt = new Date().toISOString();
         cwd = nextCwd;
         const serializedResult = JSON.stringify(result);
         turnToolResultChars += serializedResult.length;
@@ -240,6 +334,9 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
           tool_call_id: call.id,
           content: serializedResult,
         });
+        await checkpoint("tool_result", { ordinal: ordinalBase + callIndex + 1, message: turnMessages.at(-1) });
+        evidence.afterTool({ name: toolAttempt.name, args: toolArgs, result, cwd: toolCwd, executed,
+          attemptId: toolAttemptId, before: checkFingerprint, startedAt: toolStartedAt, endedAt: toolEndedAt });
         const resultKey = stableStringify(result);
         loopWindow.push({
           key: `${repeatKey}\u0000${resultKey}`,
@@ -253,6 +350,8 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
           return finish("interrupted", "user_abort");
         }
       }
+      if (steered) continue;
+      if (await applySteering([], 0, toolOrdinal)) continue;
       // Loop again: the model now sees the tool results and can continue.
     }
   } catch (err) {
@@ -271,6 +370,7 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
     err.runId = runId;
     err.requestUsage = { attempts: requestAttempts, totals: totalReportedUsage(requestAttempts) };
     err.toolAttempts = toolAttempts;
+    err.evidence = evidence.result();
     throw err;
   }
 }

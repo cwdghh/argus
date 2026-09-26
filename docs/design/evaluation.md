@@ -1,10 +1,16 @@
 # Behavioral evaluation and verification evidence
 
-Status: **proposed**. Work IDs E0 and V1. Evaluation measures agent behavior;
+Status: **E0 harness and V1 evidence core implemented; live baseline and
+qualification pending**. Work IDs E0 and V1. Evaluation measures agent behavior;
 verification evidence describes an individual task. Neither turns model prose
 into an independent correctness check.
 
 ## E0 — A small reproducible task suite
+
+The six baseline fixtures and opt-in runner now live in `eval/coding-tasks.mjs`
+and `eval/coding.mjs`. Their checkable behavior is covered by offline tests.
+No live provider baseline has been run; the remaining trial and comparison
+requirements below are still open. The implemented CLI use is in the README.
 
 Keep the existing tool-choice evaluator as a focused diagnostic. Add a separate
 coding-task runner over temporary Git workspaces, with exact task definitions,
@@ -63,6 +69,20 @@ saved sanitized outputs. Run baseline trials before claiming improvements. Mock
 failure/recovery tests remain part of normal CI; paid live comparisons do not.
 
 ## V1 — Evidence attached to a task handoff
+
+The current agent records bounded Git worktree fingerprints for explicitly
+designated checks, exact observed shell status/timing/artifact references, and
+whether later mutating tools stale a check. TUI `/check <command>` and headless
+`--check <command>` designate an exact optional command; they do not run it.
+Recorded states are passed, failed, not run, or unknown, with separate freshness.
+Both frontends render this evidence independently of model prose, and named
+sessions retain it in timing blocks. The implementation and CLI behavior are
+owned by [architecture](../architecture.md) and [README](../../README.md).
+
+The remaining acceptance cases below need broader adversarial and real-workspace
+trials. Fingerprints deliberately avoid ignored files, limit untracked files and
+bytes, and mark incomplete scope as unknown. They cannot perfectly attribute
+changes made by concurrent actors.
 
 Build a compact evidence ledger from actual tool events and optional explicit
 user-designated checks. Do not infer that every `bash` invocation is a test or

@@ -311,7 +311,9 @@ test("live suggestions: /commands filter, navigate, Tab accepts, Esc dismisses",
 
   t.insertText("/re");
   assert.equal(t.suggestion?.kind, "slash");
-  assert.deepEqual(t.suggestion.items.map((i) => i.label), ["/resume"]);
+  assert.deepEqual(t.suggestion.items.map((i) => i.label), ["/resolve", "/resume"]);
+
+  t.runAction({ type: "down" });
 
   t.insertText("\t"); // Tab accepts the highlighted command
   assert.equal(t.editor.buffer, "/resume ");
@@ -334,7 +336,7 @@ test("live suggestions: /commands filter, navigate, Tab accepts, Esc dismisses",
   t.runAction({ type: "down" });
   t.runAction({ type: "down" });
   t.insertText("s");
-  assert.deepEqual(t.suggestion.items.map((i) => i.label), ["/status", "/show", "/sessions"]);
+  assert.deepEqual(t.suggestion.items.map((i) => i.label), ["/status", "/steer", "/show", "/sessions"]);
   assert.equal(t.suggestion.selected, 0, "highlight follows the previously selected command");
   t.insertText("e");
   assert.deepEqual(t.suggestion.items.map((i) => i.label), ["/sessions"]);

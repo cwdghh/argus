@@ -41,6 +41,9 @@ export function consumeAgentEvent(blocks, ev, { durationMs } = {}) {
     case "text_delta":
       appendBlock(blocks, "assistant", ev.delta);
       break;
+    case "steering":
+      blocks.push({ kind: "user", text: ev.text });
+      break;
     case "tool_call":
       blocks.push({
         kind: "tool",

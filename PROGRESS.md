@@ -8,6 +8,49 @@ See the [archive index](docs/archive/README.md) for provenance.
 
 ---
 
+#### 2026-09-26 — verification correction and context retrieval check
+
+The entry below recorded 365 tests before the final omitted-constraint retrieval
+case was added. The final `npm run verify` checked 91 modules and 19 live
+documents with **366/366 offline tests passing** on macOS / Node v26.5.0;
+`git diff --check` passed. The retrieval case used a local mock provider to
+read a private source artifact through the existing `read` tool. It does not
+establish that a live model will choose to retrieve an omitted constraint.
+
+#### 2026-09-26 — minimal terminal-agent foundations and recovery qualification
+
+**Status: ✅ U0, E2–E3, I1–I2, and first C1/V1 slices implemented; ⏳ live E0 baseline and broader qualification pending**
+
+- Added `argus doctor` and a documented local install path. An isolated global
+  install launched `argus --help` outside the checkout. Kept the four default
+  tools and dependency-free runtime.
+- Added six reproducible coding tasks with external behavioral verifiers and an
+  opt-in provider runner. Reports include fixture and source hashes, raw trial
+  outcomes, timing, tool failures, and reported usage without transcripts or
+  configured secrets. No paid baseline has been run.
+- Supervised shell processes with bounded live previews and private output
+  artifacts. Exit, termination, output completeness, and cwd are separate facts.
+  Added awaited session checkpoints, exclusive local writer ownership,
+  conservative recovery, and explicit uncertain-effect resolution. An unexpected
+  frontend error leaves the synced run prefix unfinished rather than sealing it.
+- Added explicit continuation in both frontends and persisted steering in the
+  TUI. Steering is applied at safe boundaries; obsolete calls receive local
+  `not_executed` results. A failed run journal must be reloaded before the TUI
+  starts another run.
+- Added bounded lower-trust context revisions with source hashes and private
+  retrieval artifacts, plus optional exact-command verification evidence with
+  observed status and freshness. D4–D6 were selected for evidence-backed
+  completion, tested provider breadth, and measured admission of new concepts.
+
+**Verified in this session:** `npm run verify` checked 91 modules and 19 live
+Markdown documents; **365/365 offline tests pass** on macOS / Node v26.5.0.
+`git diff --check` passed. An isolated global installation launched the CLI.
+A real TTY with a local mock provider confirmed shell preview, Esc cancellation,
+`/continue`, and `/steer`. SIGKILL recovery was checked before intent, after
+intent, and after a saved result. No paid live-provider baseline, live-provider
+continuation check, or remote CI run was performed. These offline checks do not
+establish power-loss durability or universal provider compatibility.
+
 #### 2026-09-24 — normalized run outcomes and request accounting (E1)
 
 **Status: ✅ E1 implemented; ⏳ checkpointed recovery and live-provider validation pending**

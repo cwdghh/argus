@@ -14,29 +14,31 @@ model. The default tool set is deliberately tiny: `read`, `write`, `edit`, `bash
 |------|---------|
 | `src/main.mjs` | Entry point / CLI |
 | `src/agent.mjs` | Turn coordinator (call model → run tools → repeat) |
-| `src/agent/` | `model-step.mjs` (stream retry), `tool-call.mjs` (dispatch), `tool-result.mjs` (bounds/spill), `turn-state.mjs` (protocol/loop guards), `usage.mjs` (accounting) |
+| `src/agent/` | `model-step.mjs` (stream retry), `tool-call.mjs` (dispatch), `tool-result.mjs` (bounds/spill), `turn-state.mjs` (protocol/loop guards), `usage.mjs` (accounting), `evidence.mjs` (task checks) |
 | `src/llm.mjs` | Streaming chat client: network, retries, timeouts |
 | `src/sse.mjs` | Pure SSE framing + chat-delta folding (protocol layer of `llm.mjs`) |
 | `src/tools.mjs` | Model-visible tool registry and file-tool adapters |
-| `src/tools/` | `bash.mjs` (shell policy/execution), `validate.mjs` (schema validation), `atomic-write.mjs` (file replacement) |
+| `src/tools/` | `bash.mjs` (shell policy), `shell-process.mjs` (supervised execution), `validate.mjs` (schema validation), `atomic-write.mjs` (file replacement) |
 | `src/edit-engine.mjs` | Pure exact/fuzzy/range text-edit engine |
 | `src/read-bounds.mjs` | Bounded-memory file scanning + read line/byte caps |
 | `src/tool-state.mjs` | Same-turn read coverage/hash state for safe range edits |
 | `src/compact.mjs` | Context compaction |
-| `src/session/` | `paths.mjs` (naming), `catalog.mjs` (discovery/housekeeping), `reader.mjs` (streaming loads), `store.mjs` (writer), `resume.mjs` (folder matching), `data.mjs` (reconstruction) — import from `index.mjs` |
+| `src/session/` | `paths.mjs` (naming), `catalog.mjs` (discovery/housekeeping), `reader.mjs` (streaming loads), `journal.mjs` (crash prefixes), `ownership.mjs` (single writer), `context.mjs` (source artifacts), `store.mjs` (writer), `resume.mjs` (folder matching), `data.mjs` (reconstruction) — import from `index.mjs` |
 | `src/headless.mjs` | One-shot CLI mode (no TUI) |
 | `src/tui.mjs` + `src/tui/*.mjs` | Terminal UI: controller; input/turn orchestration; editor, keys, suggestions, frames, markdown, blocks, commands, layout, lifecycle |
 | `src/format.mjs` | Neutral value formatting (durations, tokens, result summaries) |
 | `src/transcript.mjs` | Shared transcript block folding (used by TUI + headless) |
 | `src/theme.mjs` | Colors / styling tokens |
 | `src/config.mjs` | Env-driven config |
+| `src/doctor.mjs` | Read-only CLI installation diagnostics |
 | `docs/` | Architecture, tool contract, tool-surface decisions, self-updating guide, debugging saved sessions |
 | `docs/improvements-plan.md` | Stable work IDs, dependencies, and future-session briefs — read before new work |
-| `docs/product-direction.md` | Proposed product identity and pending owner decisions |
+| `docs/product-direction.md` | Selected product direction and decision ledger |
 | `docs/design/` | Proposed execution, context, evaluation/evidence, and provider designs |
 | `docs/conventions.md` | Code, testing, commit, and reference-tag conventions |
 | `docs/sessions.md` | Session record format, compatibility, and recovery |
 | `scripts/` | Offline repository checks and isolated test runner |
+| `eval/` | Opt-in provider evaluations; coding fixtures also have offline scoring tests |
 | `.github/workflows/verify.yml` | CI verification matrix |
 | `docs/archive/` | Frozen history & executed one-time plans (read only when needed) |
 | `PROGRESS.md` | What we've done (append on real change) |

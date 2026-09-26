@@ -22,7 +22,25 @@ server. All variables and defaults are documented in [.env.example](.env.example
 
 Configuration precedence is shell environment, project `.env`, home `.env`, then
 built-in defaults. `ARGUS_HOME` relocates the home configuration and session store.
-Optional `npm link` makes this checkout available as the `argus` command.
+To run this checkout as `argus` from any working directory:
+
+```bash
+cd /path/to/argus
+npm link
+mkdir -p ~/.argus
+test -e ~/.argus/.env || cp .env.example ~/.argus/.env
+chmod 600 ~/.argus/.env
+# Edit ~/.argus/.env with your provider key, endpoint, and model.
+cd /path/to/your/project
+argus doctor
+argus --new
+```
+
+`npm link` points the global command at this checkout, so source changes take
+effect immediately. `argus doctor` checks the Node version and configuration,
+then makes an unauthenticated HEAD request to check endpoint reachability; it
+does not establish that credentials or the selected model work. This package is
+private and is not published to the npm registry.
 
 ## Interactive use
 
@@ -52,6 +70,10 @@ Review @src/agent.mjs and explain its failure modes.
 | `/help`, `/keys` | Command and keyboard reference |
 | `/status` | Current session, model, cwd, usage, and limits |
 | `/show <n>` | Show transcript block n and its stored tool result |
+| `/continue` | Continue the latest unfinished run with recorded progress |
+| `/resolve retry\|abandon` | Record what to do about an uncertain tool attempt before continuing |
+| `/steer <text>` | Queue a correction during a run; `list` or `cancel ID` manages queued text |
+| `/check <command>` | Mark an exact shell command as an optional check for the next turn; `list` or `clear` manages checks |
 | `/model [name]` | Inspect or change the session model |
 | `/sessions` | List recent sessions with sizes and last prompts |
 | `/resume <name>` | Switch to a saved session |
@@ -68,7 +90,11 @@ npm start -- --new
 npm start -- --session my-task
 ```
 
-Turns save automatically, including failed and interrupted work. `/model` overrides
+Run starts, completed steps, tool intent, and results are checkpointed; a crash
+can still lose text since its last acknowledged chunk. Restart shows the saved
+prefix without re-running tools. An intent lacking a result requires inspection
+and `/resolve retry` or `/resolve abandon` before `/continue`. A continuation is
+a new model request using recorded progress. `/model` overrides
 persist per session; `/new` uses the configured default. Retention is opt-in through
 `ARGUS_SESSION_KEEP`. Session format and recovery details are in
 [docs/sessions.md](docs/sessions.md); failure inspection is in
@@ -79,12 +105,19 @@ persist per session; `/new` uses the configured default. Retention is opt-in thr
 ```bash
 npm start -- "explain this repository"
 npm start -- "continue the review" --session my-task
+npm start -- --continue --session my-task
+npm start -- --continue --session my-task --resolve abandon
+npm start -- "fix the issue" --check "npm test" --session my-task
 npm start -- --help
 ```
 
 Assistant text goes to stdout; reasoning, tool calls, and errors go to stderr.
 A named session resumes its history and saves the new turn. Destructive shell
 commands requiring human approval are blocked in headless mode.
+`--check` designates an exact shell command as a verification check; it does
+not run the command automatically. Argus reports whether the model ran it,
+its observed status, and whether later work made its evidence stale. Checks
+not designated this way remain ordinary shell observations.
 Exit status is 0 when the model ends normally, 130 when interrupted, and 1 for
 failed, truncated, or locally limited runs. Normal completion does not certify
 the requested work is correct.
@@ -100,12 +133,16 @@ See [the tool contract](docs/tools.md) for exact behavior.
 
 Long conversations use deterministic compaction. Tool results and complete
 requests have size limits, and model calls have retry/timeout/step bounds.
-Oversized tool results can be inspected through their saved spill path. Reported
+The bounded context digest cites a private source artifact that can be paged
+with `read`; it is lower-trust task data and may omit detail. Shell commands
+are supervised on supported POSIX hosts. The footer shows a short live output
+preview, and output beyond the 1 MB preview is drained into private files up
+to an 8 MB artifact cap. Oversized tool results can be inspected through their
+saved spill path. Reported
 usage in the footer is a context/output display metric, not a billing total.
 Saved timing records also retain reported usage by network attempt, with missing
-reports marked unknown. Checkpointed interrupt and continue, steering, semantic
-compaction, and provider fallback remain future
-work; [GAPS.md](GAPS.md) records current limitations.
+reports marked unknown. Semantic and mid-run context reduction and provider
+fallback remain future work; [GAPS.md](GAPS.md) records current limitations.
 
 ## Develop
 
@@ -118,11 +155,18 @@ conventions; [docs/architecture.md](docs/architecture.md) explains the boundarie
 npm run verify                  # repository checks + offline tests
 npm test -- --test-reporter=spec # offline tests with per-test output
 npm run eval:tools              # opt-in real-provider tool-choice evaluation
+npm run eval:coding             # opt-in coding-task trials (may incur API cost)
 ```
 
 Offline tests use a scripted SSE server and a disposable home directory. Provider
 evaluation needs credentials and may incur API cost. [PROGRESS.md](PROGRESS.md)
 records verified changes; [NEXT_STEPS.md](NEXT_STEPS.md) ranks candidate work.
+The coding evaluator uses six disposable task workspaces and external behavioral
+checks. `ARGUS_EVAL_TASKS` selects task names; `ARGUS_EVAL_TRIALS` defaults to three.
+`ARGUS_EVAL_TIMEOUT_MS` bounds a trial and `ARGUS_EVAL_TOTAL_TIMEOUT_MS` bounds
+the whole run; the defaults are two and ten minutes respectively.
+It prints a sanitized JSON summary without transcript content. Its process
+boundary is for repeatability, not adversarial isolation.
 
 ## Acknowledgements
 

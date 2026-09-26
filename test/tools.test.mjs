@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  chmodSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync,
+  chmodSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, realpathSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -329,15 +329,26 @@ test("edit range mode can fill an empty file", withDir(async ({ tmp, write, cont
   assert.equal(content("empty.txt"), "hello");
 }));
 
-test("bash output overflow reports unknown completion with captured output", withDir(async ({ dir }) => {
+test("bash output overflow preserves known completion with bounded output", withDir(async ({ dir }) => {
   const command = `node -e ${JSON.stringify("process.stdout.write('x'.repeat(2_000_000))")}`;
-  const r = await findTool("bash").execute({ command }, { cwd: dir });
-  assert.equal(r.error, true);
-  assert.equal(r.truncated, true);
-  assert.match(r.message, /completion is unknown/);
-  assert.equal(r.cwd, undefined);
-  assert.ok(r.stdout.length <= 1024 * 1024, "captured output is clipped at maxBuffer");
+  const previousHome = process.env.ARGUS_HOME;
+  process.env.ARGUS_HOME = dir;
+  let r;
+  try { r = await findTool("bash").execute({ command }, { cwd: dir }); }
+  finally {
+    if (previousHome === undefined) delete process.env.ARGUS_HOME;
+    else process.env.ARGUS_HOME = previousHome;
+  }
+  assert.equal(r.error, undefined);
+  assert.equal(r.exitCode, 0);
+  assert.equal(r.termination, "completed");
+  assert.equal(r.outputTruncated, true);
+  assert.equal(realpathSync(r.cwd), realpathSync(dir));
+  assert.ok(r.stdout.length <= 1024 * 1024, "captured output is clipped at the preview cap");
   assert.ok(r.stdout.length > 0);
+  assert.equal(readFileSync(r.artifact.stdout).length, 2_000_000);
+  assert.equal(readFileSync(r.artifact.stderr).length, 0);
+  assert.equal(r.artifactTruncated, false);
 }));
 
 test("bash runs under /bin/sh regardless of the caller's SHELL", withDir(async ({ dir }) => {

@@ -21,6 +21,19 @@ test("TUI handles a turn error without crashing (ac scope fix)", async (t) => {
   assert.equal(tui.mode, "idle", "mode should return to idle");
 });
 
+test("TUI /continue uses saved progress as an explicit follow-up", async (t) => {
+  const srv = await createMockServer(() => [{ content: "done" }]);
+  t.after(() => srv.close());
+  const tui = new MinimalTui({ baseUrl: srv.url, apiKey: "", model: "m", systemPrompt: "s" }, {
+    initialBlocks: [{ kind: "timing", outcome: "interrupted", runId: "earlier" }],
+    initialHistory: [{ role: "user", content: "original task" }],
+  });
+  tui.editor.buffer = "/continue";
+  await tui.submit();
+  assert.match(tui.history.at(-2).content, /Continue the previous task/);
+  assert.equal(tui.blocks.at(-1).outcome, "completed");
+});
+
 test("TUI persists failed turns, including the visible error", async (t) => {
   const srv = await createMockServer(() => {
     throw new Error("boom");

@@ -164,7 +164,7 @@ test("real last-request tokens trigger compaction before the next turn", async (
   );
   assert.ok(ev.includes("compacted"), "a real 200k-token context compacts before the next turn");
   assert.ok(
-    lastBody.messages.some((m) => m.role === "system" && /Summary of earlier/.test(m.content)),
+    lastBody.messages.some((m) => m.role === "assistant" && /context digest/.test(m.content)),
     "the compacted summary reaches the model",
   );
   const users = lastBody.messages.filter((m) => m.role === "user").map((m) => m.content);

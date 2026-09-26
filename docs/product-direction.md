@@ -1,6 +1,6 @@
 # Product direction and decision ledger
 
-Status: **D1–D3 selected on 2026-09-24; D4–D6 pending**. The owner delegated
+Status: **D1–D3 selected on 2026-09-24; D4–D6 selected on 2026-09-26**. The owner delegated
 the first three choices with a requirement that Argus stay minimal and easy to
 use, and that tool clarity be addressed first. This document owns product
 identity and decision status. It does not authorize every proposed feature or
@@ -24,14 +24,16 @@ Three intended distinguishing characteristics:
 | Human control | A developer can stop, redirect, or continue work without reconstructing the task. | A sequential execution model and visible boundary handling. |
 | Evidence-backed results | Verification claims identify what ran, what it checked, and which workspace state it covered. | More precise outcome reporting and some verification time. |
 
-These are proposed differentiators, not guarantees of the current implementation.
+These are product aims; implemented guarantees and limits live in the owning
+contracts.
 Understandability is the admission test across all three. Feature count, maximum
 autonomy, and provider breadth would not be the primary measures of progress.
 
 ## Decision ledger
 
-The owner delegated D1–D3 to the recommended direction on 2026-09-24. D4–D6
-remain pending. Existing constraints remain authoritative; link technical details
+The owner delegated D1–D3 to the recommended direction on 2026-09-24 and
+directed completion of the remaining minimal terminal-agent work on 2026-09-26.
+Existing constraints remain authoritative; link technical details
 rather than repeating their contracts.
 
 | ID | Choice | Status | What choosing another direction changes |
@@ -39,12 +41,13 @@ rather than repeating their contracts.
 | D1 | Everyday coding partner, learning platform, or unattended worker? | **Chosen:** everyday coding partner with an inspectable core (2026-09-24). | Learning emphasizes traces/experiments; unattended work requires stronger isolation, budgets, recovery policy, and supervision. |
 | D2 | What wins when priorities conflict: recoverability, interaction speed, or experimentation? | **Chosen:** recoverability, with responsiveness measured (2026-09-24). | Speed favors lighter persistence; experimentation favors replaceable components and broader extension points. |
 | D3 | Human-directed execution, step-by-step approval, or long-running autonomy? | **Chosen:** human-directed execution within a clear task (2026-09-24). | Step approval requires a plan/approval lifecycle; unattended work needs leases, escalation, and durable scheduling. |
-| D4 | How should users trust completion? | **Pending.** Recommendation: show recorded verification evidence and its limits; allow task-specific gates. | A prose-only finish is simpler but harder to audit; mandatory gates for every task add friction. |
-| D5 | How broad should provider support become? | **Pending.** Recommendation: validate the compatible-chat path against named tested targets first. | Native adapters need independently tested message, cancellation, tool, and usage mappings. |
-| D6 | How far should the tiny core grow? | **Pending.** Recommendation: add a concept only when a recurring task demonstrates value and existing primitives are insufficient. | A plugin/platform direction needs a separate public API, compatibility policy, and ownership model. |
+| D4 | How should users trust completion? | **Chosen:** recorded verification evidence and its limits, with optional exact task checks (2026-09-26). | Mandatory gates for every task add friction. |
+| D5 | How broad should provider support become? | **Chosen:** test named compatible-chat targets before expanding support (2026-09-26). | Native adapters need independently tested message, cancellation, tool, and usage mappings. |
+| D6 | How far should the tiny core grow? | **Chosen:** add a concept only for a recurring measured task that the four tools and current primitives cannot handle (2026-09-26). | A plugin/platform direction needs a separate public API, compatibility policy, and ownership model. |
 
-D4–D6 can stay provisional while foundational work proceeds. No unanswered
-question is silently recorded as acceptance.
+These choices follow the owner's 2026-09-26 instruction to finish the pending
+terminal-agent improvements while keeping Argus minimal and easy to use. They
+do not claim live-provider compatibility or admit fallback without evidence.
 
 ## Scenarios that make the choice concrete
 

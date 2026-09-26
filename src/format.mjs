@@ -50,7 +50,7 @@ export function formatTokens(u) {
  * Prefers the most informative field (stdout first line, read text first
  * line), falls back to the `ok` payload, and never throws on weird values.
  *
- * When the result was paged or cut (`truncated` / `nextOffset`), the line ends
+ * When the result was paged or cut (`truncated` / `outputTruncated` / `nextOffset`), the line ends
  * with a ` … N more lines` marker so a truncated read or build log is never
  * mistaken for the whole story.
  */
@@ -79,7 +79,7 @@ export function summarize(result) {
 
 /** "… N more lines" (or "… (truncated)") when a result was paged or cut. */
 function truncationSuffix(result) {
-  if (result.truncated !== true && result.nextOffset == null) return "";
+  if (result.truncated !== true && result.outputTruncated !== true && result.nextOffset == null) return "";
   if (Number.isInteger(result.totalLines) && Number.isInteger(result.endLine)) {
     const remaining = result.totalLines - result.endLine;
     if (remaining > 0) return ` · … ${remaining} more line${remaining === 1 ? "" : "s"}`;
@@ -156,7 +156,7 @@ export function previewResult(result, { maxLines = PREVIEW_MAX_LINES, maxChars =
   // last line the preview shows), so "… N more lines" reflects the whole file,
   // not just the window of the current call.
   let more = null;
-  if (result.truncated === true || result.nextOffset != null) {
+  if (result.truncated === true || result.outputTruncated === true || result.nextOffset != null) {
     if (Number.isInteger(result.totalLines) && Number.isInteger(result.startLine)) {
       more = Math.max(0, result.totalLines + 1 - (result.startLine + shown.length));
     }
@@ -165,7 +165,7 @@ export function previewResult(result, { maxLines = PREVIEW_MAX_LINES, maxChars =
   let out = shown.join("\n");
   if (more != null && more > 0) {
     out += `\n… ${more} more line${more === 1 ? "" : "s"}`;
-  } else if (more == null && (result.truncated === true || result.nextOffset != null)) {
+  } else if (more == null && (result.truncated === true || result.outputTruncated === true || result.nextOffset != null)) {
     out += "\n… (truncated)";
   }
   if (out.length > maxChars) {

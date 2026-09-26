@@ -234,7 +234,7 @@ test("sessionData rebuilds transcript, history, and meta in one place", () => {
   assert.deepEqual(blocks.map((b) => b.kind), ["user", "assistant"]);
   assert.equal(cwd, "/w");
   assert.equal(model, "model-x");
-  assert.deepEqual(sessionData(null), { blocks: [], history: [], cwd: null, model: null, warnings: [] });
+  assert.deepEqual(sessionData(null), { blocks: [], history: [], turnSizes: [], cwd: null, model: null, contextRevision: null, warnings: [] });
 });
 
 test("loadSession skips any torn line with a warning instead of bricking the session", async () => {

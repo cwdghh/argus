@@ -10,15 +10,21 @@
 export function sessionData(data) {
   const blocks = [];
   const history = [];
+  const turnSizes = [];
   for (const turn of data?.turns ?? []) {
     if (Array.isArray(turn.blocks)) blocks.push(...turn.blocks);
-    if (Array.isArray(turn.messages)) history.push(...turn.messages);
+    if (Array.isArray(turn.messages)) {
+      history.push(...turn.messages);
+      if (turn.messages.length) turnSizes.push(turn.messages.length);
+    }
   }
   return {
     blocks,
     history,
+    turnSizes,
     cwd: data?.meta?.cwd ?? null,
     model: data?.meta?.model ?? null,
+    contextRevision: data?.meta?.contextRevision ?? null,
     warnings: Array.isArray(data?.meta?.warnings) ? data.meta.warnings : [],
   };
 }

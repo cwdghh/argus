@@ -11,7 +11,7 @@ import { argusHome } from "../config.mjs";
  * spilled to a tmp file whose path rides in the result so the model can read
  * any range of it with the read tool instead of guessing from a head slice.
  */
-export async function boundToolResult(result, maxChars = 50_000) {
+export async function boundToolResult(result, maxChars = 50_000, artifactDir = null) {
   let serialized;
   try {
     serialized = JSON.stringify(result);
@@ -25,15 +25,24 @@ export async function boundToolResult(result, maxChars = 50_000) {
     ...(typeof result?.path === "string" ? { path: result.path } : {}),
     ...(typeof result?.cwd === "string" ? { cwd: result.cwd } : {}),
     ...(Number.isInteger(result?.nextOffset) ? { nextOffset: result.nextOffset } : {}),
+    ...(Object.hasOwn(result ?? {}, "exitCode") ? { exitCode: result.exitCode } : {}),
+    ...(typeof result?.signal === "string" || result?.signal === null ? { signal: result.signal } : {}),
+    ...(typeof result?.termination === "string" ? { termination: result.termination } : {}),
+    ...(result?.outputTruncated === true ? { outputTruncated: true } : {}),
+    ...(result?.aborted === true ? { aborted: true } : {}),
+    ...(result?.timeout === true ? { timeout: true } : {}),
+    ...(result?.artifact && typeof result.artifact === "object" ? { artifact: result.artifact } : {}),
+    ...(result?.artifactTruncated === true ? { artifactTruncated: true } : {}),
+    ...(result?.artifactError === true ? { artifactError: true } : {}),
   };
   // A very long path/cwd must not defeat the cap it is meant to help explain.
   // Keep exact continuation context when it is reasonably small; otherwise
   // prefer a useful result preview and the hard size guarantee.
-  for (const key of ["path", "cwd"]) {
+  for (const key of ["path", "cwd", "artifact"]) {
     if (JSON.stringify(context[key] ?? "").length > maxChars / 3) delete context[key];
   }
 
-  let fullPath = await spillFullResult(serialized);
+  let fullPath = await spillFullResult(serialized, artifactDir);
   const overflowMessage = `tool result exceeded ${maxChars} characters`;
   const sourceMessage = result?.error && typeof result.message === "string"
     ? result.message.slice(0, 200)
@@ -79,6 +88,10 @@ export async function boundToolResult(result, maxChars = 50_000) {
       delete context.path;
       continue;
     }
+    if (Object.hasOwn(context, "artifact")) {
+      delete context.artifact;
+      continue;
+    }
     if (fullPath) {
       // ARGUS_HOME itself can be longer than the result budget. The pointer
       // is optional; the cap and exact read continuation are not.
@@ -91,9 +104,9 @@ export async function boundToolResult(result, maxChars = 50_000) {
 }
 
 /** Write an oversized tool result's full payload to the spill dir. */
-async function spillFullResult(serialized) {
+async function spillFullResult(serialized, artifactDir) {
   try {
-    const dir = join(argusHome(), "tmp");
+    const dir = artifactDir ?? join(argusHome(), "tmp");
     await mkdir(dir, { recursive: true, mode: 0o700 });
     await chmod(dir, 0o700);
     const file = join(dir, `tool-result-${randomUUID()}.json`);

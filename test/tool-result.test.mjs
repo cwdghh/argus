@@ -54,3 +54,15 @@ test("a bounded error keeps its failure reason visible", async (t) => {
   assert.match(result.message, /command completion is unknown/);
   assert.ok(JSON.stringify(result).length <= 700);
 });
+
+test("bounding large shell output retains its observed exit and truncation facts", async () => {
+  const result = await boundToolResult({
+    stdout: "x".repeat(2_000), stderr: "", exitCode: 0, signal: null,
+    termination: "completed", outputTruncated: true,
+  }, 700);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.termination, "completed");
+  assert.equal(result.outputTruncated, true);
+  assert.equal(result.truncated, true);
+  assert.ok(JSON.stringify(result).length <= 700);
+});

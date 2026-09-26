@@ -10,7 +10,7 @@ const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
 test("suggestions: slash commands match a bare / prefix and hide otherwise", () => {
   const s = computeSuggestion({ buffer: "/st", cursor: 3, mode: "idle", cwd: "/", prev: null });
   assert.equal(s.kind, "slash");
-  assert.deepEqual(s.items.map((i) => i.label), ["/status"]);
+  assert.deepEqual(s.items.map((i) => i.label), ["/status", "/steer"]);
   assert.equal(s.start, 0);
   assert.equal(s.end, 3);
   // Not a bare command (space follows) -> no popup.
@@ -30,11 +30,9 @@ test("suggestions: the highlighted row survives recomputes that shrink the list"
   };
   const s = computeSuggestion({ buffer: "/s", cursor: 2, mode: "idle", cwd: "/", prev });
   assert.equal(s.kind, "slash");
-  // /show sorts between /status and /sessions, so the preserved /sessions
-  // highlight lands at index 2 — same label, same semantics.
-  assert.equal(s.selected, 2, "same label keeps its highlight");
+  assert.equal(s.items[s.selected].label, "/sessions", "same label keeps its highlight");
   const fewer = computeSuggestion({ buffer: "/st", cursor: 3, mode: "idle", cwd: "/", prev });
-  assert.equal(fewer.selected, 0, "missing label clamps into the smaller list");
+  assert.equal(fewer.selected, 1, "missing label clamps into the smaller list");
 });
 
 test("suggestions: @path lists entries, dotfiles hidden unless the prefix dots", () => {

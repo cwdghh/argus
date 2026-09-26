@@ -1,10 +1,18 @@
 # Context that preserves intent
 
-Status: **proposed**. Work ID C1. This document owns the proposed context design;
-current limits remain in [GAPS.md](../../GAPS.md). It depends on explicit logical
-run and request accounting from [E1](execution.md); durable publication uses E3.
+Status: **bounded deterministic between-run revision implemented; semantic and
+mid-run reduction remain proposed**. Work ID C1. The implemented behavior is
+owned by [architecture](../architecture.md) and [sessions](../sessions.md);
+current limits remain in [GAPS.md](../../GAPS.md). This file retains the design
+and acceptance matrix.
 
 ## Model and boundaries
+
+The current revision records covered message count, source hash, method,
+retained message IDs, a capped digest, and an indexed private source artifact.
+Logical saved-run sizes keep in-run steering together during reduction. The
+digest is assistant-role lower-trust data and is reused from the last persisted
+revision. It is not a semantic preservation guarantee.
 
 Treat the append-only session as source evidence and the active model context as
 a bounded projection. Retain a stable summary of a covered prefix plus a recent
@@ -63,13 +71,15 @@ Deliver between-run reduction first. Mid-run reduction is a later C1 slice after
 run-boundary tests pass, at a completed tool batch or other valid request boundary.
 Never reduce an unresolved assistant-call/result segment independently.
 
-Keep a bounded read-only context artifact available via the existing `read` tool,
+Keep a read-only context artifact available via the existing `read` tool,
 with source references for deeper inspection. Do not force the model to scan a
 huge raw JSONL file to recover one omitted fact. Artifact creation and lifetime
 belong to the session host; the context reducer remains a pure transformation
 where possible. Referenced artifacts remain while their session remains unless
 the user explicitly removes them. Missing artifacts produce an honest unavailable
 reference. Implement retention alongside publication, not as a cleanup afterthought.
+The first slice bounds the digest and paged reads, but not total artifact bytes
+across repeated revisions; that limit remains a follow-up.
 
 Do not add embeddings, cross-project memory, a database, or a new retrieval tool
 in C1. Those need separate evidence and ownership decisions.
