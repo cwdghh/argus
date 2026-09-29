@@ -1,10 +1,9 @@
 /**
  * Local slash commands for the TUI.
  *
- * `COMMANDS` is the single source of truth: the same table drives the
- * in-editor suggestion popup (see suggestions.mjs), the `/help` reference
- * text, and dispatch in the controller. Adding a command means adding one
- * entry with a `run` handler — nothing else in the controller changes.
+ * `COMMANDS` drives the suggestion popup, `/help`, and idle command dispatch.
+ * Active-run `/steer` goes through steering.mjs from the turn coordinator;
+ * both paths share the same queue and cancellation handler.
  *
  * Handlers receive the controller instance as `tui` plus the
  * whitespace-split argument list, and report back through `tui.pushBlock`
@@ -13,6 +12,7 @@
  */
 import { formatChars, formatDuration, formatTokens, toolLabel } from "../format.mjs";
 import { contextUsage } from "./frames.mjs";
+import { handleSteeringInput } from "./steering.mjs";
 
 /** The keyboard reference shown by /keys and at the bottom of /help. */
 export const KEY_HELP = `## Keyboard shortcuts
@@ -104,23 +104,7 @@ export const COMMANDS = [
     args: "<text|list|cancel ID>",
     description: "queue a correction during a run; inspect or cancel queued corrections",
     async run(tui, args) {
-      if (args[0] === "list") {
-        tui.pushBlock({ kind: "assistant", text: tui.steeringQueue.length
-          ? tui.steeringQueue.map((item) => `${item.id.slice(0, 8)} — ${item.text}`).join("\n")
-          : "No queued steering." });
-      } else if (args[0] === "cancel" && args[1]) {
-        const item = tui.steeringQueue.find((queued) => queued.id.startsWith(args[1]));
-        if (!item) tui.pushBlock({ kind: "error", text: "no queued steering matches that ID" });
-        else {
-          await tui.withLocalTask(async () => {
-            await tui.session.settleSteering(item.runId, item.id, "cancelled");
-            tui.steeringQueue = tui.steeringQueue.filter((queued) => queued.id !== item.id);
-            tui.pushBlock({ kind: "result", ok: true, summary: `steering cancelled (${item.id.slice(0, 8)})` });
-          });
-        }
-      } else {
-        tui.pushBlock({ kind: "error", text: "use /steer <text> while Argus is working" });
-      }
+      await handleSteeringInput(tui, args.join(" "), false);
     },
   },
   {
@@ -378,8 +362,8 @@ export const COMMANDS = [
 ];
 
 /**
- * Render one transcript block in full for /show. Blocks persisted by anything
- * older than W2 may carry raw `args` instead of a `label`; both are handled,
+ * Render one transcript block in full for /show. Older saved blocks may carry
+ * raw `args` instead of a `label`; both are handled,
  * and when the block links to a stored tool message (`block.id`), that full
  * result is included too — it lives in the session record whether the turn is
  * live or resumed.

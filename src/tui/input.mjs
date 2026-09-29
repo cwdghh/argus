@@ -17,7 +17,7 @@ export function consumeInput(tui) {
     const end = tui.rawBuf.indexOf("\x1b[201~");
     if (end === -1) return;
     // Normalize CRLF/CR to LF but keep every other byte — a paste is data,
-    // not key presses, so control bytes must not be interpreted (W1).
+    // not key presses, so control bytes must not be interpreted.
     const pasted = tui.rawBuf.slice(0, end).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     tui.rawBuf = tui.rawBuf.slice(end + 6);
     tui.pasting = false;
@@ -135,7 +135,7 @@ export function pasteLiteral(tui, text) {
     return tui.confirmKey(text);
   }
   tui.editor.insert(text);
-  // Large pastes abbreviate the rendered user block (W1): record the shape
+  // Large pastes abbreviate the rendered user block: record the shape
   // so submit() knows when the prompt came straight from a paste.
   const lines = text.split("\n").length;
   if (text.length > PASTE_ABBREV_CHARS || lines > PASTE_ABBREV_LINES) {

@@ -111,7 +111,7 @@ async function runHeadlessOnce(config, prompt, { session, cwd, stdout, stderr, c
       (ev) => {
         // Blocks are projected by the same consumeAgentEvent the TUI uses, so
         // a session's transcript never depends on which frontend wrote it
-        // (W6.6). The stdout/stderr lines are this frontend's stream split.
+        // The stdout/stderr lines are this frontend's stream split.
         consumeAgentEvent(blocks, ev);
         if (ev.type === "user") {
           push({ kind: "user", text: ev.text });

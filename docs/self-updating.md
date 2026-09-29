@@ -45,10 +45,10 @@ competing defaults, status narratives, file maps, or roadmaps.
 | Ranked next actions | `NEXT_STEPS.md` |
 | Proposed identity and owner decision status | `docs/product-direction.md` |
 | Stable work IDs, dependencies, and future-session boundaries | `docs/improvements-plan.md` |
-| Proposed execution/checkpoint contract and acceptance | `docs/design/execution.md` |
-| Proposed interrupt/continue and steering interaction | `docs/interrupt-resume.md` |
-| Proposed context reduction and provenance | `docs/design/context.md` |
-| Proposed behavioral evaluation and verification evidence | `docs/design/evaluation.md` |
+| Remaining execution/checkpoint qualification | `docs/design/execution.md` |
+| Remaining interrupt/continue and steering qualification | `docs/interrupt-resume.md` |
+| Remaining context reduction qualification | `docs/design/context.md` |
+| Remaining behavioral evaluation and verification qualification | `docs/design/evaluation.md` |
 | Proposed compatible-model fallback | `docs/design/providers.md` |
 
 ## Change workflow

@@ -8,6 +8,37 @@ See the [archive index](docs/archive/README.md) for provenance.
 
 ---
 
+#### 2026-09-29 — housekeeping approved for integration
+
+The owner authorized committing the housekeeping work, merging it into `main`,
+and pushing to the remote. The next session will prioritize E0: proving coding
+usefulness through measured provider-backed tasks before adding more capability.
+
+**Verified in this session:** `npm run verify` checked 92 modules and 19 live
+documents; **370/370 offline tests pass** on macOS / Node v26.5.0.
+`git diff --check` passed. No paid provider evaluation was run; this verification
+does not establish coding usefulness or provider compatibility.
+
+#### 2026-09-27 — housekeeping branch and live-design cleanup
+
+**Status: ✅ reviewable housekeeping complete on `codex/housekeeping`**
+
+- Moved active and idle `/steer` management into one TUI owner while preserving
+  its saved queue, approval cancellation, and command behavior. Removed obsolete
+  plan IDs from nearby code comments.
+- Preserved the four superseded execution, evaluation, context, and interaction
+  design documents verbatim in `docs/archive/`. Their live paths now contain
+  only remaining qualification and point to the implemented contract owners.
+  Updated the archive index, module map, and fact-ownership descriptions.
+- Kept historical progress entries and earlier archive files unchanged. The
+  default four-tool registry and dependency-free runtime are unchanged.
+
+**Verified in this session:** `npm run verify` checked 92 modules and 19 live
+documents; **370/370 offline tests pass** on macOS / Node v26.5.0. The four
+new archive files were compared byte-for-byte with the former live files at
+branch base; `git diff --check` passed. No live-provider run or real-terminal
+check was performed for this documentation and steering refactor.
+
 #### 2026-09-26 — bounded artifact growth and SIGTERM shutdown
 
 - Replaced per-revision full-history context artifacts with one atomically

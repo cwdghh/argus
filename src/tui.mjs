@@ -130,7 +130,7 @@ export class MinimalTui {
     // Editor row count from the last rendered frame, used by scrolling
     // helpers between frames (the layout pass computes the exact value).
     this.editorHeight = 1;
-    // Render cache (W6.2): a per-block cache re-wraps only the mutated tail,
+    // A per-block cache re-wraps only the mutated tail,
     // and the assembled lines are memoized until a block changes or the width
     // changes. All block mutations bump this._renderStamp.
     this._renderStamp = 0;
@@ -350,7 +350,7 @@ export class MinimalTui {
   }
 
   /**
-   * Tab / the old @path completer. Recomputes the popup first so it also works
+   * Tab and @path completion. Recomputes the popup first so it also works
    * when the buffer was set directly, then accepts the highlighted item.
    */
   completePath() {

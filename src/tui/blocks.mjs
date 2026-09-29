@@ -14,7 +14,7 @@ import { theme, themeRevision } from "../theme.mjs";
 // and they mutate *text* in place — so a per-block cache keyed by object
 // identity, width, and the text snapshot re-renders exactly the blocks that
 // changed and reuses the rest. Long transcripts stop re-wrapping every block
-// on every frame; only the mutated tail re-renders (W6.2).
+// on every frame; only the mutated tail re-renders.
 const blockLinesCache = new WeakMap();
 
 /**

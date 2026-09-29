@@ -146,3 +146,17 @@ test("pending steering survives restart as a visible draft without auto-executio
   assert.equal(tui.editor.buffer, "Keep the existing file");
   assert.equal(tui.mode, "idle");
 });
+
+test("idle steering commands list and cancel a persisted correction", async () => {
+  const settled = [];
+  const item = { id: "steer-1234", runId: "r1", text: "Keep the file" };
+  const tui = new MinimalTui({ model: "mock" }, { pendingSteering: [item],
+    session: { settleSteering: async (...args) => settled.push(args) } });
+  tui.editor.buffer = "/steer list";
+  await tui.submit();
+  assert.ok(tui.blocks.some((block) => block.text?.includes("Keep the file")));
+  tui.editor.buffer = "/steer cancel steer-1";
+  await tui.submit();
+  assert.deepEqual(settled, [["r1", "steer-1234", "cancelled"]]);
+  assert.deepEqual(tui.steeringQueue, []);
+});
