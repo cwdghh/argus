@@ -34,7 +34,7 @@ model. The default tool set is deliberately tiny: `read`, `write`, `edit`, `bash
 | `docs/` | Architecture, tool contract, tool-surface decisions, self-updating guide, debugging saved sessions |
 | `docs/improvements-plan.md` | Stable work IDs, dependencies, and future-session briefs — read before new work |
 | `docs/product-direction.md` | Selected product direction and decision ledger |
-| `docs/design/` | Proposed execution, context, evaluation/evidence, and provider designs |
+| `docs/design/` | Remaining execution, context, and evaluation qualifications; proposed provider design |
 | `docs/conventions.md` | Code, testing, commit, and reference-tag conventions |
 | `docs/sessions.md` | Session record format, compatibility, and recovery |
 | `scripts/` | Offline repository checks and isolated test runner |

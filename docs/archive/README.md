@@ -12,6 +12,10 @@ in `PROGRESS.md`), never a rewrite.
 | `improvements-plan-2026-09-24.md` | Original W1–W6 audit plan, superseded by the live implementation brief; deferred items remain in the live gap/priority documents |
 | `interrupt-resume-2026-09-24.md` | Verbatim earlier continuation proposal; the live interaction document now distinguishes implemented behavior from remaining qualification without changing this historical draft |
 | `refactor-plan.md` | The 2026-08-17 refactor proposal + execution record (frozen) |
+| `execution-design-through-2026-09-27.md` | Verbatim execution design before its live document was reduced to remaining qualification |
+| `evaluation-design-through-2026-09-27.md` | Verbatim evaluation and evidence design before live qualification cleanup |
+| `context-design-through-2026-09-27.md` | Verbatim context design before live qualification cleanup |
+| `interaction-design-through-2026-09-27.md` | Verbatim interaction design before live qualification cleanup |
 
 When to archive (see `docs/self-updating.md` → Archiving):
 

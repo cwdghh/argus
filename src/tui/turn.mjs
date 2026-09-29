@@ -1,11 +1,11 @@
 /** TUI turn lifecycle: agent events, visible timing, and session persistence. */
 import { runTurn } from "../agent.mjs";
-import { randomUUID } from "node:crypto";
 import { nextContextTokens } from "../compact.mjs";
 import { formatDuration } from "../format.mjs";
 import { summarizeEvidence } from "../agent/evidence.mjs";
 import { consumeAgentEvent } from "../transcript.mjs";
 import { sessionConfig } from "../session/index.mjs";
+import { handleSteeringInput } from "./steering.mjs";
 
 // Agent events whose block projection changes the transcript; only these
 // invalidate the rendered-line cache (usage/cwd_change/assistant_* do not).
@@ -24,48 +24,7 @@ export async function submitTurn(tui) {
   if (tui.mode !== "idle") {
     const draft = tui.editor.buffer.trim();
     if (!draft.startsWith("/steer ")) return;
-    const instruction = draft.slice(7).trim();
-    if (instruction === "list") {
-      tui.pushBlock({ kind: "assistant", text: tui.steeringQueue.length
-        ? tui.steeringQueue.map((item) => `${item.id.slice(0, 8)} — ${item.text}`).join("\n")
-        : "No queued steering." });
-      tui.editor.buffer = "";
-      tui.editor.cursor = 0;
-      return;
-    }
-    if (instruction.startsWith("cancel ")) {
-      const prefix = instruction.slice(7).trim();
-      const item = tui.steeringQueue.find((queued) => queued.id.startsWith(prefix));
-      if (!item || !prefix) {
-        tui.pushBlock({ kind: "error", text: "no queued steering matches that ID" });
-        return;
-      }
-      try {
-        await tui.session.settleSteering(item.runId, item.id, "cancelled");
-        tui.steeringQueue = tui.steeringQueue.filter((queued) => queued.id !== item.id);
-        tui.editor.buffer = "";
-        tui.editor.cursor = 0;
-        tui.pushBlock({ kind: "result", ok: true, summary: `steering cancelled (${item.id.slice(0, 8)})` });
-      } catch (error) {
-        tui.pushBlock({ kind: "error", text: `could not cancel steering: ${error.message}` });
-      }
-      return;
-    }
-    if (!instruction || instruction.length > 4_096 || tui.steeringQueue.length >= 8 || !tui.activeRunId || !tui.session?.queueSteering) {
-      tui.pushBlock({ kind: "error", text: "steering needs an active saved run, 1–4096 characters, and fewer than 8 queued instructions" });
-      return;
-    }
-    const item = { id: randomUUID(), runId: tui.activeRunId, text: instruction };
-    try {
-      await tui.session.queueSteering(item.runId, item.id, item.text);
-      tui.steeringQueue.push(item);
-      tui.editor.buffer = "";
-      tui.editor.cursor = 0;
-      tui.pushBlock({ kind: "result", ok: true, summary: `steering queued (${item.id.slice(0, 8)})` });
-      if (tui.pendingConfirm) tui.resolveConfirm(false);
-    } catch (error) {
-      tui.pushBlock({ kind: "error", text: `could not save steering: ${error.message}` });
-    }
+    await handleSteeringInput(tui, draft.slice(7), true);
     return;
   }
   if (tui.pendingConfirm) return; // a confirmation is in flight; Enter submits y/n via insertText
@@ -121,7 +80,7 @@ export async function submitTurn(tui) {
     result = await runTurn(tui.config, tui.history, text, (ev) => {
       // Mode/live-state tracking is frontend-specific; the blocks both
       // frontends persist come from the shared consumeAgentEvent so the TUI
-      // and headless can never drift (W6.6).
+      // and headless use the same saved block projection.
       if (ev.type === "tool_call") {
         tui.activeToolStartedAt = tui.now();
         tui.activeTool = { name: ev.name, args: ev.args };
