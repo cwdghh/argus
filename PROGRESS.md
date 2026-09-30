@@ -8,6 +8,15 @@ See the [archive index](docs/archive/README.md) for provenance.
 
 ---
 
+#### 2026-09-30 — E0 branch committed and pushed for review
+
+The owner authorized committing and pushing the coding-usefulness work.
+Commit `a5274116423eda698cb9fa1600361dd2c3872d9d` was pushed to
+`origin/codex/coding-usefulness`. The local checkout was clean and tracked
+that remote branch after the push. This updates the earlier entries' review
+status; their measurement and verification records remain unchanged. Remote CI
+status has not yet been verified.
+
 #### 2026-09-30 — full focused tool follow-up for the E0 guidance candidate
 
 - Ran the complete nine-fixture focused suite, three trials each, after the
