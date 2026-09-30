@@ -6,9 +6,11 @@ work IDs, dependencies, and reusable session requests live in
 [the implementation briefs](docs/improvements-plan.md).
 [GAPS.md](GAPS.md) owns current open questions; history lives in [PROGRESS.md](PROGRESS.md).
 
-1. **Measure E0:** run the six coding tasks for repeated trials against a named
-   configured provider, record raw outcomes/usage, and compare subsequent
-   changes against that baseline. Paid trials have not run yet.
+1. **Extend E0 carefully:** use the measured guidance candidate in
+   [PROGRESS.md](PROGRESS.md) as a hypothesis. Test a few realistic repository
+   changes and targeted cwd/path/tool-error cases before claiming a general
+   usefulness gain or adding capabilities. Keep task success, check evidence,
+   recovered tool errors, usage, and latency separate.
 2. **Qualify E2–E3 and I1–I2:** expand crash injection to the remaining effect
    boundaries and verify continuation against named compatible endpoints. The
    shell/stop/steer check passed in a real TTY against a local mock provider;

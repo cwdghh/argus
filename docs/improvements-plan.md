@@ -1,7 +1,7 @@
 # Future implementation briefs
 
-Status: **U0/E1–E3/I1–I2/C1 first slice/V1 core implemented; E0 live baseline
-and qualification pending; P1 gated**. Actual verification
+Status: **U0/E1–E3/I1–I2/C1 first slice/V1 core implemented; E0 named baseline
+and tool-contract comparison recorded, broader qualification pending; P1 gated**. Actual verification
 is recorded in [PROGRESS.md](../PROGRESS.md). Read
 [product direction](product-direction.md) for selected D1–D6 decisions and
 [conventions](conventions.md) for engineering rules. [NEXT_STEPS.md](../NEXT_STEPS.md)
@@ -11,7 +11,7 @@ work IDs, dependencies, and session boundaries; linked designs own their details
 | ID | Bounded deliverable | Dependencies | Detailed scope and acceptance |
 | --- | --- | --- | --- |
 | U0 | Linked install guide and read-only CLI diagnostics | None | Implemented: [README](../README.md) |
-| E0 | Reproducible coding tasks and baseline measurement | None | Harness implemented; live baseline pending: [Evaluation](design/evaluation.md) |
+| E0 | Reproducible coding tasks and baseline measurement | None | Named measurement and comparison recorded in [PROGRESS](../PROGRESS.md); remaining qualification: [Evaluation](design/evaluation.md) |
 | E1 | Shared outcome model and per-request accounting | None | Implemented contract: [architecture](architecture.md), [sessions](sessions.md) |
 | E2 | Supervised shell lifecycle and bounded output | E1 | Implemented, qualification pending: [Execution](design/execution.md) |
 | E3 | Durable checkpoints, writer ownership, recovery | E1; E2 for shell recovery integration | Implemented core, broader crash matrix pending: [Sessions](sessions.md) |
@@ -22,8 +22,9 @@ work IDs, dependencies, and session boundaries; linked designs own their details
 | P1 | One bounded compatible-model fallback | E0, E1, E3; measured need | [Providers](design/providers.md) |
 
 Dependencies express contracts, not a command to add speculative features. E0
-has an opt-in runner but no live baseline. C1's deterministic between-run
-slice is shipped; semantic and mid-run reduction need comparative evidence.
+has preserved named measurements; compare follow-ups within their recorded limits.
+C1's deterministic between-run slice is shipped; semantic and mid-run reduction
+need comparative evidence.
 The other implemented cores still need the qualification listed in their designs.
 
 ## How to commission a future session

@@ -11,7 +11,7 @@ import { buildRequestBody, runModelStep } from "./agent/model-step.mjs";
 import { executeToolCall } from "./agent/tool-call.mjs";
 import { accumulateUsage, reportedRequestUsage, totalReportedUsage } from "./agent/usage.mjs";
 import { canonicalToolCall, detectCallLoop, LOOP_WINDOW, protocolSafeMessages, stableStringify } from "./agent/turn-state.mjs";
-import { createEvidence, workspaceFingerprint } from "./agent/evidence.mjs";
+import { createEvidence, promptWithChecks, workspaceFingerprint } from "./agent/evidence.mjs";
 
 /**
  * Run one user prompt through the tool-calling loop.
@@ -61,6 +61,7 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
   const toolAttempts = [];
   const evidence = createEvidence(opts.checkCommands ?? [],
     opts.checkCommands?.length ? workspaceFingerprint(cwd) : null, cwd);
+  const taskPrompt = promptWithChecks(userMessage, evidence.checks);
   let steps = 0;
   let turnToolResultChars = 0;
   let toolOrdinal = 0;
@@ -91,8 +92,8 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
   };
 
   // Everything created during this turn (assistant replies + tool results).
-  const turnMessages = [{ role: "user", content: userMessage }];
-  onEvent({ type: "user", text: userMessage });
+  const turnMessages = [{ role: "user", content: taskPrompt }];
+  onEvent({ type: "user", text: taskPrompt });
 
   // Cumulative token usage across all model calls in this turn. Providers
   // return per-request usage (prompt + completion tokens); accumulateUsage
@@ -183,7 +184,7 @@ export async function runTurn(config, history, userMessage, onEvent = () => {}, 
   };
 
   try {
-    if (opts.onRunStart) await opts.onRunStart({ runId, prompt: userMessage, cwd, model: config.model,
+    if (opts.onRunStart) await opts.onRunStart({ runId, prompt: taskPrompt, cwd, model: config.model,
       ...(opts.parentRunId ? { parentRunId: opts.parentRunId } : {}) });
     if (compacted && contextRevision && opts.onContextRevision) {
       contextRevision = await opts.onContextRevision(contextRevision, history.slice(0, contextRevision.coveredMessages));

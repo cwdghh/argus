@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createEvidence, summarizeEvidence, workspaceFingerprint } from "../src/agent/evidence.mjs";
 import { parseArgs } from "../src/main.mjs";
+import { runTurn } from "../src/agent.mjs";
+import { createMockServer } from "./helpers/mock-llm.mjs";
 
 test("designated checks distinguish passed, not run, and stale evidence in a dirty worktree", (t) => {
   const cwd = mkdtempSync(join(tmpdir(), "argus-evidence-"));
@@ -52,4 +54,46 @@ test("a timeout that prints success and a non-Git scope remain unknown", (t) => 
     before, attemptId: "timeout" });
   assert.equal(evidence.checks[0].state, "unknown");
   assert.equal(evidence.checks[0].freshness, "unknown");
+});
+
+test("designated checks reach the model and the saved run prompt without executing automatically", async (t) => {
+  let sentPrompt;
+  let savedPrompt;
+  let shownPrompt;
+  const srv = await createMockServer((_index, body) => {
+    sentPrompt = body.messages.find((message) => message.role === "user").content;
+    return [{ content: "I did not run the check." }];
+  });
+  t.after(() => srv.close());
+  const command = 'node -e "console.log(1)"';
+  const result = await runTurn({ baseUrl: srv.url, model: "mock", systemPrompt: "test" }, [], "Fix the file.",
+    (event) => { if (event.type === "user") shownPrompt = event.text; },
+    { checkCommands: [command, command], onRunStart: (run) => { savedPrompt = run.prompt; } });
+  assert.ok(sentPrompt.startsWith("Fix the file.\n\n"));
+  assert.ok(sentPrompt.includes(JSON.stringify(command)));
+  assert.match(sentPrompt, /exact command as the entire bash call/);
+  assert.match(sentPrompt, /run the check before editing and again after the final edit/);
+  assert.match(sentPrompt, /Finish other inspection before the final check/);
+  assert.match(sentPrompt, /Designation alone does not require running it/);
+  assert.equal(sentPrompt, savedPrompt);
+  assert.equal(sentPrompt, shownPrompt);
+  assert.equal(sentPrompt, result.messages[0].content);
+  assert.equal(result.evidence.checks.length, 1);
+  assert.equal(result.evidence.checks[0].state, "not_run");
+  assert.equal(result.toolAttempts.length, 0);
+});
+
+test("designated check guidance remains conditional when the user forbids running it", async (t) => {
+  let sentPrompt;
+  const srv = await createMockServer((_index, body) => {
+    sentPrompt = body.messages.find((message) => message.role === "user").content;
+    return [{ content: "The check was not run." }];
+  });
+  t.after(() => srv.close());
+  const result = await runTurn({ baseUrl: srv.url, model: "mock", systemPrompt: "test" }, [],
+    "Inspect the file, but do not run the check.", () => {}, { checkCommands: ["node check.mjs"] });
+  assert.match(sentPrompt, /do not run the check/);
+  assert.match(sentPrompt, /Designation alone does not require running it/);
+  assert.equal(result.evidence.checks[0].state, "not_run");
+  assert.equal(result.toolAttempts.length, 0);
 });

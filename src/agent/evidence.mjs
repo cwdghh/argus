@@ -85,3 +85,15 @@ export function summarizeEvidence(evidence) {
   if (!evidence?.checks?.length) return null;
   return evidence.checks.map((check) => `${check.command}: ${check.state} (${check.freshness})`).join("; ");
 }
+
+/** Keep per-task check instructions in the same saved user message sent to the model. */
+export function promptWithChecks(prompt, checks) {
+  if (!checks.length) return prompt;
+  return prompt + "\n\nDesignated verification commands for this task (JSON strings):\n" +
+    checks.map(({ command }) => JSON.stringify(command)).join("\n") +
+    "\nIf the task calls for one of these checks, use its exact command as the entire bash call: " +
+    "no prefix, suffix, pipe, or redirection. If asked to observe a failure before fixing it, " +
+    "run the check before editing and again after the final edit. Finish other inspection before " +
+    "the final check so its evidence stays current. Designation alone does not require running it. " +
+    "Report any check not run or not passed.";
+}

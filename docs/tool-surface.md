@@ -50,6 +50,9 @@ model request.
    read stamps. Read results call their rendered field `numberedText` so its
    `N │ ` gutters are visibly metadata: selectors may copy them, replacements
    must not.
+   Keep the two selectors in one `edits[]` shape: content for a unique known
+   span, range for whole lines with fresh read evidence. An operation tag or
+   another mutation syntax needs recurring observed failures before admission.
 8. **Sessions preserve the historical surface.** Each turn records a stable
    tool-surface hash, and a schema snapshot is appended when the surface
    changes. Old executor compatibility code is therefore unnecessary for
@@ -71,9 +74,10 @@ model request.
 | D10 | Names | keep the familiar four names; renaming adds churn without evidence of better tool choice. |
 | D11 | Freshness and parallelism | same-turn range freshness is loop-scoped state; execution remains sequential. |
 | D12 | Extra model-visible metadata | keep essential bounds in descriptions; do not add a second metadata protocol. |
-| D13 | Prompt duplication | remove repeated tool mechanics from the default system prompt (119 words to 59). |
-| D14 | Tool-choice evaluation | keep an opt-in real-model evaluator for content edit, range edit, uncued numbered-read editing, shell search, and file creation with/without a final newline. The harness is shipped; provider baselines are measurements, not test-suite claims. |
+| D13 | Prompt duplication | keep tool mechanics in descriptions; the default system prompt covers repository conduct and when to finish. |
+| D14 | Tool-choice evaluation | keep opt-in real-model fixtures for content/range edits, insert/delete and mixed batches, uncued numbered-read editing, shell search, file creation with/without LF, and write protection. Provider baselines are measurements, not test-suite claims. |
 | D15 | `/exit` and `/quit` | retain the harmless user-facing alias; it costs the model nothing. |
+| D16 | E0 guidance refinement | keep the four schemas and canonical edit selectors. Clarify existing-file writes, fresh range reads, exact checks, `/bin/sh`, and when to finish; compare live outcomes in [PROGRESS.md](../PROGRESS.md). Occasional recovered foreign fields do not justify aliases. |
 
 ## Evaluated alternatives
 
@@ -83,6 +87,7 @@ model request.
 | unified-diff `patch` | Not added | Duplicates `edit` and creates two competing mutation contracts. |
 | model-to-user `ask` | Separate feature | It belongs to interrupt/continue and human-in-the-loop design, not filesystem/tool surface design. |
 | parallel tool calls | Not added | Sequential execution is easier to authorize, audit, and couple to freshness state. |
+| implicit write newline default | Adopted | LF is the ordinary text-file default after omission persisted with clearer descriptions. `false` explicitly requests exact content; no-overwrite protection stays the default. The measured comparison is recorded in [PROGRESS.md](../PROGRESS.md). |
 
 ## How to revisit
 

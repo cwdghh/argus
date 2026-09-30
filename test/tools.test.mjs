@@ -105,8 +105,9 @@ test("read handles empty files and single huge lines", withDir(async ({ tmp, wri
 test("runtime validation enforces the full canonical schema", () => {
   assert.match(validateToolArgs(read, { path: "x", offset: 0 }), /at least 1/);
   assert.match(validateToolArgs(read, { path: "x", limit: -1 }), /at least 1/);
-  assert.match(validateToolArgs(writeTool, { path: "x", content: "body" }), /ensureFinalNewline/);
+  assert.equal(validateToolArgs(writeTool, { path: "x", content: "body" }), null);
   assert.equal(validateToolArgs(writeTool, { path: "x", content: "body", ensureFinalNewline: true }), null);
+  assert.match(validateToolArgs(writeTool, { path: "x", content: "body", ensureFinalNewline: "false" }), /must be boolean/);
   assert.match(validateToolArgs(edit, { path: "x", edits: [] }), /at least 1 item/);
   assert.match(validateToolArgs(edit, { path: "x", edits: [{ old: "x" }] }), /missing required argument: new/);
   assert.match(validateToolArgs(edit, { path: "x", edits: [{ old: "x", startLine: 1, new: "y" }] }), /exactly one/);
@@ -119,7 +120,13 @@ test("runtime validation enforces the full canonical schema", () => {
   assert.equal(validateToolArgs(edit, { path: "x", edits: [{ startLine: 1, endLine: 0, new: "y" }] }), null);
 });
 
-test("write applies an explicit final-newline policy and reports the result", withDir(async ({ tmp, content }) => {
+test("write defaults to final LF and keeps an explicit exact-content choice", withDir(async ({ tmp, content }) => {
+  const defaulted = await writeTool.execute({ path: "default.txt", content: "body" }, { cwd: tmp("") });
+  assert.equal(content("default.txt"), "body\n");
+  assert.equal(defaulted.newlineAdded, true);
+  const unchanged = await writeTool.execute({ path: "already-final.txt", content: "body\n" }, { cwd: tmp("") });
+  assert.equal(content("already-final.txt"), "body\n");
+  assert.equal(unchanged.newlineAdded, false);
   const added = await writeTool.execute(
     { path: "with-newline.txt", content: "body", ensureFinalNewline: true },
     { cwd: tmp("") },
@@ -137,6 +144,12 @@ test("write applies an explicit final-newline policy and reports the result", wi
   assert.equal(content("exact.txt"), "body");
   assert.equal(exact.finalNewline, false);
   assert.equal(exact.newlineAdded, false);
+  const exactWithLf = await writeTool.execute(
+    { path: "exact-with-lf.txt", content: "body\n", ensureFinalNewline: false },
+    { cwd: tmp("") },
+  );
+  assert.equal(content("exact-with-lf.txt"), "body\n");
+  assert.equal(exactWithLf.newlineAdded, false);
 
   const existing = await writeTool.execute(
     { path: "already.txt", content: "body\n", ensureFinalNewline: true },

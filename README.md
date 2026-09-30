@@ -116,8 +116,9 @@ npm start -- --help
 Assistant text goes to stdout; reasoning, tool calls, and errors go to stderr.
 A named session resumes its history and saves the new turn. Destructive shell
 commands requiring human approval are blocked in headless mode.
-`--check` designates an exact shell command as a verification check; it does
-not run the command automatically. Argus reports whether the model ran it,
+`--check` designates an exact shell command as a verification check and includes
+it in the task prompt with guidance for running it alone when the task asks for
+it. Argus does not run the command automatically. It reports whether the model ran it,
 its observed status, and whether later work made its evidence stale. Checks
 not designated this way remain ordinary shell observations.
 Exit status is 0 when the model ends normally, 130 when interrupted, 143 after
@@ -164,11 +165,18 @@ Offline tests use a scripted SSE server and a disposable home directory. Provide
 evaluation needs credentials and may incur API cost. [PROGRESS.md](PROGRESS.md)
 records verified changes; [NEXT_STEPS.md](NEXT_STEPS.md) ranks candidate work.
 The coding evaluator uses six disposable task workspaces and external behavioral
-checks. `ARGUS_EVAL_TASKS` selects task names; `ARGUS_EVAL_TRIALS` defaults to three.
+checks. Both evaluators accept `ARGUS_EVAL_TASKS` to select task names and
+`ARGUS_EVAL_TRIALS` (default three).
 `ARGUS_EVAL_TIMEOUT_MS` bounds a trial and `ARGUS_EVAL_TOTAL_TIMEOUT_MS` bounds
 the whole run; the defaults are two and ten minutes respectively.
-It prints a sanitized JSON summary without transcript content. Its process
-boundary is for repeatability, not adversarial isolation.
+`ARGUS_EVAL_MAX_REQUESTS` caps actual network attempts, including retries (default
+1,000); this is a request limit, not a monetary cap. Confirm the target and
+spending allowance before running paid trials. `ARGUS_EVAL_REPORT` optionally
+creates a private JSON report at a new path; keep it outside the checkout.
+It also prints JSON with bounded tool arguments, errors, final handoff text,
+and before/after file details. Reports and scoring limits are described in
+[evaluation qualification](docs/design/evaluation.md). The process boundary is
+for repeatability, not adversarial isolation.
 
 ## Acknowledgements
 

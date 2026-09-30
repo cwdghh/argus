@@ -24,9 +24,11 @@ export const bashTool = {
     name: "bash",
     risk: "shell",
     description:
-      "Run one shell command for search, listing, environment inspection, builds, tests, or other CLI work. " +
-      "Do not use shell commands to read, create, or edit text files when read/write/edit applies. " +
-      "Returns bounded stdout/stderr and a separate exit status; excess output is truncated while execution continues. " +
+      "Run a command under /bin/sh for search, listing, environment inspection, builds, or tests. " +
+      'The only argument is command, for example {"command":"npm test"}. ' +
+      "Use portable shell commands; bash-only features such as PIPESTATUS may not work. " +
+      "Use read/write/edit for ordinary text files. Results separate exitCode and termination from bounded stdout/stderr; " +
+      "truncated output does not prove success. Run verification alone so exitCode belongs to that check. " +
       "A reported final cwd becomes the working directory for later tools. The timeout is 60 seconds. " +
       "A best-effort destructive-command backstop requires approval.",
     parameters: {

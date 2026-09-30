@@ -16,7 +16,7 @@ API key is excluded from the persisted `config` allowlist.
 | `meta` | Version 2 for new files, stable `sessionId`, initial model-visible tool snapshot and hash. Version 1 files remain readable. |
 | `cwd`, `model`, `config`, `tools` | Ordered metadata updates. `config` contains only credential-free fields. |
 | `turn` | Legacy complete turn; still read and accepted by the legacy append API. |
-| `run_start` | Version 2 run ID, sequence 0, user prompt, cwd, model, and optional parent run ID. |
+| `run_start` | Version 2 run ID, sequence 0, effective user prompt (including designated-check guidance), cwd, model, and optional parent run ID. |
 | `checkpoint` | Next contiguous sequence for a complete assistant step, bounded partial text delta, authorized tool intent, tool result, or applied steering. |
 | `run_end` | Final sequence with one complete turn projection: messages, display blocks, and configuration delta. It replaces a duplicate `turn` record. |
 | `resolution` | Explicit user choice to retry or abandon an uncertain attempt. |

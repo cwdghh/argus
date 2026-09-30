@@ -75,10 +75,23 @@ complete grapheme implementation. See [interaction](docs/interrupt-resume.md).
 ## 9. Testing and evals
 
 Offline regression tests, six external-verifier coding fixtures, and opt-in
-provider evaluators exist. No paid live coding baseline has been measured.
+provider evaluators exist. Named provider measurements are recorded in
+[PROGRESS.md](PROGRESS.md). These small fixtures do not establish usefulness on
+larger repositories. Reports now separate final behavior, required workflow,
+tool choice, recovered tool errors, and reported usage; bounded stdout/stderr
+still cannot prove every embedded status or assertion claim. Exact designated
+checks can remain stale or unknown after further shell calls or in non-Git
+workspaces. A final correct file can coexist with missed workflow evidence or
+a limited turn. The default final-LF policy removed observed schema omissions,
+but its effect on overall coding quality remains unproven.
 Optional exact-command checks record status and freshness, but the evidence
 ledger cannot perfectly attribute concurrent edits or ignored dependencies.
-Open: repeated provider trials, broader misleading-completion fixtures,
+Open: controlled trials of check-ordering, step-use, and portable-shell
+guidance on less toy-like work. Small-fixture results do not prove a causal or
+general usefulness gain. Tool errors
+persist: wrong existing-file writes, stale range reads after shell calls,
+directory drift after `cd`, nonportable shell probes, hallucinated absolute
+paths, and incorrect field names in the canonical edit schema. Open: broader misleading-completion fixtures,
 sanitized real-session replay, and observed usefulness gains. See
 [E0 and V1](docs/design/evaluation.md).
 

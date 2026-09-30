@@ -74,14 +74,14 @@ range in same-turn freshness state for range edits.
 {
   path: string,
   content: string,
-  ensureFinalNewline: boolean,
+  ensureFinalNewline?: boolean,
   overwrite?: boolean,
 }
 ```
 
 Creates a complete UTF-8 text file. Existing files are protected unless
-`overwrite: true` is explicit. `ensureFinalNewline: true` appends LF when
-`content` does not already end in one; `false` writes `content` exactly and
+`overwrite: true` is explicit. `ensureFinalNewline` defaults to `true`, adding
+LF only when `content` does not already end in one; `false` writes `content` exactly and
 does not strip a newline already present. Success returns
 `{ ok: true, path, bytes, finalNewline, newlineAdded }`. Filesystem failures
 return `{ error: true, path?, message, code? }`.
@@ -93,11 +93,14 @@ symlinks to their targets. Dangling symlinks are rejected rather than replaced.
 Replacement does not preserve inode identity or hard-link relationships and is
 not an fsync/power-loss durability guarantee.
 
-The newline decision is required and separate from `content` because live
-models can omit an invisible trailing character even when prose asks for it.
+Use `ensureFinalNewline: false` when exact bytes without a final LF matter.
+The option is separate from `content` because live models can omit an invisible
+trailing character even when prose asks for it. Parent directories
+must already exist; relative paths resolve from the current tool cwd.
 Use `write`, rather than shell redirection or a heredoc, to create text files.
 `write` invalidates any freshness stamp for its resolved path. Use `edit` for
-targeted changes to an existing file.
+targeted changes to an existing file; `overwrite: true` is for an intentional
+whole-file replacement.
 
 ### `edit`
 
@@ -167,6 +170,14 @@ only after ordinary process completion and becomes the base directory for later
 tools. `bash` owns search, listing, environment inspection, builds,
 tests, and other open-ended CLI work; it does not replace
 `read`, `write`, or `edit` for ordinary text-file operations.
+
+`command` is its only argument and is run by `/bin/sh`, so login-shell or
+`bash`-only features such as `PIPESTATUS` are not available. Choose portable
+inspection commands when possible. For a verification check, run the check itself:
+`node check.mjs; echo passed` reports the echo's status, and a pipeline reports
+its last command's status. The tool's `exitCode` is the shell's observed status;
+it cannot identify the individual status of every command in a compound string.
+An exact designated check must occupy the whole call to be recorded as evidence.
 
 On POSIX systems, the shell starts in an owned process group. Cancellation or
 timeout sends SIGTERM, then SIGKILL after 500 ms, and stops waiting after a

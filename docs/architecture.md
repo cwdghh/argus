@@ -29,6 +29,16 @@ means the model ended normally, not that the task is
 correct. Operational endings return this result; unexpected programming errors
 still throw with completed turn state for the frontends to preserve.
 
+When the host designates exact task checks, the coordinator appends those
+commands and standalone-call guidance to the current user prompt. The same
+augmented text reaches the model, run-start checkpoint, and returned messages.
+The evidence module owns this formatting. The guidance is conditional on the
+task asking for a check; designation alone does not require execution. It asks
+for an exact standalone call before and after a requested failure-driven fix,
+with other inspection before the final check to keep evidence current. It does
+not execute checks automatically or gate normal model completion. Check
+recording still requires exact command strings.
+
 `src/llm.mjs` owns HTTP requests, timeout/retry behavior, provider cache markers,
 and streaming. `src/sse.mjs` owns pure SSE framing and delta assembly. A request
 body is built once, measured before network I/O, then passed to the transport.

@@ -122,9 +122,13 @@ export const tools = [
     name: "write",
     risk: "filesystem-write",
     description:
-      "Create a complete text file. Existing files are protected unless overwrite=true. " +
-      "Set ensureFinalNewline=true to append LF when needed; false preserves content exactly. " +
-      "Use edit for targeted changes to an existing file; do not use bash redirection for text files.",
+      "Write a complete text file. A new path needs path and content; an existing path fails unless overwrite=true. " +
+      "By default a final LF is added only if missing; set ensureFinalNewline=false to write " +
+      "content exactly, including when no final newline is wanted. " +
+      'Example: {"path":"note.txt","content":"hello"} creates "hello\\n". ' +
+      "Relative paths use the current working directory; parent directories must already exist. " +
+      "For an existing file, use edit for targeted changes and overwrite only to replace the whole file. " +
+      "Do not use bash redirection for text files.",
     parameters: {
       type: "object",
       properties: {
@@ -133,16 +137,16 @@ export const tools = [
           type: "string",
           description: "Complete file text; final-newline policy is controlled separately",
         },
-        ensureFinalNewline: { type: "boolean", description: "Append LF if content has no final line break" },
+        ensureFinalNewline: { type: "boolean", description: "Default true: append LF if missing; false preserves content exactly" },
         overwrite: { type: "boolean", description: "Allow replacing an existing file (default: false)" },
       },
-      required: ["path", "content", "ensureFinalNewline"],
+      required: ["path", "content"],
       additionalProperties: false,
     },
     validate({ path }) {
       return path.trim() ? null : "write argument path must not be blank";
     },
-    async execute({ path, content, ensureFinalNewline, overwrite = false }, ctx = {}) {
+    async execute({ path, content, ensureFinalNewline = true, overwrite = false }, ctx = {}) {
       const file = resolve(ctx.cwd || process.cwd(), path);
       const output = ensureFinalNewline && !content.endsWith("\n") ? content + "\n" : content;
       try {
@@ -169,7 +173,8 @@ export const tools = [
     description:
       "Edit an existing text file atomically. Each edits[] item is either {old,new} for unique text " +
       "replacement, or {startLine,endLine?,new} for whole-line replacement after reading those lines " +
-      "in this turn. For insertion, set endLine=startLine-1; new='' deletes selected lines. " +
+      "in this turn. After any bash call or a change to this file, reread the needed lines before a range edit. " +
+      "All edits in a batch select from the original file. For insertion, set endLine=startLine-1; new='' deletes selected lines. " +
       "all=true applies only to {old,new} and replaces every match. old may include read's line-number " +
       "gutter; new must be plain file text. Use edit instead of bash for text changes.",
     parameters: {
@@ -184,7 +189,7 @@ export const tools = [
             properties: {
               old: { type: "string", minLength: 1, description: "File text to find; numberedText prefixes copied from read are accepted" },
               new: { type: "string", description: "Replacement file text only; never include read's line-number prefixes" },
-              startLine: { type: "integer", minimum: 1, description: "Range form: first line to replace (1-indexed, from a read)" },
+              startLine: { type: "integer", minimum: 1, description: "Range form: first line to replace (1-indexed, from a fresh read after any bash call or file change)" },
               endLine: { type: "integer", minimum: 0, description: "Range form: last line to replace (default startLine; startLine-1 inserts before startLine)" },
             },
             required: ["new"],
